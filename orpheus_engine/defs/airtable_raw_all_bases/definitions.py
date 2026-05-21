@@ -32,6 +32,8 @@ import requests.exceptions
 from psycopg2 import sql
 from psycopg2.extras import execute_values
 from pyairtable import Api as AirtableApi
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from dagster import (
     AssetExecutionContext,
     Definitions,
@@ -78,7 +80,14 @@ def get_airtable_api() -> AirtableApi:
     token = os.getenv("AIRTABLE_PERSONAL_ACCESS_TOKEN")
     if not token:
         raise ValueError("AIRTABLE_PERSONAL_ACCESS_TOKEN environment variable is not set")
-    return AirtableApi(token)
+    api = AirtableApi(token)
+    # Strip 429 from pyairtable's internal retry list. By default pyairtable retries
+    # 429s with short waits, exhausts its own retry budget, then throws RetryError —
+    # all before our fetch_with_retry can apply the 30s wait Airtable requires.
+    # We own 429 handling; pyairtable handles transient 5xx only.
+    retry = Retry(total=3, status_forcelist=[500, 502, 503, 504], backoff_factor=1)
+    api.session.mount("https://", HTTPAdapter(max_retries=retry))
+    return api
 
 
 def ensure_schema_and_tables(conn):
@@ -114,7 +123,8 @@ def fetch_with_retry(fn, *, max_attempts=10, log=None):
                 or "RATE_LIMIT" in error_str.upper()
             )
             if is_rate_limit and attempt < max_attempts - 1:
-                wait = min(5 * (2 ** attempt), 120) + random.uniform(0, 3)
+                # Airtable requires 30s after a 429; double each subsequent attempt
+                wait = min(30 * (2 ** attempt), 300) + random.uniform(0, 5)
                 if log:
                     log.warning(f"Rate limited, waiting {wait:.1f}s (attempt {attempt + 1}/{max_attempts})")
                 time.sleep(wait)
