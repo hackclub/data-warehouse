@@ -15,7 +15,10 @@ import orpheus_engine.defs.airtable_raw_all_bases.definitions as airtable_raw_al
 import orpheus_engine.defs.zenventory_inventory_airtable_sync.definitions as zenventory_airtable_sync_defs
 import orpheus_engine.defs.ysws_programs_sync.definitions as ysws_programs_sync_defs
 import orpheus_engine.defs.airtable_audit_logs.definitions as airtable_audit_logs_defs
+import orpheus_engine.defs.airtable_users.definitions as airtable_users_defs
 import orpheus_engine.schedules as schedules
+
+from orpheus_engine.defs.shared.airtable_enterprise import AirtableEnterpriseResource
 
 # Import analytics asset separately (it doesn't export defs)
 from orpheus_engine.defs.analytics.definitions import analytics_hack_clubbers
@@ -48,8 +51,15 @@ def _build_definitions() -> dg.Definitions:
         zenventory_airtable_sync_defs.defs,
         ysws_programs_sync_defs.defs,
         airtable_audit_logs_defs.defs,
+        airtable_users_defs.defs,
         schedules.defs,
-        dg.Definitions(assets=[analytics_hack_clubbers])
+        dg.Definitions(assets=[analytics_hack_clubbers]),
+        dg.Definitions(resources={
+            "airtable_enterprise": AirtableEnterpriseResource(
+                api_key=dg.EnvVar("AIRTABLE_ENTERPRISE_PAT"),
+                enterprise_account_id=dg.EnvVar("AIRTABLE_ENTERPRISE_ACCOUNT_ID"),
+            ),
+        })
     )
 
     # Dynamically discover all asset keys from the merged definitions
