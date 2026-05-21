@@ -125,11 +125,14 @@ def fetch_with_retry(fn, *, max_attempts=30, log=None):
                 or "RATE_LIMIT" in error_str.upper()
             )
             if is_rate_limit and attempt < max_attempts - 1:
-                # Honor Retry-After header if present, otherwise exponential backoff
-                # capped at 5 minutes. Airtable documents a 30s minimum wait.
                 retry_after = None
                 resp = getattr(e, "response", None)
                 if resp is not None:
+                    if log:
+                        log.warning(
+                            f"429 response — headers: {dict(resp.headers)}"
+                            f" body: {resp.text[:500]}"
+                        )
                     try:
                         retry_after = int(resp.headers.get("Retry-After", ""))
                     except (ValueError, TypeError):
@@ -151,23 +154,29 @@ def fetch_all_bases(api: AirtableApi, *, page_delay: float = 1.5, log=None) -> L
     """
     base_infos: List[Dict] = []
     params: Dict[str, str] = {}
+    page = 0
 
     while True:
+        page += 1
+
         def fetch_page(p=dict(params)):
             resp = api.session.get("https://api.airtable.com/v0/meta/bases", params=p)
             resp.raise_for_status()
             return resp.json()
 
+        if log:
+            log.info(f"Fetching bases page {page} (offset={params.get('offset', 'none')})...")
         data = fetch_with_retry(fetch_page, log=log)
-        base_infos.extend(data.get("bases", []))
+        page_bases = data.get("bases", [])
+        base_infos.extend(page_bases)
 
         offset = data.get("offset")
+        if log:
+            log.info(f"Page {page}: got {len(page_bases)} bases ({len(base_infos)} total), next offset={'yes' if offset else 'done'}")
         if not offset:
             break
 
         params["offset"] = offset
-        if log:
-            log.info(f"Paginating bases list: {len(base_infos)} fetched so far...")
         time.sleep(page_delay)
 
     return [api.base(info["id"]) for info in base_infos]
@@ -286,26 +295,27 @@ def process_base(base, queue: WriteQueue, log) -> Dict[str, int]:
     base_name = base.name
     stats = {"tables": 0, "fields": 0, "records": 0, "table_errors": 0}
 
+    log.info(f"[{base_name}] fetching schema...")
     try:
         schema = fetch_with_retry(lambda: base.schema(), log=log)
     except Exception as e:
-        log.warning(f"Failed to fetch schema for {base_name} ({base_id}): {e}")
+        log.warning(f"[{base_name}] ({base_id}) schema fetch failed: {e}")
         raise
 
-    # Build and push base metadata (one row per base)
     schema_json = _build_schema_json(schema)
     for t in schema_json:
         stats["tables"] += 1
         stats["fields"] += len(t["fields"])
     queue.push_base((base_id, base_name, json.dumps(schema_json)))
+    log.info(f"[{base_name}] schema OK — {stats['tables']} tables, {stats['fields']} fields")
 
-    # Fetch records for each table
     for i, table_schema in enumerate(schema.tables):
         if i > 0:
             time.sleep(TABLE_FETCH_DELAY)
         table_id = table_schema.id
         table_name = table_schema.name
 
+        log.info(f"[{base_name}] fetching table {i+1}/{len(schema.tables)}: {table_name}...")
         try:
             table = base.table(table_id)
             records = fetch_with_retry(
@@ -313,7 +323,7 @@ def process_base(base, queue: WriteQueue, log) -> Dict[str, int]:
                 log=log,
             )
         except Exception as e:
-            log.warning(f"  [{base_name}] Failed to fetch records from {table_name} ({table_id}): {e}")
+            log.warning(f"[{base_name}] table {table_name} ({table_id}) failed: {e}")
             stats["table_errors"] += 1
             continue
 
@@ -324,7 +334,7 @@ def process_base(base, queue: WriteQueue, log) -> Dict[str, int]:
 
         stats["records"] += len(data_rows)
         queue.push_records(data_rows)
-        log.info(f"  [{base_name}] {table_name}: {len(data_rows)} records")
+        log.info(f"[{base_name}] {table_name}: {len(data_rows)} records")
 
     return stats
 
