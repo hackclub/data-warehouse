@@ -330,7 +330,7 @@ def process_base(base, queue: WriteQueue, log) -> Dict[str, int]:
         data_rows = []
         for record in records:
             fields = _clean_record_fields(record.get("fields", {}))
-            data_rows.append((base_id, table_id, record["id"], json.dumps(fields)))
+            data_rows.append((base_id, table_id, record["id"], json.dumps(fields).replace("\\u0000", "")))
 
         stats["records"] += len(data_rows)
         queue.push_records(data_rows)
