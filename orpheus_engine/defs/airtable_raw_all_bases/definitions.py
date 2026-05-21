@@ -20,6 +20,7 @@ Architecture:
 
 import json
 import os
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +28,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
 import psycopg2
+import requests.exceptions
 from psycopg2 import sql
 from psycopg2.extras import execute_values
 from pyairtable import Api as AirtableApi
@@ -41,7 +43,8 @@ from dagster import (
 
 SCHEMA_NAME = "airtable_raw_all_bases"
 FLUSH_THRESHOLD = 10_000
-CONCURRENT_BASES = 5
+CONCURRENT_BASES = 2
+TABLE_FETCH_DELAY = 0.25
 
 BASES_DDL = f"""
 CREATE TABLE IF NOT EXISTS {SCHEMA_NAME}.bases (
@@ -99,19 +102,23 @@ def _clean_record_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
     return {k: _clean_field_value(v) for k, v in fields.items()}
 
 
-def fetch_with_retry(fn, *, max_attempts=6, log=None):
+def fetch_with_retry(fn, *, max_attempts=10, log=None):
     for attempt in range(max_attempts):
         try:
             return fn()
         except Exception as e:
             error_str = str(e)
-            if "429" in error_str or "RATE_LIMIT" in error_str.upper():
-                if attempt < max_attempts - 1:
-                    wait = min(2 ** attempt * 2, 30)
-                    if log:
-                        log.warning(f"Rate limited, waiting {wait}s (attempt {attempt + 1}/{max_attempts})")
-                    time.sleep(wait)
-                    continue
+            is_rate_limit = (
+                isinstance(e, requests.exceptions.RetryError)
+                or "429" in error_str
+                or "RATE_LIMIT" in error_str.upper()
+            )
+            if is_rate_limit and attempt < max_attempts - 1:
+                wait = min(5 * (2 ** attempt), 120) + random.uniform(0, 3)
+                if log:
+                    log.warning(f"Rate limited, waiting {wait:.1f}s (attempt {attempt + 1}/{max_attempts})")
+                time.sleep(wait)
+                continue
             raise
 
 
@@ -242,7 +249,9 @@ def process_base(base, queue: WriteQueue, log) -> Dict[str, int]:
     queue.push_base((base_id, base_name, json.dumps(schema_json)))
 
     # Fetch records for each table
-    for table_schema in schema.tables:
+    for i, table_schema in enumerate(schema.tables):
+        if i > 0:
+            time.sleep(TABLE_FETCH_DELAY)
         table_id = table_schema.id
         table_name = table_schema.name
 
@@ -316,7 +325,7 @@ def airtable_raw_all_bases_sync(
     log.info(f"Run timestamp: {run_ts.isoformat()}")
 
     log.info("Discovering all Airtable bases...")
-    bases = api.bases()
+    bases = fetch_with_retry(lambda: api.bases(), log=log)
     log.info(f"Found {len(bases)} bases")
 
     queue = WriteQueue(run_ts, log)
