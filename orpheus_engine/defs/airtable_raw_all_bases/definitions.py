@@ -111,7 +111,7 @@ def _clean_record_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
     return {k: _clean_field_value(v) for k, v in fields.items()}
 
 
-def fetch_with_retry(fn, *, max_attempts=10, log=None):
+def fetch_with_retry(fn, *, max_attempts=30, log=None):
     for attempt in range(max_attempts):
         try:
             return fn()
@@ -119,17 +119,58 @@ def fetch_with_retry(fn, *, max_attempts=10, log=None):
             error_str = str(e)
             is_rate_limit = (
                 isinstance(e, requests.exceptions.RetryError)
+                or isinstance(e, requests.exceptions.HTTPError)
+                and getattr(getattr(e, "response", None), "status_code", None) == 429
                 or "429" in error_str
                 or "RATE_LIMIT" in error_str.upper()
             )
             if is_rate_limit and attempt < max_attempts - 1:
-                # Airtable requires 30s after a 429; double each subsequent attempt
-                wait = min(30 * (2 ** attempt), 300) + random.uniform(0, 5)
+                # Honor Retry-After header if present, otherwise exponential backoff
+                # capped at 5 minutes. Airtable documents a 30s minimum wait.
+                retry_after = None
+                resp = getattr(e, "response", None)
+                if resp is not None:
+                    try:
+                        retry_after = int(resp.headers.get("Retry-After", ""))
+                    except (ValueError, TypeError):
+                        pass
+                wait = (retry_after if retry_after else min(30 * (2 ** attempt), 300)) + random.uniform(0, 5)
                 if log:
                     log.warning(f"Rate limited, waiting {wait:.1f}s (attempt {attempt + 1}/{max_attempts})")
                 time.sleep(wait)
                 continue
             raise
+
+
+def fetch_all_bases(api: AirtableApi, *, page_delay: float = 1.5, log=None) -> List:
+    """Paginate /v0/meta/bases one page at a time with per-page retry.
+
+    api.bases() paginates internally, so a retry restarts from page 1 and
+    re-hammers every page we already fetched. Doing it ourselves means a 429
+    on page N retries only page N.
+    """
+    base_infos: List[Dict] = []
+    params: Dict[str, str] = {}
+
+    while True:
+        def fetch_page(p=dict(params)):
+            resp = api.session.get("https://api.airtable.com/v0/meta/bases", params=p)
+            resp.raise_for_status()
+            return resp.json()
+
+        data = fetch_with_retry(fetch_page, log=log)
+        base_infos.extend(data.get("bases", []))
+
+        offset = data.get("offset")
+        if not offset:
+            break
+
+        params["offset"] = offset
+        if log:
+            log.info(f"Paginating bases list: {len(base_infos)} fetched so far...")
+        time.sleep(page_delay)
+
+    return [api.base(info["id"]) for info in base_infos]
 
 
 def _build_schema_json(schema) -> List[Dict]:
@@ -335,7 +376,7 @@ def airtable_raw_all_bases_sync(
     log.info(f"Run timestamp: {run_ts.isoformat()}")
 
     log.info("Discovering all Airtable bases...")
-    bases = fetch_with_retry(lambda: api.bases(), log=log)
+    bases = fetch_all_bases(api, log=log)
     log.info(f"Found {len(bases)} bases")
 
     queue = WriteQueue(run_ts, log)
