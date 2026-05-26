@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -106,7 +107,7 @@ def zoom_recordings(
     user_ids = [u["id"] for u in zoom.fetch_users(log=log)]
     log.info(f"Fetching recordings for {len(user_ids)} users from {start.date()} to {end.date()}")
 
-    batch: List[tuple] = []
+    seen: dict[str, tuple] = {}
     total = 0
     latest_start: Optional[str] = None
     errors = 0
@@ -114,12 +115,15 @@ def zoom_recordings(
     for i, uid in enumerate(user_ids):
         try:
             for meeting in zoom.fetch_user_recordings(user_id=uid, start=start, end=end, log=log):
-                batch.append(_recording_row(meeting, run_ts))
+                row = _recording_row(meeting, run_ts)
+                seen[row[0]] = row
                 ms = meeting.get("start_time")
                 if ms and (latest_start is None or ms > latest_start):
                     latest_start = ms
 
-                if len(batch) >= BATCH_SIZE:
+                if len(seen) >= BATCH_SIZE:
+                    batch = list(seen.values())
+                    seen.clear()
                     conn = get_db_connection()
                     try:
                         upsert_rows(conn, "recordings", RECORDING_COLUMNS, batch,
@@ -128,16 +132,16 @@ def zoom_recordings(
                     finally:
                         conn.close()
                     total += len(batch)
-                    batch = []
         except Exception as e:
             errors += 1
             if errors <= 5:
                 log.warning(f"Failed to fetch recordings for user {uid}: {e}")
 
         if (i + 1) % 20 == 0:
-            log.info(f"Processed {i + 1}/{len(user_ids)} users, {total + len(batch)} recordings")
+            log.info(f"Processed {i + 1}/{len(user_ids)} users, {total + len(seen)} recordings")
 
-    if batch:
+    if seen:
+        batch = list(seen.values())
         conn = get_db_connection()
         try:
             upsert_rows(conn, "recordings", RECORDING_COLUMNS, batch,
@@ -209,7 +213,7 @@ def zoom_recording_analytics(
     for i, uuid in enumerate(recording_uuids):
         try:
             for entry in zoom.fetch_recording_analytics(meeting_id=uuid, log=log):
-                aid = f"{uuid}:{entry.get('date_time', '')}:{entry.get('email', '')}:{entry.get('type', '')}"
+                aid = hashlib.sha256(f"{uuid}:{entry.get('date_time', '')}:{entry.get('email', '')}:{entry.get('type', '')}:{entry.get('name', '')}".encode()).hexdigest()[:24]
                 batch.append((
                     aid, uuid,
                     entry.get("date_time"), entry.get("name"), entry.get("email"),
@@ -395,10 +399,10 @@ def zoom_cloud_recording_usage(
     finally:
         conn.close()
 
-    rows: List[tuple] = []
+    seen: dict[str, tuple] = {}
     for entry in zoom.fetch_cloud_recording_usage(start=start, end=end, log=log):
         uid = entry.get("user_id") or entry.get("email", "unknown")
-        rows.append((
+        seen[uid] = (
             uid,
             entry.get("user_id"),
             entry.get("user_name"),
@@ -409,7 +413,8 @@ def zoom_cloud_recording_usage(
             entry.get("usage"),
             clean_json(entry),
             run_ts,
-        ))
+        )
+    rows = list(seen.values())
 
     conn = get_db_connection()
     try:

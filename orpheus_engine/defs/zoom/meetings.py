@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -109,18 +110,21 @@ def zoom_meetings(
         user_ids.append(user["id"])
     log.info(f"Fetching meetings for {len(user_ids)} users from {start.date()} to {end.date()}")
 
-    batch: List[tuple] = []
+    seen: dict[str, tuple] = {}
     total = 0
     latest_end: Optional[str] = None
 
     for i, uid in enumerate(user_ids):
         for meeting in zoom.fetch_user_meetings(user_id=uid, start=start, end=end, log=log):
-            batch.append(_meeting_row(meeting, run_ts))
+            row = _meeting_row(meeting, run_ts)
+            seen[row[0]] = row
             me = meeting.get("end_time")
             if me and (latest_end is None or me > latest_end):
                 latest_end = me
 
-            if len(batch) >= BATCH_SIZE:
+            if len(seen) >= BATCH_SIZE:
+                batch = list(seen.values())
+                seen.clear()
                 conn = get_db_connection()
                 try:
                     upsert_rows(conn, "meetings", MEETING_COLUMNS, batch,
@@ -129,12 +133,12 @@ def zoom_meetings(
                 finally:
                     conn.close()
                 total += len(batch)
-                batch = []
 
         if (i + 1) % 20 == 0:
-            log.info(f"Processed {i + 1}/{len(user_ids)} users, {total + len(batch)} meetings so far")
+            log.info(f"Processed {i + 1}/{len(user_ids)} users, {total + len(seen)} meetings so far")
 
-    if batch:
+    if seen:
+        batch = list(seen.values())
         conn = get_db_connection()
         try:
             upsert_rows(conn, "meetings", MEETING_COLUMNS, batch,
@@ -558,7 +562,7 @@ SHARING_COLUMNS = [
 
 
 def _sharing_row(p: dict, meeting_uuid: str, run_ts: datetime) -> tuple:
-    sid = f"{meeting_uuid}:{p.get('id', '')}:{p.get('user_name', '')}"
+    sid = hashlib.sha256(f"{meeting_uuid}:{json.dumps(p, sort_keys=True, default=str)}".encode()).hexdigest()[:24]
     return (
         sid,
         meeting_uuid,
@@ -699,7 +703,7 @@ def zoom_meeting_polls(
             questions = zoom.fetch_meeting_polls(meeting_id=uuid, log=log)
             for q in questions:
                 for detail in q.get("question_details", []):
-                    pid = f"{uuid}:{q.get('email', '')}:{q.get('name', '')}:{detail.get('question', '')}"
+                    pid = hashlib.sha256(f"{uuid}:{q.get('email', '')}:{q.get('name', '')}:{detail.get('question', '')}:{detail.get('answer', '')}".encode()).hexdigest()[:24]
                     batch.append((
                         pid, uuid,
                         q.get("email"), q.get("name"),
@@ -793,11 +797,10 @@ def zoom_meeting_qa(
         try:
             questions = zoom.fetch_meeting_qa(meeting_id=uuid, log=log)
             for q in questions:
-                qid = f"{uuid}:{q.get('question', '')}:{q.get('email', '')}"
                 answer_list = q.get("answer_list", [])
                 if answer_list:
                     for a in answer_list:
-                        aid = f"{qid}:{a.get('name', '')}"
+                        aid = hashlib.sha256(f"{uuid}:{q.get('question', '')}:{q.get('email', '')}:{a.get('name', '')}:{a.get('answer', '')}".encode()).hexdigest()[:24]
                         batch.append((
                             aid, uuid,
                             q.get("question"), q.get("name"), q.get("email"),
@@ -805,6 +808,7 @@ def zoom_meeting_qa(
                             clean_json(q), run_ts,
                         ))
                 else:
+                    qid = hashlib.sha256(f"{uuid}:{q.get('question', '')}:{q.get('email', '')}".encode()).hexdigest()[:24]
                     batch.append((
                         qid, uuid,
                         q.get("question"), q.get("name"), q.get("email"),

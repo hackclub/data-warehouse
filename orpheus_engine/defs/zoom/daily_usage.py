@@ -49,7 +49,7 @@ def zoom_daily_usage(
         conn.close()
 
     now = datetime.now(timezone.utc)
-    rows: List[tuple] = []
+    seen: dict[str, tuple] = {}
 
     for months_ago in range(6):
         year = now.year
@@ -60,10 +60,12 @@ def zoom_daily_usage(
         try:
             days = zoom.fetch_daily_usage(year=year, month=month, log=log)
             for day in days:
-                rows.append(_row(day, run_ts))
+                row = _row(day, run_ts)
+                seen[row[0]] = row
             log.info(f"Fetched {len(days)} days for {year}-{month:02d}")
         except Exception as e:
             log.warning(f"Could not fetch {year}-{month:02d}: {e}")
+    rows = list(seen.values())
 
     conn = get_db_connection()
     try:

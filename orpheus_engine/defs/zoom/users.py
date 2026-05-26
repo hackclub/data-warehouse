@@ -88,10 +88,12 @@ def zoom_users(
     finally:
         conn.close()
 
-    rows: List[tuple] = []
+    seen: dict[str, tuple] = {}
     for status in ("active", "inactive", "pending"):
         for user in zoom.fetch_users(status=status, log=log):
-            rows.append(_user_row(user, run_ts))
+            row = _user_row(user, run_ts)
+            seen[row[0]] = row
+    rows = list(seen.values())
 
     conn = get_db_connection()
     try:
