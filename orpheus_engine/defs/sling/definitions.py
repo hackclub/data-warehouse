@@ -15,6 +15,7 @@ from .assets import (
     flavortown_ahoy_warehouse_mirror,
     hcb_warehouse_mirror,
     review_warehouse_mirror,
+    joe_warehouse_mirror,
     auth_warehouse_mirror,  # absolute minimum permissions for monthly active stats
     sling_replication_resource,
 )
@@ -36,6 +37,7 @@ defs = Definitions(
         flavortown_ahoy_warehouse_mirror,
         hcb_warehouse_mirror,
         review_warehouse_mirror,
+        joe_warehouse_mirror,
         auth_warehouse_mirror,
     ],
     resources={

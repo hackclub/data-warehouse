@@ -65,6 +65,7 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "FALLOUT_COOLIFY_URL",
     "HORIZONS_K8S_URL",
     "REVIEW_COOLIFY_URL",
+    "JOE_COOLIFY_URL",
     "WAREHOUSE_COOLIFY_URL",
 ]
 
@@ -158,6 +159,12 @@ review_db_connection = SlingConnectionResource(
     connection_string=EnvVar("REVIEW_COOLIFY_URL"),
 )
 
+joe_db_connection = SlingConnectionResource(
+    name="JOE_DB",
+    type="postgres",
+    connection_string=EnvVar("JOE_COOLIFY_URL"),
+)
+
 # Auth DB connection - absolute minimum permissions to generate events for monthly
 # active stats (e.g. "logged in at", "created oauth app"). No tokens or secrets.
 def _get_auth_ssh_private_key() -> str:
@@ -223,6 +230,7 @@ sling_replication_resource = SlingResource(
         fallout_db_connection,
         horizons_db_connection,
         review_db_connection,
+        joe_db_connection,
         auth_db_connection,
         hcb_db_connection,
         warehouse_db_connection,
@@ -1693,6 +1701,99 @@ def hcb_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=hcb_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+# --- Joe (Fraud Case Management) Database Replication Configuration ---
+joe_replication_config = {
+    "source": "JOE_DB",
+    "target": "WAREHOUSE_DB",
+
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "fraud_joe.{stream_table}",
+    },
+
+    "streams": {
+        # --- Cases & case activity ---
+        "public.cases": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.case_status_events": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+        "public.case_comments": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+        "public.case_assignees": None,  # No update key, small table
+
+        # --- Fraudpheus threads & messages ---
+        "public.fraudpheus_messages": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+        "public.fraudpheus_thread_status_events": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+        "public.fraudpheus_v2_threads": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.fraudpheus_v2_messages": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+
+        # --- Users & profiles ---
+        "public.user": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.profiles": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.permissions": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+
+    }
+}
+
+@dg.asset(
+    name="joe_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def joe_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates Joe (fraud case management) DB → warehouse."""
+    context.log.info("Starting Joe → warehouse Sling replication")
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=joe_replication_config,
     ):
         pass
 
