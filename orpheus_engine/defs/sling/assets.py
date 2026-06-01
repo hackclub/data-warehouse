@@ -59,6 +59,7 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "HACKATIME_LEGACY_COOLIFY_URL",
     "FLAVORTOWN_COOLIFY_URL",
     "FLAVORTOWN_AHOY_COOLIFY_URL",
+    "STARDANCE_AHOY_COOLIFY_URL",
     "HACK_CLUB_THE_GAME_COOLIFY_URL",
     "BLUEPRINT_COOLIFY_URL",
     "STASIS_COOLIFY_URL",
@@ -121,6 +122,12 @@ flavortown_ahoy_db_connection = SlingConnectionResource(
     name="FLAVORTOWN_AHOY_DB",
     type="postgres",
     connection_string=EnvVar("FLAVORTOWN_AHOY_COOLIFY_URL"),
+)
+
+stardance_ahoy_db_connection = SlingConnectionResource(
+    name="STARDANCE_AHOY_DB",
+    type="postgres",
+    connection_string=EnvVar("STARDANCE_AHOY_COOLIFY_URL"),
 )
 
 hack_club_the_game_db_connection = SlingConnectionResource(
@@ -224,6 +231,7 @@ sling_replication_resource = SlingResource(
         hackatime_legacy_db_connection,
         flavortown_db_connection,
         flavortown_ahoy_db_connection,
+        stardance_ahoy_db_connection,
         hack_club_the_game_db_connection,
         blueprint_db_connection,
         stasis_db_connection,
@@ -651,6 +659,30 @@ flavortown_ahoy_replication_config = {
     "defaults": {
         "mode": "full-refresh",
         "object": "flavortown_ahoy.{stream_table}",
+    },
+
+    "streams": {
+        "public.ahoy_visits": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "started_at",
+        },
+        "public.ahoy_events": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "time",
+        },
+    }
+}
+
+# --- Stardance Ahoy Database Replication Configuration ---
+stardance_ahoy_replication_config = {
+    "source": "STARDANCE_AHOY_DB",
+    "target": "WAREHOUSE_DB",
+
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "stardance_ahoy.{stream_table}",
     },
 
     "streams": {
@@ -1679,6 +1711,28 @@ def flavortown_ahoy_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=flavortown_ahoy_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+@dg.asset(
+    name="stardance_ahoy_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def stardance_ahoy_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates Stardance Ahoy analytics DB → warehouse with incremental sync."""
+    context.log.info("Starting Stardance Ahoy → warehouse Sling replication")
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=stardance_ahoy_replication_config,
     ):
         pass
 
