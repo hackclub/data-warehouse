@@ -60,6 +60,7 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "FLAVORTOWN_COOLIFY_URL",
     "FLAVORTOWN_AHOY_COOLIFY_URL",
     "STARDANCE_AHOY_COOLIFY_URL",
+    "STARDANCE_COOLIFY_URL",
     "HACK_CLUB_THE_GAME_COOLIFY_URL",
     "BLUEPRINT_COOLIFY_URL",
     "STASIS_COOLIFY_URL",
@@ -128,6 +129,12 @@ stardance_ahoy_db_connection = SlingConnectionResource(
     name="STARDANCE_AHOY_DB",
     type="postgres",
     connection_string=EnvVar("STARDANCE_AHOY_COOLIFY_URL"),
+)
+
+stardance_db_connection = SlingConnectionResource(
+    name="STARDANCE_DB",
+    type="postgres",
+    connection_string=EnvVar("STARDANCE_COOLIFY_URL"),
 )
 
 hack_club_the_game_db_connection = SlingConnectionResource(
@@ -232,6 +239,7 @@ sling_replication_resource = SlingResource(
         flavortown_db_connection,
         flavortown_ahoy_db_connection,
         stardance_ahoy_db_connection,
+        stardance_db_connection,
         hack_club_the_game_db_connection,
         blueprint_db_connection,
         stasis_db_connection,
@@ -695,6 +703,111 @@ stardance_ahoy_replication_config = {
             "mode": "incremental",
             "primary_key": ["id"],
             "update_key": "time",
+        },
+    }
+}
+
+# --- Stardance Database Replication Configuration ---
+# Main Stardance app DB (Rails). Almost every table is id + updated_at, so defaults
+# are incremental; the wildcard mirrors the whole schema and per-table entries below
+# only encode the exceptions (different update key, full-refresh, disabled, or a
+# column allow-list that drops encrypted/token columns).
+stardance_replication_config = {
+    "source": "STARDANCE_DB",
+    "target": "WAREHOUSE_DB",
+
+    "defaults": {
+        "mode": "incremental",
+        "primary_key": ["id"],
+        "update_key": "updated_at",
+        "object": "stardance.{stream_table}",
+    },
+
+    "streams": {
+        # All tables: incremental on id + updated_at (inherits defaults)
+        "public.*": None,
+
+        # --- Incremental: id + created_at (no updated_at column) ---
+        "public.active_storage_attachments": {"update_key": "created_at"},
+        "public.active_storage_blobs": {"update_key": "created_at"},
+        "public.blazer_audits": {"update_key": "created_at"},
+        "public.versions": {"update_key": "created_at"},
+
+        # --- Full-refresh: no timestamp column to drive incremental ---
+        "public.active_storage_variant_records": {"mode": "full-refresh"},
+
+        # --- Disabled: Rails infrastructure (no id) ---
+        "public.schema_migrations": {"disabled": True},
+        "public.ar_internal_metadata": {"disabled": True},
+
+        # --- Disabled: pg_stat_statements extension views (no update_key) ---
+        "public.pg_stat_statements": {"disabled": True},
+        "public.pg_stat_statements_info": {"disabled": True},
+
+        # --- Sensitive: explicit column allow-list (excludes ciphertext/bidx/token) ---
+        "public.users": {
+            "select": [
+                "id", "banned", "banned_at", "banned_reason", "created_at",
+                "display_name", "email", "enriched_ref", "first_name",
+                "granted_roles", "has_gotten_free_stickers",
+                "has_pending_achievements", "hcb_email", "internal_notes",
+                "last_name", "manual_ysws_override", "ref", "regions",
+                "shop_region", "slack_id", "synced_at", "things_dismissed",
+                "updated_at", "verification_status", "vote_balance",
+                "votes_count", "ysws_eligible", "bio",
+                "mission_review_notifications", "age_attestation",
+                "experience_level", "interests", "onboarded_at",
+                "shop_tutorial_started_at", "shop_tutorial_completed_at",
+                "verification_checked_at", "guest_email", "user_ref",
+                "ip_address", "user_agent", "geocoded_lat", "geocoded_lon",
+                "geocoded_country", "geocoded_subdivision",
+            ],  # Excludes session_token
+        },
+        "public.user_identities": {
+            "select": [
+                "id", "created_at", "provider", "uid", "updated_at", "user_id",
+            ],  # Excludes access_token_*/refresh_token_* (ciphertext + bidx)
+        },
+        "public.rsvps": {
+            "select": [
+                "id", "click_confirmed_at", "created_at", "email", "ip_address",
+                "ref", "reply_confirmed_at", "signup_confirmation_sent_at",
+                "synced_at", "updated_at", "user_agent", "geocoded_lat",
+                "geocoded_lon", "geocoded_country", "geocoded_subdivision",
+                "user_ref",
+            ],  # Excludes confirmation_token
+        },
+        "public.shop_orders": {
+            "select": [
+                "id", "aasm_state", "assigned_to_user_id",
+                "awaiting_periodical_fulfillment_at", "created_at",
+                "external_ref", "fraud_related_project_id", "frozen_item_price",
+                "fulfilled_at", "fulfilled_by", "fulfillment_cost",
+                "fulfillment_payout_line_id", "internal_notes",
+                "internal_rejection_reason", "joe_case_url", "on_hold_at",
+                "parent_order_id", "quantity", "region", "rejected_at",
+                "rejection_reason", "shop_card_grant_id", "shop_item_id",
+                "tracking_number", "updated_at", "user_id",
+                "warehouse_package_id", "frozen_modifiers_price",
+            ],  # Excludes frozen_address_ciphertext
+        },
+        "public.shop_warehouse_packages": {
+            "select": [
+                "id", "created_at", "frozen_contents", "theseus_package_id",
+                "updated_at", "user_id",
+            ],  # Excludes frozen_address_ciphertext
+        },
+        "public.hcb_credentials": {
+            "select": [
+                "id", "base_url", "client_id", "created_at", "redirect_uri",
+                "slug", "updated_at",
+            ],  # Excludes access_token/client_secret/refresh_token ciphertext
+        },
+        "public.report_review_tokens": {
+            "select": [
+                "id", "action", "created_at", "expires_at", "report_id",
+                "updated_at", "used_at",
+            ],  # Excludes token
         },
     }
 }
@@ -1733,6 +1846,28 @@ def stardance_ahoy_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=stardance_ahoy_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+@dg.asset(
+    name="stardance_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def stardance_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the main Stardance app DB → warehouse with incremental sync."""
+    context.log.info("Starting Stardance → warehouse Sling replication")
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=stardance_replication_config,
     ):
         pass
 
