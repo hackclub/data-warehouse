@@ -281,21 +281,8 @@ hackatime_replication_config = {
             "primary_key": ["id"],
             "update_key": "updated_at",
         },
-        "public.raw_heartbeat_uploads": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
-        "public.ahoy_events": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "time",
-        },
-        "public.ahoy_visits": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "started_at",
-        },
+        # Dropped upstream: raw_heartbeat_uploads, ahoy_events, ahoy_visits.
+        # Listing missing streams causes Sling to fail.
     }
 }
 
