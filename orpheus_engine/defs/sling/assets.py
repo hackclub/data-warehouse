@@ -478,15 +478,16 @@ flavortown_replication_config = {
             "primary_key": ["id"],
             "update_key": "updated_at",
         },
+        # Append-only; updated_at is unindexed on the source, so key off the indexed bigint PK.
         "public.active_insights_jobs": {
             "mode": "incremental",
             "primary_key": ["id"],
-            "update_key": "updated_at",
+            "update_key": "id",
         },
         "public.active_insights_requests": {
             "mode": "incremental",
             "primary_key": ["id"],
-            "update_key": "updated_at",
+            "update_key": "id",
         },
         "public.blazer_checks": {
             "mode": "incremental",
@@ -588,11 +589,6 @@ flavortown_replication_config = {
             "primary_key": ["id"],
             "update_key": "updated_at",
         },
-        "public.user_role_assignments": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
         "public.users": {
             "mode": "incremental",
             "primary_key": ["id"],
@@ -603,9 +599,47 @@ flavortown_replication_config = {
             "primary_key": ["id"],
             "update_key": "updated_at",
         },
-        # Tables without updated_at stay full-refresh (default):
-        # - active_storage_attachments, active_storage_blobs, active_storage_variant_records
-        # - blazer_audits, versions
+
+        # Append-only; key off the indexed bigint PK rather than an unindexed updated_at.
+        "public.extension_usages": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "id",
+        },
+        "public.post_git_commits": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "id",
+        },
+        "public.funnel_events": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "id",
+        },
+        "public.active_storage_blobs": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "id",
+        },
+        "public.active_storage_attachments": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "id",
+        },
+        "public.active_storage_variant_records": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "id",
+        },
+        # versions.id is a UUID (not monotonic) -> key off created_at instead.
+        "public.versions": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+
+        # Everything else stays full-refresh (default): tables are small, and a full
+        # reload preserves hard-deletes that incremental can't propagate.
     }
 }
 
@@ -657,15 +691,17 @@ flavortown_ahoy_replication_config = {
     },
 
     "streams": {
+        # Insert-only; started_at/time are only non-leading columns of composite indexes,
+        # so key off the indexed bigint PK instead.
         "public.ahoy_visits": {
             "mode": "incremental",
             "primary_key": ["id"],
-            "update_key": "started_at",
+            "update_key": "id",
         },
         "public.ahoy_events": {
             "mode": "incremental",
             "primary_key": ["id"],
-            "update_key": "time",
+            "update_key": "id",
         },
     }
 }
