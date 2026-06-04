@@ -107,7 +107,10 @@ materialize_frequent_job = dg.define_asset_job(
         dg.AssetSelection.assets(dg.AssetKey(["finance_2026_analytics", "metadata"])) |
         # Sleepover (source + warehouse mirrors)
         dg.AssetSelection.groups("airtable_sleepover") |
-        dg.AssetSelection.groups("dlt_airtable_sleepover")
+        dg.AssetSelection.groups("dlt_airtable_sleepover") |
+        # Stardance (Sling warehouse mirrors)
+        dg.AssetSelection.assets("stardance_warehouse_mirror") |
+        dg.AssetSelection.assets("stardance_ahoy_warehouse_mirror")
     ),
 )
 
