@@ -8,7 +8,7 @@ dependencies = [
     "psycopg[binary]>=3.1.0",
     "psycopg-pool>=3.1.0",
     "uvicorn>=0.30.0",
-    "starlette>=0.38.0",
+    "starlette>=1.0.1",
     "sse-starlette>=2.0.0",
     "python-dotenv>=1.0.0",
 ]
