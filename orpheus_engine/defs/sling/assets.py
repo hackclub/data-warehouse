@@ -784,6 +784,7 @@ stardance_replication_config = {
                 "verification_checked_at", "guest_email", "user_ref",
                 "ip_address", "user_agent", "geocoded_lat", "geocoded_lon",
                 "geocoded_country", "geocoded_subdivision",
+                "approx_balance", "approx_total_earned",
             ],  # Excludes session_token
         },
         "public.user_identities": {
