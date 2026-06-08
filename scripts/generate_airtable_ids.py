@@ -191,7 +191,7 @@ def generate_ids(api: Api, config: AirtableServiceConfig, output_path: Path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(output_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(generated_code))
+            f.write("\n".join(generated_code) + "\n")
         log.info(f"Successfully wrote generated IDs to {output_path}")
     except IOError as e:
         log.error(f"Failed to write output file {output_path}: {e}")
@@ -227,4 +227,4 @@ if __name__ == "__main__":
         generate_ids(airtable_api, resource_config, args.output)
     except Exception as e:
         log.exception(f"An unexpected error occurred: {e}") # Log full traceback
-        sys.exit(1) 
+        sys.exit(1)

@@ -606,6 +606,12 @@ sleepover_assets = create_airtable_sync_assets(
     description="Loads sleepover data into the warehouse.airtable_sleepover schema."
 )
 
+hack_club_videos_db_assets = create_airtable_sync_assets(
+    base_name="hack_club_videos_db",
+    tables=["attributed_authors", "channels", "payments", "videos"],
+    description="Loads hack_club_videos_db data into the warehouse.airtable_hack_club_videos_db schema."
+)
+
 # --- DLT Asset: Loads Data into Warehouse using DLT ---
 @asset(
     compute_kind="dlt", # Tagging the compute type for UI clarity

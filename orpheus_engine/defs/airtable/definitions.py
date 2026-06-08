@@ -344,6 +344,23 @@ airtable_config = AirtableServiceConfig(
                     table_id="tblzUI6m69SWWYi2k"
                 )
             }
+        ),
+        "hack_club_videos_db": AirtableBaseConfig(
+            base_id="applLfTvXaKUzBU0i",
+            tables={
+                "attributed_authors": AirtableTableConfig(
+                    table_id="tblAdQcf0RJNIyPs0"
+                ),
+                "channels": AirtableTableConfig(
+                    table_id="tblPlevdLxoUUdInE"
+                ),
+                "payments": AirtableTableConfig(
+                    table_id="tblXRkpDEfkBFHiFm"
+                ),
+                "videos": AirtableTableConfig(
+                    table_id="tblNzmIj9lzOF8rst"
+                )
+            }
         )
     }
 )

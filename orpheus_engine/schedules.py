@@ -110,7 +110,10 @@ materialize_frequent_job = dg.define_asset_job(
         dg.AssetSelection.groups("dlt_airtable_sleepover") |
         # Stardance (Sling warehouse mirrors)
         dg.AssetSelection.assets("stardance_warehouse_mirror") |
-        dg.AssetSelection.assets("stardance_ahoy_warehouse_mirror")
+        dg.AssetSelection.assets("stardance_ahoy_warehouse_mirror") |
+        # Hack Club Videos DB (source + warehouse mirrors)
+        dg.AssetSelection.groups("airtable_hack_club_videos_db") |
+        dg.AssetSelection.groups("dlt_airtable_hack_club_videos_db")
     ),
 )
 
