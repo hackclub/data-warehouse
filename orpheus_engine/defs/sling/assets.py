@@ -759,6 +759,12 @@ stardance_replication_config = {
         # --- Full-refresh: no timestamp column to drive incremental ---
         "public.active_storage_variant_records": {"mode": "full-refresh"},
 
+        # --- Materialized view: the "public.*" wildcard only discovers base
+        # tables (Postgres omits matviews from information_schema), so it must
+        # be named explicitly. It has no id/updated_at and is rebuilt wholesale
+        # by REFRESH, so full-refresh is the only workable mode. ---
+        "public.materialized_all_signups": {"mode": "full-refresh"},
+
         # --- Disabled: Rails infrastructure (no id) ---
         "public.schema_migrations": {"disabled": True},
         "public.ar_internal_metadata": {"disabled": True},
