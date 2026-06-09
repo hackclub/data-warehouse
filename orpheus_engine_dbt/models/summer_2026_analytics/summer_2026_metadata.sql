@@ -13,6 +13,8 @@ WITH program_info AS (
     SELECT * FROM (VALUES
         ('flavortown', DATE '2025-12-24'),
         ('fallout', DATE '2026-03-01'),
+        ('stasis', DATE '2026-03-03'),
+        ('horizons', DATE '2026-02-22'),
         ('macondo', DATE '2026-03-23'),
         ('beest', DATE '2026-04-06'),
         ('stack', DATE '2026-05-01'),
@@ -83,6 +85,28 @@ source_updates AS (
         SELECT MAX(updated_at)::timestamptz FROM {{ source('stardance', 'posts') }}
         UNION ALL
         SELECT MAX(updated_at)::timestamptz FROM {{ source('stardance', 'projects') }}
+    ) s
+
+    UNION ALL
+    SELECT 'stasis', MAX(last_updated_at)
+    FROM (
+        SELECT MAX("updatedAt")::timestamptz AS last_updated_at FROM {{ source('stasis', 'user') }}
+        UNION ALL
+        SELECT MAX("updatedAt")::timestamptz FROM {{ source('stasis', 'project') }}
+        UNION ALL
+        SELECT MAX("createdAt")::timestamptz FROM {{ source('stasis', 'work_session') }}
+        UNION ALL
+        SELECT MAX("createdAt")::timestamptz FROM {{ source('stasis', 'hackatime_project') }}
+    ) s
+
+    UNION ALL
+    SELECT 'horizons', MAX(last_updated_at)
+    FROM (
+        SELECT MAX(updated_at)::timestamptz AS last_updated_at FROM {{ source('horizons', 'users') }}
+        UNION ALL
+        SELECT MAX(updated_at)::timestamptz FROM {{ source('horizons', 'projects') }}
+        UNION ALL
+        SELECT MAX(created_at)::timestamptz FROM {{ source('horizons', 'user_sessions') }}
     ) s
 )
 

@@ -272,6 +272,9 @@ sources:
       - name: projects
         description: "Horizons projects with now_hackatime_projects array and repo_url."
         meta: { dagster: { deps: ['horizons_warehouse_mirror'] } }
+      - name: user_sessions
+        description: "Horizons app user sessions, used as an app mirror freshness signal."
+        meta: { dagster: { deps: ['horizons_warehouse_mirror'] } }
 
   - name: blueprint
     schema: blueprint

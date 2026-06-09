@@ -16,8 +16,9 @@
 --   dau_methodology — short label explaining which activity source(s) define DAU.
 --
 -- Sources:
---   Coding/journal programs (stardance, flavortown, stack, offtrack, beest) come
---   from {{ ref('summer_unified_time_log') }}, inheriting its cross-program
+--   Coding/journal/work-session programs (stardance, flavortown, stack,
+--   offtrack, beest, stasis, horizons) come from
+--   {{ ref('summer_unified_time_log') }}, inheriting its cross-program
 --   equal-split dedup and run windows.
 --   macondo uses its own per-day rollup (daily_project_activity: hackatime_seconds
 --   + journal_seconds).
@@ -26,8 +27,10 @@
 --
 -- PROGRAM STATUS:
 --   active here : stardance, flavortown (historical baseline), fallout, macondo,
---                 stack, offtrack (pre-launch: 0 until it starts), beest
---   PAUSED      : horizons, stasis — warehouse mirrors stale; re-add once remirrored.
+--                 stack, offtrack (0 until source rows arrive), beest, stasis,
+--                 horizons
+--   STALE SOURCE: horizons — app mirror has not refreshed since 2026-05-12, so
+--                 DAU is limited to Hackatime claims already present there.
 --
 -- Identity = normalized email; a person counts once per program per day.
 -- ============================================================================

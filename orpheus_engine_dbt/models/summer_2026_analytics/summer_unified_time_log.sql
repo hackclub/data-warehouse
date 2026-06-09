@@ -13,6 +13,8 @@
 --   stardance  — current Summer 2026 program (ongoing, launched ~2026-05-31).
 --   flavortown — prior program (ran ~2025-12-24 to 2026-05-01), kept for the
 --                historical comparison.
+--   stack, offtrack, beest, stasis, horizons — public Summer 2026 programs
+--                with coding/work-session activity in their own app mirrors.
 --
 -- Sources per program:
 --   Hackatime coding — global hackatime heartbeats, attributed to a program by
@@ -50,14 +52,17 @@ WITH program_windows AS (
         ('offtrack',   TIMESTAMP WITH TIME ZONE '2026-05-01 00:00:00+00',
                        NULL::timestamptz),
         ('beest',      TIMESTAMP WITH TIME ZONE '2026-04-06 00:00:00+00',
+                       NULL::timestamptz),
+        ('stasis',     TIMESTAMP WITH TIME ZONE '2026-03-03 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2026-07-01 00:00:00+00'),
+        ('horizons',   TIMESTAMP WITH TIME ZONE '2026-02-22 00:00:00+00',
                        NULL::timestamptz)
         -- This model is the CREDITED-HOURS log (Hackatime + devlog/journal) for
         -- coding programs. Separate, daily-grained programs live in
         -- daily_active_users: fallout (ship-based) and macondo (its own
         -- daily_project_activity rollup).
-        -- horizons + stasis are PAUSED: their warehouse mirrors are stale
-        -- (horizons frozen ~2026-04-21, stasis ~2026-06-04). Re-add their
-        -- windows + claim CTEs once the upstream mirrors are restored.
+        -- Horizons' app mirror is currently stale, so this only includes
+        -- Hackatime claims already present in the mirror.
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -184,6 +189,29 @@ offtrack_custom_hourly AS (
     GROUP BY 1, 2, 3, 4
 ),
 
+-- Stasis logs custom/manual time as work sessions tied to projects.
+stasis_custom_hourly AS (
+    SELECT
+        DATE_TRUNC('hour', ws."createdAt" AT TIME ZONE 'UTC') AS activity_hour,
+        'stasis'::text AS program_name,
+        CASE
+            WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+            THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                 || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+            ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        proj.title AS project_name,
+        NULLIF(BTRIM(proj."githubRepo"), '') AS code_url,
+        SUM(ws."hoursClaimed")::numeric AS raw_hours_logged,
+        'custom'::text AS logging_method,
+        ('stasis.work_session.hoursClaimed; sessions=' || COUNT(*)::text) AS source_detail
+    FROM {{ source('stasis', 'work_session') }} ws
+    JOIN {{ source('stasis', 'project') }} proj ON proj.id = ws."projectId"
+    JOIN {{ source('stasis', 'user') }} u ON u.id = proj."userId"
+    WHERE ws."hoursClaimed" > 0
+    GROUP BY 1, 2, 3, 4, 5
+),
+
 -- ============================================================
 -- 3. HACKATIME CLAIMS: per-program alias -> project mapping
 -- ============================================================
@@ -256,6 +284,41 @@ beest_ht_claims AS (
       AND u.hackatime_user_id IS NOT NULL AND u.hackatime_user_id <> ''
 ),
 
+stasis_ht_claims AS (
+    SELECT 'stasis'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(hp."hackatimeProject")) AS hackatime_alias,
+        proj.title AS project_name,
+        NULLIF(BTRIM(proj."githubRepo"), '') AS code_url,
+        hp."createdAt" AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('stasis', 'hackatime_project') }} hp
+    JOIN {{ source('stasis', 'project') }} proj ON proj.id = hp."projectId"
+    JOIN {{ source('stasis', 'user') }} u ON u.id = proj."userId"
+    WHERE hp."hackatimeProject" IS NOT NULL AND hp."hackatimeProject" <> ''
+),
+
+horizons_ht_claims AS (
+    SELECT 'horizons'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias.alias_text, ' "')) AS hackatime_alias,
+        proj.project_title AS project_name,
+        NULLIF(BTRIM(proj.repo_url), '') AS code_url,
+        proj.created_at AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('horizons', 'projects') }} proj
+    JOIN {{ source('horizons', 'users') }} u ON u.user_id = proj.user_id
+    CROSS JOIN LATERAL unnest(proj.now_hackatime_projects::text[]) AS alias(alias_text)
+    WHERE proj.now_hackatime_projects IS NOT NULL
+      AND proj.now_hackatime_projects <> '{}'
+),
+
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
@@ -263,6 +326,8 @@ all_claims_raw AS (
     SELECT * FROM stardance_ht_claims
     UNION ALL SELECT * FROM flavortown_ht_claims
     UNION ALL SELECT * FROM beest_ht_claims
+    UNION ALL SELECT * FROM stasis_ht_claims
+    UNION ALL SELECT * FROM horizons_ht_claims
 ),
 
 all_claims AS (
@@ -323,6 +388,7 @@ custom_in_window AS (
         UNION ALL SELECT * FROM flavortown_custom_hourly
         UNION ALL SELECT * FROM stack_custom_hourly
         UNION ALL SELECT * FROM offtrack_custom_hourly
+        UNION ALL SELECT * FROM stasis_custom_hourly
     ) c
     JOIN program_windows w
         ON w.program_name = c.program_name
