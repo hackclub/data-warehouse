@@ -20,3 +20,4 @@ prompt.txt
 
 **/.DS_Store
 .idea
+.claude/*.lock

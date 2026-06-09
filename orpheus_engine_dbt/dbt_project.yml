@@ -41,3 +41,5 @@ models:
         select: ["\"zrl_2026-leadership-dashboard_crobat\""]
     spring_2026_analytics:
       +materialized: table
+    summer_2026_analytics:
+      +materialized: table

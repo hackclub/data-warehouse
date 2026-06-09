@@ -68,6 +68,10 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "HORIZONS_K8S_URL",
     "REVIEW_COOLIFY_URL",
     "JOE_COOLIFY_URL",
+    "STACK_COOLIFY_URL",
+    "OFFTRACK_COOLIFY_URL",
+    "MACONDO_COOLIFY_URL",
+    "BEEST_COOLIFY_URL",
     "WAREHOUSE_COOLIFY_URL",
 ]
 
@@ -167,6 +171,30 @@ horizons_db_connection = SlingConnectionResource(
     connection_string=EnvVar("HORIZONS_K8S_URL"),
 )
 
+stack_db_connection = SlingConnectionResource(
+    name="STACK_DB",
+    type="postgres",
+    connection_string=EnvVar("STACK_COOLIFY_URL"),
+)
+
+offtrack_db_connection = SlingConnectionResource(
+    name="OFFTRACK_DB",
+    type="postgres",
+    connection_string=EnvVar("OFFTRACK_COOLIFY_URL"),
+)
+
+macondo_db_connection = SlingConnectionResource(
+    name="MACONDO_DB",
+    type="postgres",
+    connection_string=EnvVar("MACONDO_COOLIFY_URL"),
+)
+
+beest_db_connection = SlingConnectionResource(
+    name="BEEST_DB",
+    type="postgres",
+    connection_string=EnvVar("BEEST_COOLIFY_URL"),
+)
+
 review_db_connection = SlingConnectionResource(
     name="REVIEW_DB",
     type="postgres",
@@ -245,6 +273,10 @@ sling_replication_resource = SlingResource(
         stasis_db_connection,
         fallout_db_connection,
         horizons_db_connection,
+        stack_db_connection,
+        offtrack_db_connection,
+        macondo_db_connection,
+        beest_db_connection,
         review_db_connection,
         joe_db_connection,
         auth_db_connection,
@@ -1469,6 +1501,118 @@ horizons_replication_config = {
     }
 }
 
+# --- Stack Database Replication Configuration ---
+# Small app DB; full-refresh. users allow-list excludes OAuth/Hackatime tokens.
+stack_replication_config = {
+    "source": "STACK_DB",
+    "target": "WAREHOUSE_DB",
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "stack.{stream_table}",
+    },
+    "streams": {
+        "public.*": None,
+        "public._prisma_migrations": {"disabled": True},
+        "public.users": {
+            "select": [
+                "id", "hackclub_sub", "email", "name", "slug", "profile_image_url",
+                "slack_id", "verification_status", "role", "token_type",
+                "token_expires_at", "expires_in_seconds", "scope",
+                "created_at", "updated_at", "password_set_at", "coins",
+                "hackatime_token_expires_at", "hackatime_connected_at",
+                "hackatime_total_hours", "bricks", "hackatime_github_username",
+            ],  # Excludes access_token, refresh_token, raw_token, password_hash,
+                # raw_profile, hackatime_access_token, hackatime_refresh_token
+        },
+    },
+}
+
+# --- Off-Track Database Replication Configuration ---
+offtrack_replication_config = {
+    "source": "OFFTRACK_DB",
+    "target": "WAREHOUSE_DB",
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "offtrack.{stream_table}",
+    },
+    "streams": {
+        "public.*": None,
+        "public._prisma_migrations": {"disabled": True},
+        "public.users": {
+            "select": [
+                "id", "hackclub_sub", "email", "name", "slug", "profile_image_url",
+                "slack_id", "verification_status", "role", "coins", "token_type",
+                "token_expires_at", "expires_in_seconds", "scope",
+                "created_at", "updated_at", "hackatime_token_expires_at",
+                "hackatime_connected_at", "hackatime_total_hours",
+                "hackatime_github_username",
+            ],  # Excludes access_token, refresh_token, raw_token,
+                # raw_profile, hackatime_access_token, hackatime_refresh_token
+        },
+    },
+}
+
+# --- Macondo Database Replication Configuration ---
+macondo_replication_config = {
+    "source": "MACONDO_DB",
+    "target": "WAREHOUSE_DB",
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "macondo.{stream_table}",
+    },
+    "streams": {
+        "public.*": None,
+        # Sensitive tables: tokens / PII
+        "public._prisma_migrations": {"disabled": True},
+        "public.sessions": {"disabled": True},
+        "public.pii_locker": {"disabled": True},
+        "public.internal_oauth_connections": {"disabled": True},
+        "public.users": {
+            "select": [
+                "id", "name", "email", "image", "created_at", "updated_at", "sub",
+                "slack_id", "username", "hackatime_id", "hcb_email", "locale",
+                "timezone", "roles", "is_temp", "onboarding_step", "completed_guides",
+                "last_seen_at", "last_login_at", "streak_freezes_remaining",
+                "last_hackatime_total_hours", "last_hackatime_synced_at", "github_id",
+                "country", "region_override", "referral_code", "referred_by_user_id",
+                "referred_at", "last_hackatime_total_seconds", "preferred_reminder_hour",
+                "streak_slack_notifications", "last_active_date", "hca_verification_status",
+                "hca_ysws_eligible", "auto_use_streak_freezes",
+                "slack_macondo_auto_invited_at", "lifetime_fruits_earned",
+                "hca_last_sync_at", "username_synced_at", "reminder_hours_before_day_end",
+                "reminder_local_hours", "hackatime_timezone",
+            ],  # Excludes github_token, hackatime_oauth_token, hca_refresh_token,
+                # github access; onboarding_data dropped as free-form blob
+        },
+    },
+}
+
+# --- Beest Database Replication Configuration ---
+beest_replication_config = {
+    "source": "BEEST_DB",
+    "target": "WAREHOUSE_DB",
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "beest.{stream_table}",
+    },
+    "streams": {
+        "public.*": None,
+        # Sensitive tables: session/credential tokens
+        "public._prisma_migrations": {"disabled": True},
+        "public.sessions": {"disabled": True},
+        "public.hcb_credentials": {"disabled": True},
+        "public.users": {
+            "select": [
+                "id", "hca_sub", "email", "name", "nickname", "slack_id",
+                "created_at", "updated_at", "two_emails", "hackatime_user_id",
+                "has_address", "has_birthdate", "pipes", "gender", "utm_source",
+                "utm_medium", "utm_campaign", "referrer", "landing_path", "intent",
+                "reviewer_user_note",
+            ],  # Excludes hackatime_token, hca_access_token, hca_refresh_token
+        },
+    },
+}
+
 # --- HCB Database Replication Configuration ---
 # For calculating monthly actives and transaction ledger
 hcb_replication_config = {
@@ -1832,6 +1976,94 @@ def horizons_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=horizons_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+@dg.asset(
+    name="stack_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def stack_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the entire Stack DB → warehouse in a single shot."""
+    context.log.info("Starting Stack → warehouse Sling replication")
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=stack_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+@dg.asset(
+    name="offtrack_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def offtrack_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the entire Off-Track DB → warehouse in a single shot."""
+    context.log.info("Starting Off-Track → warehouse Sling replication")
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=offtrack_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+@dg.asset(
+    name="macondo_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def macondo_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the entire Macondo DB → warehouse in a single shot."""
+    context.log.info("Starting Macondo → warehouse Sling replication")
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=macondo_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+@dg.asset(
+    name="beest_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def beest_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the entire Beest DB → warehouse in a single shot."""
+    context.log.info("Starting Beest → warehouse Sling replication")
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=beest_replication_config,
     ):
         pass
 

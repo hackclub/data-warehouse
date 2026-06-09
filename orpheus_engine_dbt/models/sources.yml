@@ -182,6 +182,87 @@ sources:
         description: "Flavortown posts linking devlogs to projects and users."
         meta: { dagster: { deps: ['flavortown_warehouse_mirror'] } }
 
+  - name: stardance
+    schema: stardance
+    tables:
+      - name: users
+        description: "Stardance users (summer 2026 program)."
+        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+      - name: projects
+        description: "Stardance projects with repo_url."
+        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+      - name: user_hackatime_projects
+        description: "Stardance user-to-hackatime-project alias mappings."
+        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+      - name: post_devlogs
+        description: "Stardance devlog entries with duration_seconds."
+        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+      - name: posts
+        description: "Stardance posts linking devlogs to projects and users."
+        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+
+  - name: fallout
+    schema: fallout
+    tables:
+      - name: users
+        description: "Fallout users (hardware program, Shenzhen)."
+        meta: { dagster: { deps: ['fallout_warehouse_mirror'] } }
+      - name: projects
+        description: "Fallout projects with repo_link and manual_seconds."
+        meta: { dagster: { deps: ['fallout_warehouse_mirror'] } }
+      - name: ships
+        description: "Fallout ship submissions with approved_seconds (user shipping events)."
+        meta: { dagster: { deps: ['fallout_warehouse_mirror'] } }
+      - name: lookout_timelapses
+        description: "Fallout Lookout build-time timelapses (duration = tracked build seconds)."
+        meta: { dagster: { deps: ['fallout_warehouse_mirror'] } }
+      - name: lapse_timelapses
+        description: "Fallout Lapse build-time timelapses (duration = tracked build seconds)."
+        meta: { dagster: { deps: ['fallout_warehouse_mirror'] } }
+      - name: journal_entries
+        description: "Fallout devlog/journal entries (progress updates)."
+        meta: { dagster: { deps: ['fallout_warehouse_mirror'] } }
+
+  - name: stack
+    schema: stack
+    tables:
+      - name: users
+        description: "Stack users with email and hackatime linkage."
+        meta: { dagster: { deps: ['stack_warehouse_mirror'] } }
+      - name: journal_entries
+        description: "Stack journal entries with hours_worked and time_done."
+        meta: { dagster: { deps: ['stack_warehouse_mirror'] } }
+
+  - name: offtrack
+    schema: offtrack
+    tables:
+      - name: users
+        description: "Off-Track users with email and hackatime linkage."
+        meta: { dagster: { deps: ['offtrack_warehouse_mirror'] } }
+      - name: journal_entries
+        description: "Off-Track journal entries with hours_worked and time_done."
+        meta: { dagster: { deps: ['offtrack_warehouse_mirror'] } }
+
+  - name: macondo
+    schema: macondo
+    tables:
+      - name: users
+        description: "Macondo users with email."
+        meta: { dagster: { deps: ['macondo_warehouse_mirror'] } }
+      - name: daily_project_activity
+        description: "Macondo per-day per-project activity with journal_seconds and hackatime_seconds."
+        meta: { dagster: { deps: ['macondo_warehouse_mirror'] } }
+
+  - name: beest
+    schema: beest
+    tables:
+      - name: users
+        description: "Beest users with email and hackatime_user_id."
+        meta: { dagster: { deps: ['beest_warehouse_mirror'] } }
+      - name: projects
+        description: "Beest projects with hackatime_project_name and code_url."
+        meta: { dagster: { deps: ['beest_warehouse_mirror'] } }
+
   - name: horizons
     schema: horizons
     tables:
