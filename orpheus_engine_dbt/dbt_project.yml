@@ -47,3 +47,15 @@ models:
         select: ["metabase", "metabase_unified_analytics_reader"]
       +post-hook:
         - "GRANT USAGE ON SCHEMA {{ this.schema }} TO metabase, metabase_unified_analytics_reader"
+    gdpr_analytics:
+      +materialized: table
+      +grants:
+        select: ["metabase"]
+    moderation_analytics:
+      +materialized: table
+      +grants:
+        select: ["metabase"]
+    infra_ticketing_analytics:
+      +materialized: table
+      +grants:
+        select: ["metabase"]

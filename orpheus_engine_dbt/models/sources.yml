@@ -344,3 +344,10 @@ sources:
       - name: oauth_applications
         description: "OAuth applications - only id, name, trust_level accessible."
         meta: { dagster: { deps: ['auth_warehouse_mirror'] } }
+
+  - name: airtable_raw_all_bases
+    schema: airtable_raw_all_bases
+    tables:
+      - name: records
+        description: "Raw Airtable records from all bases (base_id, table_id, record_id, fields JSONB)."
+        meta: { dagster: { deps: ['airtable_raw_all_bases_sync'] } }
