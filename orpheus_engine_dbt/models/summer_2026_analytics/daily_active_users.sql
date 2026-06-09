@@ -59,7 +59,7 @@ macondo_dau AS (
     FROM {{ source('macondo', 'daily_project_activity') }} dpa
     WHERE dpa.day::text ~ '^\d{4}-\d{2}-\d{2}$'
       AND dpa.day::date >= DATE '2026-03-23'
-      AND dpa.day::date <= CURRENT_DATE
+      AND dpa.day::date < CURRENT_DATE
     GROUP BY 1, dpa.day::date
 ),
 
@@ -101,11 +101,17 @@ fallout_dau AS (
     FROM fallout_activity
     WHERE activity_date >= DATE '2026-03-01'
     GROUP BY 1, activity_date
+),
+
+combined AS (
+    SELECT program_name, activity_date, dau, dau_methodology FROM coding_dau
+    UNION ALL
+    SELECT program_name, activity_date, dau, dau_methodology FROM macondo_dau
+    UNION ALL
+    SELECT program_name, activity_date, dau, dau_methodology FROM fallout_dau
 )
 
-SELECT program_name, activity_date, dau, dau_methodology FROM coding_dau
-UNION ALL
-SELECT program_name, activity_date, dau, dau_methodology FROM macondo_dau
-UNION ALL
-SELECT program_name, activity_date, dau, dau_methodology FROM fallout_dau
+SELECT program_name, activity_date, dau, dau_methodology
+FROM combined
+WHERE activity_date < CURRENT_DATE
 ORDER BY activity_date DESC, program_name

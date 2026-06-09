@@ -21,6 +21,9 @@ clean-targets:         # Directories removed by `dbt clean`
   - "dbt_packages"
   - "logs"
 
+on-run-end:
+  - "GRANT USAGE ON SCHEMA public_summer_2026_analytics TO metabase, metabase_unified_analytics_reader"
+
 # Default settings for all models  
 models:
   orpheus_engine_dbt_project:
@@ -45,8 +48,6 @@ models:
       +materialized: table
       +grants:
         select: ["metabase", "metabase_unified_analytics_reader"]
-      +post-hook:
-        - "GRANT USAGE ON SCHEMA {{ this.schema }} TO metabase, metabase_unified_analytics_reader"
     gdpr_analytics:
       +materialized: table
       +grants:
