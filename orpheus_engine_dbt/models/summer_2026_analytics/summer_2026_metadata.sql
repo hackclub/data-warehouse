@@ -9,21 +9,27 @@
 -- Sling load timestamp, so this is a data freshness signal rather than the exact
 -- Dagster/Sling materialization timestamp.
 
-WITH program_info AS (
+WITH source_info AS (
     SELECT * FROM (VALUES
-        ('flavortown', DATE '2025-12-24'),
-        ('fallout', DATE '2026-03-01'),
-        ('stasis', DATE '2026-03-03'),
-        ('horizons', DATE '2026-02-22'),
-        ('macondo', DATE '2026-03-23'),
-        ('beest', DATE '2026-04-06'),
-        ('stack', DATE '2026-05-01'),
-        ('offtrack', DATE '2026-05-01'),
-        ('stardance', DATE '2026-05-31')
-    ) AS t(program_name, program_start_date)
+        ('hackatime', 'shared activity source', NULL::date),
+        ('flavortown', 'program db', DATE '2025-12-24'),
+        ('fallout', 'program db', DATE '2026-03-01'),
+        ('stasis', 'program db', DATE '2026-03-03'),
+        ('horizons', 'program db', DATE '2026-02-22'),
+        ('macondo', 'program db', DATE '2026-03-23'),
+        ('beest', 'program db', DATE '2026-04-06'),
+        ('stack', 'program db', DATE '2026-05-01'),
+        ('offtrack', 'program db', DATE '2026-05-01'),
+        ('stardance', 'program db', DATE '2026-05-31')
+    ) AS t(program_name, source_type, program_start_date)
 ),
 
 source_updates AS (
+    SELECT 'hackatime'::text AS program_name, MAX(updated_at)::timestamptz AS last_source_updated_at
+    FROM {{ source('hackatime_raw', 'heartbeats') }}
+    WHERE category = 'coding'
+
+    UNION ALL
     SELECT 'flavortown'::text AS program_name, MAX(last_updated_at) AS last_source_updated_at
     FROM (
         SELECT MAX(updated_at)::timestamptz AS last_updated_at FROM {{ source('flavortown', 'users') }}
@@ -111,15 +117,20 @@ source_updates AS (
 )
 
 SELECT
-    pi.program_name,
-    pi.program_start_date,
+    si.program_name,
+    si.source_type,
+    si.program_start_date,
     NOW() AS last_materialized_at,
     su.last_source_updated_at,
+    ROUND(EXTRACT(EPOCH FROM (NOW() - su.last_source_updated_at)) / 3600.0, 1) AS source_age_hours,
     CASE
         WHEN su.last_source_updated_at IS NULL THEN 'unknown'
+        WHEN si.program_name = 'hackatime' AND su.last_source_updated_at < NOW() - INTERVAL '6 hours' THEN 'stale'
+        WHEN si.program_name = 'hackatime' AND su.last_source_updated_at < NOW() - INTERVAL '2 hours' THEN 'lagging'
         WHEN su.last_source_updated_at < NOW() - INTERVAL '24 hours' THEN 'stale'
+        WHEN su.last_source_updated_at < NOW() - INTERVAL '6 hours' THEN 'lagging'
         ELSE 'fresh'
     END AS source_freshness_status
-FROM program_info pi
-LEFT JOIN source_updates su ON su.program_name = pi.program_name
-ORDER BY pi.program_start_date
+FROM source_info si
+LEFT JOIN source_updates su ON su.program_name = si.program_name
+ORDER BY si.source_type, si.program_start_date NULLS FIRST
