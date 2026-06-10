@@ -3,9 +3,12 @@ from dagster_sling import SlingResource, SlingConnectionResource
 from typing import Mapping, Any
 from urllib.parse import urlparse, parse_qs
 import dagster as dg
+import hashlib
 import ipaddress
 import os
 import base64
+import psycopg2
+from psycopg2 import sql
 
 
 def _validate_sslmode_disable_is_tailscale(env_var_name: str) -> None:
@@ -285,38 +288,155 @@ sling_replication_resource = SlingResource(
     ]
 )
 
+_HACKATIME_UPDATED_AT_STREAMS = {
+    "admin_api_keys": ["id"],
+    "api_keys": ["id"],
+    "commits": ["sha"],
+    "dashboard_rollups": ["id"],
+    "deletion_requests": ["id"],
+    "email_addresses": ["id"],
+    "email_verification_requests": ["id"],
+    "flipper_features": ["id"],
+    "flipper_gates": ["id"],
+    "goals": ["id"],
+    "good_job_batches": ["id"],
+    "good_job_executions": ["id"],
+    "good_job_processes": ["id"],
+    "good_job_settings": ["id"],
+    "good_jobs": ["id"],
+    "heartbeat_import_runs": ["id"],
+    "heartbeat_import_sources": ["id"],
+    "heartbeat_user_agents": ["user_agent"],
+    "heartbeats": ["id"],
+    "instance_import_sources": ["id"],
+    "leaderboard_entries": ["id"],
+    "leaderboards": ["id"],
+    "mailkick_subscriptions": ["id"],
+    "oauth_applications": ["id"],
+    "project_labels": ["id"],
+    "project_repo_mappings": ["id"],
+    "repo_host_events": ["id"],
+    "repositories": ["id"],
+    "sailors_log_leaderboards": ["id"],
+    "sailors_log_notification_preferences": ["id"],
+    "sailors_log_slack_notifications": ["id"],
+    "sailors_logs": ["id"],
+    "sign_in_tokens": ["id"],
+    "trust_level_audit_logs": ["id"],
+    "users": ["id"],
+    "wakatime_mirrors": ["id"],
+}
+
+_HACKATIME_CREATED_AT_STREAMS = {
+    "active_storage_attachments": ["id"],
+    "active_storage_blobs": ["id"],
+    "notable_jobs": ["id"],
+    "notable_requests": ["id"],
+    "oauth_access_grants": ["id"],
+    "oauth_access_tokens": ["id"],
+    "versions": ["id"],
+}
+
+_HACKATIME_FULL_REFRESH_STREAMS = [
+    # These tables currently have no safe timestamp cursor in the source.
+    "active_storage_variant_records",
+    "pghero_query_stats",
+    "pghero_space_stats",
+]
+
+
+def _safe_index_name(*parts: str) -> str:
+    raw_name = "_".join(["idx", *parts])
+    digest = hashlib.sha1(raw_name.encode("utf-8")).hexdigest()[:8]
+    return f"{raw_name[:52]}_{digest}"
+
+
+def _incremental_stream(primary_key: list[str], update_key: str) -> dict[str, Any]:
+    return {
+        "mode": "incremental",
+        "primary_key": primary_key,
+        "update_key": update_key,
+    }
+
+
+def _hackatime_streams() -> dict[str, Any]:
+    streams: dict[str, Any] = {
+        "public.pg_stat_statements": {"disabled": True},
+        "public.pg_stat_statements_info": {"disabled": True},
+        "public.schema_migrations": {"disabled": True},
+        "public.ar_internal_metadata": {"disabled": True},
+        "public.solid_cache_entries": {"disabled": True},
+    }
+
+    for table_name, primary_key in _HACKATIME_UPDATED_AT_STREAMS.items():
+        streams[f"public.{table_name}"] = _incremental_stream(primary_key, "updated_at")
+
+    for table_name, primary_key in _HACKATIME_CREATED_AT_STREAMS.items():
+        streams[f"public.{table_name}"] = _incremental_stream(primary_key, "created_at")
+
+    for table_name in _HACKATIME_FULL_REFRESH_STREAMS:
+        streams[f"public.{table_name}"] = {"mode": "full-refresh"}
+
+    # Dropped upstream: raw_heartbeat_uploads, ahoy_events, ahoy_visits.
+    # Listing missing streams causes Sling to fail.
+    return streams
+
+
 # --- Define Replication Configuration ---
 hackatime_replication_config = {
     "source": "HACKATIME_DB",
     "target": "WAREHOUSE_DB",
 
     "defaults": {
-        "mode": "full-refresh",
         "object": "hackatime.{stream_table}",
     },
 
-    "streams": {
-        "public.*": None,
-        "public.pg_stat_statements": {"disabled": True},
-        "public.pg_stat_statements_info": {"disabled": True},
-        "public.schema_migrations": {"disabled": True},
-        "public.ar_internal_metadata": {"disabled": True},
-        "public.solid_cache_entries": {"disabled": True},
-        # Large tables configured for incremental sync
-        "public.heartbeats": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
-        "public.leaderboard_entries": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
-        # Dropped upstream: raw_heartbeat_uploads, ahoy_events, ahoy_visits.
-        # Listing missing streams causes Sling to fail.
-    }
+    "streams": _hackatime_streams(),
 }
+
+
+def _ensure_hackatime_target_indexes(context: AssetExecutionContext) -> None:
+    """Keep Sling incremental cursor lookups and merges off full-table scans."""
+    warehouse_url = os.getenv("WAREHOUSE_COOLIFY_URL")
+    if not warehouse_url:
+        raise ValueError("WAREHOUSE_COOLIFY_URL is required for Hackatime index preflight")
+
+    index_specs: list[tuple[str, tuple[str, ...]]] = []
+    for table_name, primary_key in {
+        **_HACKATIME_UPDATED_AT_STREAMS,
+        **_HACKATIME_CREATED_AT_STREAMS,
+    }.items():
+        update_key = "updated_at" if table_name in _HACKATIME_UPDATED_AT_STREAMS else "created_at"
+        index_specs.append((table_name, tuple(primary_key)))
+        index_specs.append((table_name, (update_key,)))
+
+    conn = psycopg2.connect(warehouse_url)
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("CREATE SCHEMA IF NOT EXISTS hackatime")
+            for table_name, columns in index_specs:
+                cursor.execute("SELECT to_regclass(%s)", (f"hackatime.{table_name}",))
+                if cursor.fetchone()[0] is None:
+                    continue
+
+                index_name = _safe_index_name("hackatime", table_name, *columns)
+                context.log.info(
+                    "Ensuring Hackatime target index %s on %s(%s)",
+                    index_name,
+                    table_name,
+                    ", ".join(columns),
+                )
+                cursor.execute(
+                    sql.SQL("CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {}.{} ({})").format(
+                        sql.Identifier(index_name),
+                        sql.Identifier("hackatime"),
+                        sql.Identifier(table_name),
+                        sql.SQL(", ").join(sql.Identifier(column) for column in columns),
+                    )
+                )
+    finally:
+        conn.close()
 
 # --- Define Replication Configuration ---
 hcer_public_github_data_replication_config = {
@@ -1728,6 +1848,7 @@ def hackatime_warehouse_mirror(
 ) -> Nothing:
     """Replicates the entire Hackatime DB → warehouse in a single shot."""
     context.log.info("Starting Hackatime → warehouse Sling replication")
+    _ensure_hackatime_target_indexes(context)
 
     # Iterate through the generator **without yielding** its events.
     for _ in sling.replicate(
