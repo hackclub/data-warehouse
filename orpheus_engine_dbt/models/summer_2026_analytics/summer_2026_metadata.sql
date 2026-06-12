@@ -17,6 +17,7 @@ WITH source_info AS (
         ('blueprint', 'program db', DATE '2025-09-23'),
         ('flavortown', 'program db', DATE '2025-12-24'),
         ('hack_club_the_game', 'program db', DATE '2026-01-16'),
+        ('sleepover', 'program db', DATE '2026-01-16'),
         ('fallout', 'program db', DATE '2026-03-01'),
         ('stasis', 'program db', DATE '2026-03-03'),
         ('horizons', 'program db', DATE '2026-02-22'),
@@ -138,6 +139,13 @@ source_updates AS (
         UNION ALL
         SELECT MAX(updated_at)::timestamptz FROM {{ source('hack_club_the_game', 'hackatime_projects') }}
     ) s
+
+    -- Sleepover lives in Airtable (DLT sync, not Sling); _dlt_loads.inserted_at
+    -- is the actual sync time, so unlike the Sling mirrors this is true
+    -- pipeline freshness rather than a source-activity proxy.
+    UNION ALL
+    SELECT 'sleepover', MAX(inserted_at)::timestamptz
+    FROM {{ source('airtable_sleepover', '_dlt_loads') }}
 
     -- SoM 2025 ended 2025-10-02, but the app is still live and its mirror still
     -- syncs, so users/projects updated_at reflects mirror freshness (not
