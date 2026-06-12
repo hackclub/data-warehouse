@@ -8,7 +8,10 @@
 
 SELECT DISTINCT
     program_name,
-    INITCAP(program_name) AS program,
+    CASE program_name
+        WHEN 'summer_of_making' THEN 'Summer of Making'
+        ELSE INITCAP(program_name)
+    END AS program,
     dau_methodology,
     CASE dau_methodology
         WHEN 'hackatime_and_custom_time' THEN 'Hackatime + custom time'

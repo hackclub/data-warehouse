@@ -34,11 +34,18 @@ methodology_labels AS (
         ('daily_project_activity_time', 'Daily project activity time'),
         ('hardware_build_time_and_journals', 'Hardware build time + journals')
     ) AS t(dau_methodology, dau_methodology_label)
+),
+
+-- Display labels for multi-word program names (INITCAP keeps underscores).
+program_labels AS (
+    SELECT * FROM (VALUES
+        ('summer_of_making', 'Summer of Making')
+    ) AS t(program_name, program_label)
 )
 
 SELECT
     c.program_name,
-    INITCAP(c.program_name) AS program_label,
+    COALESCE(pl.program_label, INITCAP(c.program_name)) AS program_label,
     c.activity_date,
     c.dau,
     ROUND(COALESCE(c.hours_logged, 0), 2) AS hours_logged,
@@ -54,6 +61,7 @@ SELECT
 FROM combined c
 CROSS JOIN bounds b
 LEFT JOIN methodology_labels ml ON ml.dau_methodology = c.dau_methodology
+LEFT JOIN program_labels pl ON pl.program_name = c.program_name
 LEFT JOIN {{ ref('summer_2026_metadata') }} m
     ON m.program_name = c.program_name
     AND m.source_type = 'program db'

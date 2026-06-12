@@ -310,6 +310,16 @@ sources:
         description: "Blueprint journal entries with duration_seconds."
         meta: { dagster: { deps: ['blueprint_warehouse_mirror'] } }
 
+  - name: summer_of_making_2025
+    schema: summer_of_making_2025
+    tables:
+      - name: users
+        description: "Summer of Making 2025 users with email."
+        meta: { dagster: { deps: ['summer_of_making_2025_warehouse_mirror'] } }
+      - name: projects
+        description: "Summer of Making 2025 projects with hackatime_project_keys array and repo_link."
+        meta: { dagster: { deps: ['summer_of_making_2025_warehouse_mirror'] } }
+
   - name: hack_club_the_game
     schema: hack_club_the_game
     tables:

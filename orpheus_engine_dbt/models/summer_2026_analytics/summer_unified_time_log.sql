@@ -13,6 +13,9 @@
 --   stardance  — current Summer 2026 program (ongoing, launched ~2026-05-31).
 --   flavortown — prior program (ran ~2025-12-24 to 2026-05-01), kept for the
 --                historical comparison.
+--   summer_of_making — Summer of Making 2025 (ran 2025-06-16 to 2025-10-02),
+--                kept for the year-over-year historical comparison.
+--   blueprint  — hardware/PCB program (ongoing, launched ~2025-09-23).
 --   stack, offtrack, beest, stasis, horizons — public Summer 2026 programs
 --                with coding/work-session activity in their own app mirrors.
 --
@@ -56,6 +59,14 @@ WITH program_windows AS (
         ('stasis',     TIMESTAMP WITH TIME ZONE '2026-03-03 00:00:00+00',
                        TIMESTAMP WITH TIME ZONE '2026-07-01 00:00:00+00'),
         ('horizons',   TIMESTAMP WITH TIME ZONE '2026-02-22 00:00:00+00',
+                       NULL::timestamptz),
+        -- Launched 2025-06-16 (first real devlog wave); devlogs stop after
+        -- 2025-10-02, so the window closes 2025-10-03. The closed window also
+        -- stops the never-unclaimed SoM aliases from splitting current programs.
+        ('summer_of_making', TIMESTAMP WITH TIME ZONE '2025-06-16 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2025-10-03 00:00:00+00'),
+        -- First journal entries 2025-09-23 (soft launch); still running.
+        ('blueprint',  TIMESTAMP WITH TIME ZONE '2025-09-23 00:00:00+00',
                        NULL::timestamptz)
         -- This model is the CREDITED-HOURS log (Hackatime + devlog/journal) for
         -- coding programs. Separate, daily-grained programs live in
@@ -212,6 +223,71 @@ stasis_custom_hourly AS (
     GROUP BY 1, 2, 3, 4, 5
 ),
 
+-- Blueprint (hardware/PCB) logs self-reported time as journal entries, keyed
+-- off created_at (there is no separate work timestamp). Blueprint has no
+-- Hackatime integration (projects.hackatime_project_keys exists but is empty
+-- for all 14.5k projects), so journals are its only time source.
+--
+-- DURATION SEMANTICS: the journal form asks "How many hours did you spend
+-- since the last journal?", so an entry banks ALL time since the user's
+-- previous post onto the posting date (same lumping as SoM devlogs). The app
+-- enforces no server-side validation on duration_seconds (client-side max is
+-- 1000h), so the data holds 999h test entries (incl. admin tests on live
+-- projects), first-entry "whole project so far" dumps (avg 76h), and same-day
+-- repeat-entry inflation (avg 154h/entry; one user: 81 templated 5h entries
+-- in 4 hours). Reviewers set hours_override at review time and never sanitize
+-- journal durations, so there is no cleaner ground truth to redistribute with.
+--
+-- Quality controls (audited 2026-06):
+--   * banned users excluded — 65 banned users held 4.1% of hours.
+--   * each entry is capped at 24h AND each user-day is proportionally rescaled
+--     to a 24h total (entry spam reached 400h/user-day with only the per-entry
+--     cap). The cap also truncates honest multi-week banked entries to 24h on
+--     their posting day — accepted, since real and fabricated >24h claims are
+--     indistinguishable here. DAU is unaffected by either cap.
+--   * all entries are authored by the project owner (review-linked entries are
+--     the owner's milestone submissions, verified by_other=0), and exact-dupe
+--     entries are zero, so no further dedup is needed.
+blueprint_journal_hourly AS (
+    SELECT
+        DATE_TRUNC('hour', je.created_at AT TIME ZONE 'UTC') AS activity_hour,
+        CASE
+            WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+            THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                 || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+            ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        proj.title AS project_name,
+        NULLIF(BTRIM(proj.repo_link), '') AS code_url,
+        SUM(LEAST(je.duration_seconds, 24 * 3600))::numeric / 3600.0 AS entry_hours,
+        COUNT(*) AS entry_count
+    FROM {{ source('blueprint', 'journal_entries') }} je
+    JOIN {{ source('blueprint', 'users') }} u ON u.id = je.user_id
+    LEFT JOIN {{ source('blueprint', 'projects') }} proj ON proj.id = je.project_id
+    WHERE je.duration_seconds > 0
+      AND NOT u.is_banned
+    GROUP BY 1, 2, 3, 4
+),
+
+blueprint_custom_hourly AS (
+    SELECT
+        activity_hour,
+        'blueprint'::text AS program_name,
+        user_email,
+        project_name,
+        code_url,
+        ROUND((entry_hours * LEAST(day_total_hours, 24) / day_total_hours)::numeric, 4) AS raw_hours_logged,
+        'custom'::text AS logging_method,
+        ('blueprint.journal_entries.duration_seconds (capped 24h/entry + 24h/user-day); entries=' || entry_count::text) AS source_detail
+    FROM (
+        SELECT *,
+            SUM(entry_hours) OVER (
+                PARTITION BY user_email, (activity_hour AT TIME ZONE 'UTC')::date
+            ) AS day_total_hours
+        FROM blueprint_journal_hourly
+    ) x
+),
+
 -- ============================================================
 -- 3. HACKATIME CLAIMS: per-program alias -> project mapping
 -- ============================================================
@@ -319,6 +395,44 @@ horizons_ht_claims AS (
       AND proj.now_hackatime_projects <> '{}'
 ),
 
+-- Summer of Making 2025 attaches Hackatime aliases to projects via
+-- projects.hackatime_project_keys (a text[] mirrored as text, like horizons).
+-- NOTE: SoM also has a hackatime_projects table, but it is a full mirror of
+-- every Hackatime project for every user who signed in (no project FK, still
+-- syncing today) — using it would credit ALL of a user's coding to SoM, so the
+-- explicit per-project keys are used instead. Devlog duration_seconds is NOT
+-- counted as custom time: SoM devlogs bank Hackatime time accrued since the
+-- previous devlog, so counting both would double count, and devlog-dated time
+-- lumps multi-day work onto the posting date. Validated 2026-06: 97.8% of
+-- devlog authors match Hackatime by normalized email; the claims path yields
+-- 116k hours / 75k user-days vs 146k hours / 31k user-days devlog-dated (the
+-- gap is pre-program Neighborhood-migrated time and over-banked devlogs).
+--
+-- Quality controls (audited 2026-06): banned users are excluded. SoM's fraud
+-- wave left 461 banned users holding 28.2% of credited hours (32k of 114k);
+-- the app's own devlog record shows the same share, and the fraud team also
+-- deleted those users' projects (banned ∩ all-claims-deleted = 31.9k of the
+-- 38.9k deleted-claim hours). Non-banned users' deleted projects are kept,
+-- consistent with the other programs (deletion alone is not a fraud signal).
+summer_of_making_ht_claims AS (
+    SELECT 'summer_of_making'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias.alias_text, ' "')) AS hackatime_alias,
+        proj.title AS project_name,
+        NULLIF(BTRIM(proj.repo_link), '') AS code_url,
+        proj.created_at AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('summer_of_making_2025', 'projects') }} proj
+    JOIN {{ source('summer_of_making_2025', 'users') }} u ON u.id = proj.user_id
+    CROSS JOIN LATERAL unnest(proj.hackatime_project_keys::text[]) AS alias(alias_text)
+    WHERE proj.hackatime_project_keys IS NOT NULL
+      AND proj.hackatime_project_keys <> '{}'
+      AND NOT u.is_banned
+),
+
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
@@ -328,6 +442,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM beest_ht_claims
     UNION ALL SELECT * FROM stasis_ht_claims
     UNION ALL SELECT * FROM horizons_ht_claims
+    UNION ALL SELECT * FROM summer_of_making_ht_claims
 ),
 
 all_claims AS (
@@ -389,6 +504,7 @@ custom_in_window AS (
         UNION ALL SELECT * FROM stack_custom_hourly
         UNION ALL SELECT * FROM offtrack_custom_hourly
         UNION ALL SELECT * FROM stasis_custom_hourly
+        UNION ALL SELECT * FROM blueprint_custom_hourly
     ) c
     JOIN program_windows w
         ON w.program_name = c.program_name
