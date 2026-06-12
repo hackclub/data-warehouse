@@ -106,7 +106,7 @@ Classify each finding and act by class:
 | Class | Signature | Action |
 |---|---|---|
 | dbt-job-down | marts stale, sources fine | find why the scheduled job stopped; if it's an env/infra issue you can't reach, report precisely; you can one-off rebuild (4b) to unblock the dashboard meanwhile |
-| mirror-broken | live source stale; endpoint unreachable or sync failing | endpoint/credential fixes usually need a human (Coolify access) — gather exact evidence (host, port, error) and ask; Sling config fixes (renamed column, new table) you can do |
+| mirror-broken | live source stale; endpoint unreachable or sync failing | endpoint/credential fixes usually need a human (Coolify access) — gather exact evidence (host, port, error) and ask; Sling config fixes (renamed column, new table) you can do. Improvising access (SSH tunnel, one-off `docker exec psql`, short-lived proxy) is fine for DIAGNOSIS, but never the fix: don't leave a temp proxy standing, don't create systemd units or other persistent server changes. Tear down anything you stood up, then HARD STOP and ask the user for a durable endpoint the sync can rely on (Coolify reaps unmanaged helper containers, so an improvised path will silently die) |
 | model-defect | recompute mismatch, invariant violation, schema drift | fix the dbt CTE; follow the coverage runbook's ground rules and validation protocol |
 | data-abuse | new junk pattern (duration spam, alias gaming) inflating numbers | extend quality controls (caps/exclusions) per the coverage runbook's ground rules — audit first, document numbers in comments |
 | benign | anomaly explained by a real event | document in the report, change nothing |

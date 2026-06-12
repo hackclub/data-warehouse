@@ -135,6 +135,17 @@ Infra discovery (class C), in order:
    `base_name` is often NULL).
 6. **Never guess credentials or hosts. If not found, the program is class-C-blocked: ask.**
 
+**Creative access is fine for discovery — never for deployment.** When a DB exists but
+isn't directly reachable, improvise to get a look inside: nested SSH tunnels, a one-off
+`docker exec psql` on the host, a short-lived proxy container, etc. That's how you
+classify the program and inspect schemas. But the prod pipeline must never depend on an
+improvised path: do not leave a temp proxy standing, do not create systemd units or make
+any other persistent server changes, do not treat a hand-rolled sidecar as the permanent
+route. (Coolify reaps unmanaged helper containers, so an improvised proxy will silently
+die anyway.) Tear down whatever you stood up, then HARD STOP and ask the user to provide
+or bless a durable connection path (a real endpoint + credentials that survive restarts)
+before wiring anything in 4b.
+
 Also verify SUBSTANCE: a found DB must contain activity tables (projects/journals/claims)
 — at least one program's "DB" turned out to be an rsvps-only landing app while the real
 activity lived in Hackatime + Airtable. And check the data actually spans the program's
@@ -187,6 +198,8 @@ descriptions. Then:
   (exclude tokens/ciphertext/otp — follow the existing examples), infra tables disabled,
   env var added to `.env` AND to `_SLING_CONNECTION_URL_ENV_VARS`. Flag explicitly in
   your report that prod Dagster needs the env var set — you can't set it yourself.
+  The connection URL must be the durable, user-provided path — never a tunnel or proxy
+  you improvised during Phase 2 discovery.
 
 ### 4c. Validation protocol (all steps, read-only, BEFORE rebuilding prod)
 
