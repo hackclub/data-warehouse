@@ -12,6 +12,7 @@
 WITH source_info AS (
     SELECT * FROM (VALUES
         ('hackatime', 'shared activity source', NULL::date),
+        ('athena_award', 'program db', DATE '2025-05-21'),
         ('summer_of_making', 'program db', DATE '2025-06-16'),
         ('shipwrecked', 'program db', DATE '2025-05-28'),
         ('blueprint', 'program db', DATE '2025-09-23'),
@@ -149,6 +150,13 @@ source_updates AS (
         UNION ALL
         SELECT MAX(updated_at)::timestamptz FROM {{ source('summer_of_making_2025', 'projects') }}
     ) s
+
+    -- Athena Award ended ~2026-02 and its backend is the Airtable base itself
+    -- (no app db), so base rows no longer change; the dlt load time is the
+    -- mirror-freshness signal instead.
+    UNION ALL
+    SELECT 'athena_award', MAX(inserted_at)::timestamptz
+    FROM {{ source('airtable_athena_award', '_dlt_loads') }}
 
     -- Shipwrecked ended 2025-09-03, but the app is still live and its mirror
     -- still syncs, so these timestamps reflect mirror freshness (not program

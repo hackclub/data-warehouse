@@ -7,6 +7,9 @@ sources:
       - name: heartbeats
         description: "Raw heartbeat data replicated from the Hackatime production database by Sling."
         meta: { dagster: { deps: ['hackatime_warehouse_mirror'] } }
+      - name: users
+        description: "Hackatime users; slack_uid -> hackatime user id identity linkage."
+        meta: { dagster: { deps: ['hackatime_warehouse_mirror'] } }
 
   - name: hackatime_legacy_raw
     schema: hackatime_legacy
@@ -350,6 +353,22 @@ sources:
       - name: project_reviews
         description: "The Game project approval reviews with approved_seconds."
         meta: { dagster: { deps: ['hack_club_the_game_warehouse_mirror'] } }
+
+  - name: airtable_athena_award
+    schema: airtable_athena_award
+    tables:
+      - name: projects
+        description: "Athena Award projects; project_name is the Hackatime alias picked in-app ('_select#' = untouched placeholder), hackatime_duration/approved_duration are banked snapshot totals."
+        meta: { dagster: { deps: ['athena_award_projects_warehouse'] } }
+      - name: projects__code_url
+        description: "dlt child table: per-project code URL(s) for Athena Award projects."
+        meta: { dagster: { deps: ['athena_award_projects_warehouse'] } }
+      - name: registered_users
+        description: "Athena Award registered users with email, slack_id, registered timestamp, and disregard_submissions fraud flag."
+        meta: { dagster: { deps: ['athena_award_registered_users_warehouse'] } }
+      - name: _dlt_loads
+        description: "DLT load metadata for tracking Athena Award sync times."
+        meta: { dagster: { deps: ['athena_award_projects_warehouse'] } }
 
   - name: airtable_sleepover
     schema: airtable_sleepover

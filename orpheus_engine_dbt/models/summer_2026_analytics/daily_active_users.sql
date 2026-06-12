@@ -18,7 +18,7 @@
 -- Sources:
 --   Coding/journal/work-session programs (stardance, flavortown, stack,
 --   offtrack, beest, stasis, horizons, blueprint, summer_of_making,
---   hack_club_the_game, shipwrecked) come from
+--   hack_club_the_game, shipwrecked, athena_award) come from
 --   {{ ref('summer_unified_time_log') }}, inheriting its cross-program
 --   equal-split dedup and run windows.
 --   macondo uses its own per-day rollup (daily_project_activity: hackatime_seconds
@@ -39,6 +39,11 @@
 --                 included for the year-over-year comparison. Hackatime-only
 --                 methodology; see summer_unified_time_log for why the banked
 --                 link hours (rawHours/hoursOverride) are not used.
+--                 athena_award — Athena Award (2025-05-21 to ~2026-02-13),
+--                 included for the year-over-year comparison. Hackatime-only
+--                 methodology via the program's Airtable base (its app's
+--                 backend); see summer_unified_time_log for why the banked
+--                 hackatime_duration/approved_duration are not used.
 --   STALE SOURCE: horizons — app mirror has not refreshed since 2026-05-12, so
 --                 DAU is limited to Hackatime claims already present there.
 --

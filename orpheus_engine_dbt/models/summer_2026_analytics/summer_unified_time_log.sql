@@ -18,6 +18,9 @@
 --   shipwrecked — Shipwrecked 2025 (ran ~2025-05-28 to 2025-09-03, island
 --                event 2025-08-08..11), kept for the year-over-year
 --                historical comparison.
+--   athena_award — Athena Award (girls-focused, ran ~2025-05-21 to 2026-02,
+--                Airtable-backed app), kept for the year-over-year
+--                historical comparison.
 --   blueprint  — hardware/PCB program (ongoing, launched ~2025-09-23).
 --   hack_club_the_game — gamified ship-anything program (ongoing, beta opened
 --                ~2026-01-16, first public approvals 2026-02-17).
@@ -87,7 +90,16 @@ WITH program_windows AS (
         -- runs at ~100-170 hrs/week for months after the program ended — dead
         -- claims that would otherwise split hours with live programs.
         ('shipwrecked', TIMESTAMP WITH TIME ZONE '2025-05-28 00:00:00+00',
-                       TIMESTAMP WITH TIME ZONE '2025-09-04 00:00:00+00')
+                       TIMESTAMP WITH TIME ZONE '2025-09-04 00:00:00+00'),
+        -- First registrations 2025-05-21 (first unified-YSWS approvals
+        -- 2025-05-27). Attributed activity peaks Oct 2025 (~4.0k hrs, the
+        -- submission deadline rush), tapers Nov 2025 – Feb 2026 (387 -> 122
+        -- hrs/mo, stragglers finishing; last approvals 2026-02-13), then drops
+        -- to a ~30-75 hrs/mo dead-claim tail from March on. CLOSED window
+        -- required: aliases never unclaim, so an open window would split hours
+        -- with live programs forever.
+        ('athena_award', TIMESTAMP WITH TIME ZONE '2025-05-21 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2026-03-01 00:00:00+00')
         -- This model is the CREDITED-HOURS log (Hackatime + devlog/journal) for
         -- coding programs. Separate, daily-grained programs live in
         -- daily_active_users: fallout (ship-based) and macondo (its own
@@ -526,6 +538,67 @@ shipwrecked_ht_claims AS (
       AND u.status <> 'FraudSuspect'
 ),
 
+-- Athena Award has no app database — its app reads/writes the Airtable base
+-- directly, so the airtable_athena_award mirror IS the program db.
+-- projects.project_name is the Hackatime alias the user picked in-app from
+-- their own Hackatime projects; '_select#' is the untouched dropdown
+-- placeholder (2,390 rows), and 'other ysws project' marks projects imported
+-- from OTHER YSWS programs whose time belongs to those programs ('other' is
+-- already in bad_aliases). projects.hackatime_duration / approved_duration
+-- are banked snapshot totals, NOT counted as time (SoM double-count
+-- rationale) — Hackatime is the only time source.
+--
+-- Identity: slack_id -> hackatime.users.slack_uid -> hackatime user id ->
+-- first email (reuses beest_htid_email). Measured 2026-06: slack matches
+-- 93.7% of duration-bearing claim pairs vs 90.2% by normalized email, and
+-- email adds zero pairs beyond slack, so slack is the sole join; the residual
+-- unmatched pairs are dominated by the other-YSWS placeholders excluded here.
+-- Airtable holds no per-claim created timestamp (the created_at lookup on
+-- registered_users is misaligned with its projects list — 93 of 323 array
+-- lengths agree), so claim_start_ts is the user's registration timestamp:
+-- activity before the user joined the program is never credited.
+--
+-- Quality controls (audited 2026-06):
+--   * registered_users.disregard_submissions is the program's own fraud/spam
+--     flag — 6 users holding 416 banked hours (3.1% of 13.6k) are excluded.
+--     There is no is_banned column; admins (3 users, 33 banked hrs) are kept,
+--     consistent with hack_club_the_game's beta users.
+--   * rejected projects (232) are kept — rejection is a review outcome, not a
+--     fraud signal (same precedent as keeping non-banned deleted projects).
+--   * in-window attributed Hackatime (~13.8k raw hrs) agrees with the app's
+--     own banked totals (~13.6k hrs) within ~2%.
+athena_award_slack_email AS (
+    SELECT DISTINCT hu.slack_uid, m.hackatime_first_email
+    FROM {{ source('hackatime_raw', 'users') }} hu
+    JOIN beest_htid_email m ON m.hackatime_user_id = hu.id
+    WHERE hu.slack_uid IS NOT NULL AND hu.slack_uid <> ''
+),
+
+athena_award_ht_claims AS (
+    SELECT 'athena_award'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(p.project_name)) AS hackatime_alias,
+        p.project_name AS project_name,
+        NULLIF(BTRIM(url.code_url), '') AS code_url,
+        ru.registered AS claim_start_ts
+    FROM {{ source('airtable_athena_award', 'projects') }} p
+    JOIN {{ source('airtable_athena_award', 'registered_users') }} ru
+        ON ru.record_id = p.registered_user
+    JOIN athena_award_slack_email m ON m.slack_uid = p.slack_id
+    LEFT JOIN (
+        SELECT _dlt_parent_id, MIN(value) AS code_url
+        FROM {{ source('airtable_athena_award', 'projects__code_url') }}
+        GROUP BY 1
+    ) url ON url._dlt_parent_id = p._dlt_id
+    WHERE p.project_name IS NOT NULL
+      AND LOWER(BTRIM(p.project_name)) NOT IN ('', '_select#', 'other ysws project')
+      AND NOT COALESCE(ru.disregard_submissions, false)
+),
+
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
@@ -538,6 +611,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM summer_of_making_ht_claims
     UNION ALL SELECT * FROM hack_club_the_game_ht_claims
     UNION ALL SELECT * FROM shipwrecked_ht_claims
+    UNION ALL SELECT * FROM athena_award_ht_claims
 ),
 
 all_claims AS (
