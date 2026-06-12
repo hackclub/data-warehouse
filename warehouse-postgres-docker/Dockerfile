@@ -30,7 +30,11 @@ COPY --from=builder /usr/local/share/postgresql/extension/* /usr/local/share/pos
 
 # Add pgbackrest client for WAL archiving
 RUN apk add --no-cache pgbackrest && \
-    mkdir -p /tmp/pgbackrest && chown postgres:postgres /tmp/pgbackrest
+    mkdir -p /tmp/pgbackrest /var/spool/pgbackrest && \
+    chown postgres:postgres /tmp/pgbackrest /var/spool/pgbackrest
+
+# Async parallel WAL archiving (overwrites the package's stock config)
+COPY pgbackrest.conf /etc/pgbackrest/pgbackrest.conf
 
 # Configure PostgreSQL for WAL archiving on first init
 COPY conf.sh /docker-entrypoint-initdb.d/conf.sh

@@ -4,7 +4,7 @@ Image name: `ghcr.io/hackclub/warehouse-postgres:17`
 
 ## pgBackRest S3 Backups
 
-The image includes pgBackRest and auto-configures WAL archiving on first init. `PGBACKREST_STANZA` must be set or the container will refuse to start. Set the following environment variables on your container to enable backups to S3-compatible storage:
+The image includes pgBackRest and auto-configures WAL archiving on first init. WAL archiving runs asynchronously with 8 parallel uploaders (`pgbackrest.conf`, baked into the image at `/etc/pgbackrest/pgbackrest.conf`) — synchronous per-segment pushes cannot keep up with ETL-level WAL volume and will silently build an unbounded `pg_wal` backlog that also blocks backups. `PGBACKREST_STANZA` must be set or the container will refuse to start. Set the following environment variables on your container to enable backups to S3-compatible storage:
 
 | Variable | Required | Description |
 |---|---|---|
