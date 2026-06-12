@@ -15,6 +15,7 @@ WITH source_info AS (
         ('summer_of_making', 'program db', DATE '2025-06-16'),
         ('blueprint', 'program db', DATE '2025-09-23'),
         ('flavortown', 'program db', DATE '2025-12-24'),
+        ('hack_club_the_game', 'program db', DATE '2026-01-16'),
         ('fallout', 'program db', DATE '2026-03-01'),
         ('stasis', 'program db', DATE '2026-03-03'),
         ('horizons', 'program db', DATE '2026-02-22'),
@@ -125,6 +126,16 @@ source_updates AS (
         SELECT MAX(updated_at)::timestamptz FROM {{ source('blueprint', 'projects') }}
         UNION ALL
         SELECT MAX(updated_at)::timestamptz FROM {{ source('blueprint', 'journal_entries') }}
+    ) s
+
+    UNION ALL
+    SELECT 'hack_club_the_game', MAX(last_updated_at)
+    FROM (
+        SELECT MAX(updated_at)::timestamptz AS last_updated_at FROM {{ source('hack_club_the_game', 'users') }}
+        UNION ALL
+        SELECT MAX(updated_at)::timestamptz FROM {{ source('hack_club_the_game', 'projects') }}
+        UNION ALL
+        SELECT MAX(updated_at)::timestamptz FROM {{ source('hack_club_the_game', 'hackatime_projects') }}
     ) s
 
     -- SoM 2025 ended 2025-10-02, but the app is still live and its mirror still

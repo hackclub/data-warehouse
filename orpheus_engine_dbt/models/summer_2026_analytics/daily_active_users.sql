@@ -17,7 +17,8 @@
 --
 -- Sources:
 --   Coding/journal/work-session programs (stardance, flavortown, stack,
---   offtrack, beest, stasis, horizons, blueprint, summer_of_making) come from
+--   offtrack, beest, stasis, horizons, blueprint, summer_of_making,
+--   hack_club_the_game) come from
 --   {{ ref('summer_unified_time_log') }}, inheriting its cross-program
 --   equal-split dedup and run windows.
 --   macondo uses its own per-day rollup (daily_project_activity: hackatime_seconds
@@ -28,7 +29,8 @@
 -- PROGRAM STATUS:
 --   active here : stardance, flavortown (historical baseline), fallout, macondo,
 --                 stack, offtrack (0 until source rows arrive), beest, stasis,
---                 horizons, blueprint
+--                 horizons, blueprint, hack_club_the_game (Hackatime-only;
+--                 beta opened 2026-01-16, first public approvals 2026-02-17)
 --   historical  : summer_of_making — SoM 2025 (2025-06-16 to 2025-10-02),
 --                 included for the year-over-year comparison. Hackatime-only
 --                 methodology; see summer_unified_time_log for why devlog

@@ -10,6 +10,7 @@ SELECT DISTINCT
     program_name,
     CASE program_name
         WHEN 'summer_of_making' THEN 'Summer of Making'
+        WHEN 'hack_club_the_game' THEN 'Hack Club: The Game'
         ELSE INITCAP(program_name)
     END AS program,
     dau_methodology,

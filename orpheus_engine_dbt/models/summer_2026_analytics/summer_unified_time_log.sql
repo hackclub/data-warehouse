@@ -16,6 +16,8 @@
 --   summer_of_making — Summer of Making 2025 (ran 2025-06-16 to 2025-10-02),
 --                kept for the year-over-year historical comparison.
 --   blueprint  — hardware/PCB program (ongoing, launched ~2025-09-23).
+--   hack_club_the_game — gamified ship-anything program (ongoing, beta opened
+--                ~2026-01-16, first public approvals 2026-02-17).
 --   stack, offtrack, beest, stasis, horizons — public Summer 2026 programs
 --                with coding/work-session activity in their own app mirrors.
 --
@@ -67,6 +69,12 @@ WITH program_windows AS (
                        TIMESTAMP WITH TIME ZONE '2025-10-03 00:00:00+00'),
         -- First journal entries 2025-09-23 (soft launch); still running.
         ('blueprint',  TIMESTAMP WITH TIME ZONE '2025-09-23 00:00:00+00',
+                       NULL::timestamptz),
+        -- First Hackatime claims 2026-01-16; the pre-public-launch claims
+        -- (Jan 16 – Feb 8) are 65 real beta users + a handful of admins, so the
+        -- window opens at the beta, not the first public approvals (2026-02-17).
+        -- Still running.
+        ('hack_club_the_game', TIMESTAMP WITH TIME ZONE '2026-01-16 00:00:00+00',
                        NULL::timestamptz)
         -- This model is the CREDITED-HOURS log (Hackatime + devlog/journal) for
         -- coding programs. Separate, daily-grained programs live in
@@ -329,6 +337,7 @@ flavortown_ht_claims AS (
 -- projects.hackatime_project_name as a JSON array string (e.g. '["my-proj"]').
 -- Map the hackatime user id to the Hackatime email so beest joins the shared
 -- (user_email, alias) matching path, and unnest the alias array.
+-- (hack_club_the_game_ht_claims reuses this map for the same reason.)
 beest_htid_email AS (
     SELECT DISTINCT hackatime_user_id, hackatime_first_email
     FROM {{ ref('hourly_project_activity') }}
@@ -433,6 +442,46 @@ summer_of_making_ht_claims AS (
       AND NOT u.is_banned
 ),
 
+-- Hack Club: The Game links Hackatime by users.hackatime_id (numeric id stored
+-- as text, NOT email — 99.6% of claiming users match Hackatime by id vs 95.3%
+-- by normalized email), so it reuses the beest htid->email map. Its
+-- hackatime_projects table is MIXED: 93.6% of rows are a per-user Hackatime
+-- mirror with NULL project_id (the SoM-mirror trap — crediting those would
+-- attribute ALL of a user's coding to the program); only rows with a
+-- project_id are explicit user claims, and those are what's used here.
+-- projects.total_seconds / project_reviews.approved_seconds are review-time
+-- banked Hackatime totals, not daily activity, so they are NOT counted as a
+-- custom time source (SoM double-count rationale); Hackatime is the only
+-- time source.
+--
+-- Quality controls (audited 2026-06):
+--   * NOT u.is_banned follows the SoM/Blueprint precedent, but no user is
+--     banned yet (is_banned=false for all 3,033 users; live program, mirror
+--     refreshes daily) — currently 0% of hours.
+--   * zero claims point at deleted projects, all claim rows belong to the
+--     project owner, and dupe (user, project, alias) claims (14) collapse in
+--     the all_claims GROUP BY.
+hack_club_the_game_ht_claims AS (
+    SELECT 'hack_club_the_game'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(hp.name)) AS hackatime_alias,
+        proj.title AS project_name,
+        NULLIF(BTRIM(proj.repo_link), '') AS code_url,
+        hp.created_at AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('hack_club_the_game', 'hackatime_projects') }} hp
+    JOIN {{ source('hack_club_the_game', 'projects') }} proj ON proj.id = hp.project_id
+    JOIN {{ source('hack_club_the_game', 'users') }} u ON u.id = hp.user_id
+    JOIN beest_htid_email m ON m.hackatime_user_id::text = u.hackatime_id
+    WHERE hp.project_id IS NOT NULL
+      AND hp.name IS NOT NULL AND hp.name <> ''
+      AND u.hackatime_id IS NOT NULL AND u.hackatime_id <> ''
+      AND NOT u.is_banned
+),
+
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
@@ -443,6 +492,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM stasis_ht_claims
     UNION ALL SELECT * FROM horizons_ht_claims
     UNION ALL SELECT * FROM summer_of_making_ht_claims
+    UNION ALL SELECT * FROM hack_club_the_game_ht_claims
 ),
 
 all_claims AS (
