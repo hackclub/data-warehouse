@@ -17,6 +17,7 @@ WITH source_info AS (
         ('shipwrecked', 'program db', DATE '2025-05-28'),
         ('siege', 'program db', DATE '2025-08-31'),
         ('blueprint', 'program db', DATE '2025-09-23'),
+        ('milkyway', 'program db', DATE '2025-10-07'),
         ('flavortown', 'program db', DATE '2025-12-24'),
         ('hack_club_the_game', 'program db', DATE '2026-01-16'),
         ('fallout', 'program db', DATE '2026-03-01'),
@@ -158,6 +159,13 @@ source_updates AS (
     UNION ALL
     SELECT 'athena_award', MAX(inserted_at)::timestamptz
     FROM {{ source('airtable_athena_award', '_dlt_loads') }}
+
+    -- Milkyway ended ~2026-05-01 and its backend is the Airtable base itself
+    -- (no app db), so like athena_award the dlt load time is the
+    -- mirror-freshness signal.
+    UNION ALL
+    SELECT 'milkyway', MAX(inserted_at)::timestamptz
+    FROM {{ source('airtable_milkyway', '_dlt_loads') }}
 
     -- Shipwrecked ended 2025-09-03, but the app is still live and its mirror
     -- still syncs, so these timestamps reflect mirror freshness (not program

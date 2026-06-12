@@ -310,6 +310,23 @@ airtable_config = AirtableServiceConfig(
                 ),
             }
         ),
+        "milkyway": AirtableBaseConfig(
+            base_id="appbnxgUpEb0ooWzN",
+            tables={
+                "users": AirtableTableConfig(
+                    table_id="tblzQG7QRUMlv1eGD"
+                ),
+                "projects": AirtableTableConfig(
+                    table_id="tblDdQdSoZgvlzJYX"
+                ),
+                "devlogs": AirtableTableConfig(
+                    table_id="tblxNC409NQQvrGMh"
+                ),
+                "artlog": AirtableTableConfig(
+                    table_id="tblceTlOlYFTRO61c"
+                ),
+            }
+        ),
         "sleepover": AirtableBaseConfig(
             base_id="appooabEncFeFqZnu",
             tables={

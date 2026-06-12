@@ -1068,7 +1068,7 @@ class AirtableIDs:
             ysws_project_mentions_search_count_copy = "fldVWfSMP96VleXl8"  # Name: YSWS Project Mentions - Search Count copy
             ysws_project_mentions_weighted_points = "fldN3VPUTdSfyVKto"  # Name: YSWS Project Mentions - Weighted Points
             ysws_project_mentions_top_link = "fldIHnuBrUEYNFVx5"  # Name: YSWS Project Mentions - Top Link
-            state = "fldgsPC2LkkyEKuN9"  # Name: State
+            state = "fldgsPC2LkkyEKuN9"  # Name: State 
             county_centralizing = "fldrfz7xswIhgu5Zz"  # Name: County - Centralizing
             email_trimmed_lowercased = "fldCUQu9gZIGzg10T"  # Name: Email - Trimmed & Lowercased
             ysws_name_lookup = "fldhFBOAZifRQi81p"  # Name: YSWS Name - Lookup
@@ -2343,6 +2343,214 @@ class AirtableIDs:
             upsert_key = "fldlA6BrOCzXQBZf8"  # Name: upsert_key
             up = "fldY1JzQbbqJ3mkNu"  # Name: up
             double_dipped = "fldqnFK3g30wadT3q"  # Name: double_dipped
+
+
+    class milkyway:
+        """IDs for Base 'milkyway' (ID: appbnxgUpEb0ooWzN)"""
+        BASE_ID = "appbnxgUpEb0ooWzN"
+
+        class users:
+            """IDs for Table 'users' (ID: tblzQG7QRUMlv1eGD)"""
+            TABLE_ID = "tblzQG7QRUMlv1eGD"
+
+            email = "fldtZwdELYGS7n4iL"  # Name: email
+            username = "fldJb7qXWuk1h9s2f"  # Name: username
+            extension = "fld2vXZvdZypOeuIV"  # Name: extension
+            ip = "fldJnkQpDYdpmxuWw"  # Name: ip
+            coins = "flddN7H5ExB4B0iPb"  # Name: coins
+            stellarships_total = "fldTJsH0cxiEV9u3B"  # Name: stellarships_total
+            paintchips = "fldUwjz3sDCRZcb9H"  # Name: paintchips
+            projects = "fld8RfBVngO5bvfmV"  # Name: projects
+            created = "fldz2e9bE9rCDY1ip"  # Name: Created
+            last_hackatime_update = "fldj5fZdI9vU24LDL"  # Name: lastHackatimeUpdate
+            total_hours = "fld3QnqabAncqCZAQ"  # Name: totalHours
+            last_login = "fldye8dMZLsoagwlc"  # Name: lastLogin
+            permissions = "fldQ4MqIRAHJWKSRr"  # Name: permissions
+            address = "fldq1TPINQT20RqxM"  # Name: Address
+            hackclub_slack_id = "fldEfyqv0K7VCQaOb"  # Name: hackclub_slack_id
+            hackclub_address = "fldk6ibuoW97ZLeWF"  # Name: hackclub_address
+            stellarships = "fldGw3gmLfQ9oSAx4"  # Name: stellarships
+            debt = "fldvt5vfUVlayB3D3"  # Name: debt
+            debt_note = "fldysrNGVO97qsiKa"  # Name: debtNote
+            is_banned = "fldHBU8YgRqingeci"  # Name: is_banned
+            referrer = "fldhTGmwQ4Np3NEeH"  # Name: referrer
+            nickname = "fld7fVnd9E1wv0h3g"  # Name: nickname
+            has_onboarded = "fldQq2Nqsmgc7id0T"  # Name: hasOnboarded
+            following = "fldLjQeHVcpxhlc2m"  # Name: following
+            from_field_friends = "fldgLzHJDoTI2Vaek"  # Name: From field: Friends
+            is_shipper = "fldccIivFF8hnqD9C"  # Name: isShipper
+            otp = "fld10mIPNJy3Uft2B"  # Name: OTP
+            furniture = "fld5XeP2uloev7ahV"  # Name: Furniture
+            seen_announcements = "fldkUzzd27se8HynM"  # Name: seen_announcements
+            purchases = "fldsFUhuGkIALM7ns"  # Name: Purchases
+            position_from_furniture = "fldBhsWdBh3WriWhY"  # Name: position (from Furniture)
+            type_from_furniture = "fld1PitocfSRA7Tso"  # Name: type (from Furniture)
+            promptinfo_from_projects = "fldW6QFUizXrszADy"  # Name: promptinfo (from projects)
+            description_from_projects = "fldVtgDmqr1kq7VLJ"  # Name: description (from projects)
+            projectname_from_projects = "fldeGvgiPUPFAXy1q"  # Name: projectname (from projects)
+            github_username = "fldLy8t7KAaJhgcZY"  # Name: githubUsername
+            idv = "fldrjHcjrfA1qylmh"  # Name: idv
+            how_did_you_hear = "fldzIpXYygVijKtvL"  # Name: howDidYouHear
+            doing_well = "fldAc55omUJ6TRmZw"  # Name: doingWell
+            improve = "fldM9JxHMEOS2lCu5"  # Name: improve
+            from_field_referrer = "fldRwqOqiJT2XNh7i"  # Name: From field: referrer
+            currency_log = "fldtKXpG7OM2OKqPq"  # Name: CurrencyLog
+            previous_coins = "fldOViqEEnr3fhWBC"  # Name: previousCoins
+            real_referrals = "fldtTr2TR81PoxkP7"  # Name: realReferrals
+            referrals = "fldSs9FE2dFeHKsUW"  # Name: referrals
+            shop_voting = "flduxfY05hCUESa51"  # Name: ShopVoting
+            shop_voting_2 = "fld121vCpSUEiGnPS"  # Name: ShopVoting 2
+            loops_milkyway_sign_up_at = "fldObAsWZ4PaZ8o1L"  # Name: Loops - milkywaySignUpAt
+            loops_milkyway_total_hours = "fldn7nVpBkYYnc0LM"  # Name: Loops - milkywayTotalHours
+            loops_github_username = "fldcWD751un1MJvOW"  # Name: Loops - githubUsername
+            loops_list_milkyway = "fld06WTwQO9txvA5z"  # Name: Loops List - Milkyway
+            reports = "fldsOhocN2dpryK6P"  # Name: reports
+            notifications = "fld9XGQ0fRFAglDSV"  # Name: notifications
+            tamagotchi = "fldOPkPbnFUWDNcN7"  # Name: Tamagotchi
+            devlogs = "fldwFtqaBoDLBKbtv"  # Name: Devlogs
+            last_devlog_date = "fld7xq4P8U9v5QAoU"  # Name: lastDevlogDate
+            devlog_streak = "fldVKr2pNghkPDzv9"  # Name: devlogStreak
+            completed_quests = "fldlmsB3HCGc0ABwP"  # Name: completedQuests
+            max_devlog_streak = "fldLU4BSl5zsW3ZDF"  # Name: maxDevlogStreak
+            approved_devlog_streak = "fldwwoU1JCOrFAeag"  # Name: approvedDevlogStreak
+            approved_max_devlog_streak = "fldHiiJwAH4EfHpou"  # Name: approvedMaxDevlogStreak
+            last_approved_devlog_date = "fldzgWBjvcOXfKy0p"  # Name: lastApprovedDevlogDate
+            approved_streak_days = "fldGt9542tPkQIzEb"  # Name: approvedStreakDays
+            blackhole_submissions = "fldqUtys3vSoyQXE5"  # Name: BlackholeSubmissions
+            blackhole_submissions_2 = "fldZM6zlubviEVK4z"  # Name: BlackholeSubmissions 2
+            utm_source = "fldt1iYzicPiKz2Tj"  # Name: utm_source
+            total_hours_shipped = "fldsOcOr8ZF6PmoEz"  # Name: totalHoursShipped
+            referral_rewards = "fldbXi69ghskITZgg"  # Name: Referral Rewards
+            rewards_claimed = "fldL18TPWN82UZYGb"  # Name: rewardsClaimed
+            link_to_referral_rewards = "fldAeARlhNkO3XVDL"  # Name: link to referral rewards
+            wall_variant = "fldgoPMRG9XCX8D4N"  # Name: wallVariant
+            hackclub_id = "fldjudGPuj9zFJCBj"  # Name: hackclub_id
+            hackclub_name = "fldDewrN8hCYD5Q04"  # Name: hackclub_name
+            hackclub_email = "flddiXeywT8LVnYGp"  # Name: hackclub_email
+            hackclub_verification_status = "fldpdv2bXfr7J3vCc"  # Name: hackclub_verification_status
+            stellarships_spent = "fldWHOBM1beIa7fMl"  # Name: stellarships_spent
+            hackclub_birthday = "fldeIN6ncI3TcKkbJ"  # Name: hackclub_birthday
+            artlog = "fldnhONGbUZ7z99Mj"  # Name: Artlog
+            art_hours_last24h = "fldh8dbFlIy50LyK6"  # Name: artHoursLast24h
+            history_info = "fld1tsESapokxtzli"  # Name: historyInfo
+            bets = "fldup4s7RhcxIwM0y"  # Name: Bets
+            projects_2 = "fld3RrJ2X7FXjvzPm"  # Name: Projects 2
+            overglade = "fld73Td9z8uzDqsgI"  # Name: overglade?
+            has_ticket = "fldaa0pzHHVxBPtjK"  # Name: has ticket?
+            tamagotchi_orders = "fldCbLy6XN4D9LSkU"  # Name: Tamagotchi Orders
+            sent = "fld3DFKAfpyNaa41B"  # Name: sent?
+            ysws_project_submission = "fldhl3uGfSBWceI7A"  # Name: YSWS Project Submission
+            ysws_project_submission_2 = "fldalCScMhksfDrad"  # Name: YSWS Project Submission 2
+            ysws_project_submission_3 = "fld6Eqh5XOHd2MezE"  # Name: YSWS Project Submission 3
+            is_suspicious = "fld9OUCt8rXlrpeMe"  # Name: is_suspicious
+
+        class projects:
+            """IDs for Table 'projects' (ID: tblDdQdSoZgvlzJYX)"""
+            TABLE_ID = "tblDdQdSoZgvlzJYX"
+
+            projectid = "fldgXds3oKHsEZhcy"  # Name: projectid
+            user = "fldCuDowq0CgHoR6d"  # Name: user
+            is_banned = "fldRptSQOB3Oen6H2"  # Name: is_banned
+            egg = "fldhnJdjQsfAow4j9"  # Name: egg
+            username_from_user = "fldHds7b30mMCt0AS"  # Name: username (from user)
+            projectname = "flddc9gT7iM9hfin6"  # Name: projectname
+            description = "fldSOyCu90JeV48fw"  # Name: description
+            promptinfo = "fldFqZrwo6BMQjrPE"  # Name: promptinfo
+            hackatime_projects = "fldgV7fz8XXSDNS6S"  # Name: hackatimeProjects
+            hackatime_hours = "fldOzlow9qcyc2Ec0"  # Name: hackatimeHours
+            hours_shipped = "fldSz48bEeL0R54Jq"  # Name: hoursShipped
+            artlogs = "fld1hLh6di3Kq1MZb"  # Name: artlogs
+            art_hours = "fldTOm3Sp7Z3TEkND"  # Name: artHours
+            approved_art_hours = "fldKjFCPiqCedXbzu"  # Name: approvedArtHours
+            art_hours_shipped = "fldTNZHLOEpSnyF6K"  # Name: artHoursShipped
+            total_hours = "fldlVKao7bPZUr4Db"  # Name: totalHours
+            addn = "fldzKYwzrT17XrmvW"  # Name: addn
+            status = "fld2yAdBchwHwgnWb"  # Name: status
+            shipped_date = "fldqyCzFQTThFmjE4"  # Name: shippedDate
+            created = "fldK25MNjeRUAmT8s"  # Name: Created
+            counting_from = "fld3KvmzNUCqplSnr"  # Name: countingFrom
+            position = "fldnH5TKKKJMBBvwT"  # Name: position
+            ship_url = "fldTx2nRqpfaXIJPu"  # Name: shipURL
+            github_url = "fldu4G5PNzPqLNeI2"  # Name: githubURL
+            image = "fldfsYYDvW32EhpkS"  # Name: image
+            not_made_by = "fldtayiE8nTU28nzt"  # Name: notMadeBy
+            how_to_play = "fldTm7AyaDyniFt8H"  # Name: howToPlay
+            addn_comments = "fldzHux3dNpfKGFkR"  # Name: addnComments
+            ysws_project_submission = "fld5KYKd91AxPH2OS"  # Name: YSWS Project Submission
+            waiting_review = "fldcqkdyJIBlfHIbd"  # Name: waitingReview
+            streak_devlogs = "fld7D2OiLZHhYQ9rn"  # Name: streakDevlogs
+            latest_submitted_timestamp = "fldrZsrcbzv3HU1Sf"  # Name: latestSubmittedTimestamp
+            has_entered_db = "fldlcO6h92h7XErJ7"  # Name: hasEnteredDB
+            total_coins_earned = "fldoAf1hj9hhkFChX"  # Name: totalCoinsEarned
+            paint_chips_claimed = "fldQThzcU2P7yJIXP"  # Name: paintChipsClaimed
+            hackclub_address_from_user = "fldmQRh6HGwIvM3WQ"  # Name: hackclub_address (from user)
+            art_hours_last24h = "fldQmd7s7IoU0YUYC"  # Name: artHoursLast24h
+            crazygood = "fldf9cW7hbyM4JWYV"  # Name: Crazygood
+            good = "fld8RLAOsRaWVwkzb"  # Name: good
+            unsure = "fldSsw7tNr2efcz7B"  # Name: unsure
+            nothours = "fldh80AvPKmLXh4cP"  # Name: nothours
+            reviewedby = "fld8Jc2cpU8la1FTm"  # Name: Reviewedby
+            username_from_reviewedby = "fldtPfq8S90VXOAdP"  # Name: username (from Reviewedby)
+            coins_from_user = "fldmQpBFpB3lFMcXe"  # Name: coins (from user)
+            github_username_from_user = "fldP0uqhvjGDTNwPh"  # Name: githubUsername (from user)
+            how_did_you_hear_from_user = "fldBie86vP6EvdDMq"  # Name: howDidYouHear (from user)
+            doing_well_from_user = "fld8H6ObFh1x2Dijl"  # Name: doingWell (from user)
+            improve_from_user = "fldoyNAf1Y74BWKst"  # Name: improve (from user)
+            email_from_user = "fldqY6jRyNH3mxJMF"  # Name: email (from user)
+            idv_from_user = "fldhzJzyn4YR9WRfi"  # Name: idv (from user)
+            devlogs = "fldG9OMe3BNYVHPwq"  # Name: Devlogs
+            blackhole_submissions = "flduYxRDZPC9GTgIH"  # Name: BlackholeSubmissions
+            last_hackatime_update_from_user = "flduEw09IN8iCdDSI"  # Name: lastHackatimeUpdate (from user)
+            stellar_ship_result = "fldQ18dvztc2r31GB"  # Name: stellarShipResult
+            pending_art_hours = "fldwr6ympgf5SCvkY"  # Name: pendingArtHours
+            bets = "fldrUxHkRYA8tU8ru"  # Name: Bets
+
+        class devlogs:
+            """IDs for Table 'devlogs' (ID: tblxNC409NQQvrGMh)"""
+            TABLE_ID = "tblxNC409NQQvrGMh"
+
+            id = "fldi1yQDhmrd3EFTg"  # Name: id
+            title = "fldyD9alVjAfDmI2T"  # Name: title
+            content = "fld1oXqLuxXsoLDj2"  # Name: content
+            hours = "fldsf1y1ZfoFSxizp"  # Name: hours
+            code_hours = "fldVMHiaBD38sf7WV"  # Name: codeHours
+            art_hours = "fldaJer1tHghQFNDR"  # Name: artHours
+            attachments = "fldnWHIjGYvzDfMie"  # Name: attachments
+            user = "fldB3ndzIDeiSt2IP"  # Name: user
+            projects = "fldSF3AkhkTKbWQ8h"  # Name: projects
+            status = "fldAr2Nwy003KEAqd"  # Name: status
+            project_ids = "fld99W6XiQ81ON6Ya"  # Name: projectIds
+            pending_code_hours = "fldM6H1y3y2MNd6xJ"  # Name: pendingCodeHours
+            pending_art_hours = "fld5onKNdIQhZDziN"  # Name: pendingArtHours
+            pending_streak = "fld4DmOSqduesjRNf"  # Name: pendingStreak
+            streak_value = "fldHReDznT5UciFwg"  # Name: streakValue
+            streak_continued = "fldRikDM7GXHZ1FWr"  # Name: streakContinued
+            created_time = "fld8soWjSPklnulfU"  # Name: createdTime
+            created = "fldmP3bWc2n4qH3TL"  # Name: Created
+            likes = "fldFHHfcafcr9uJob"  # Name: likes
+            comments = "fldFlpZi5Qh2h9p0V"  # Name: comments
+            username = "fld5gJPt8Gdr8WIN2"  # Name: username
+
+        class artlog:
+            """IDs for Table 'artlog' (ID: tblceTlOlYFTRO61c)"""
+            TABLE_ID = "tblceTlOlYFTRO61c"
+
+            id = "fldpgTrAiVVFvaDlW"  # Name: id
+            hours = "fldGqcAON6y1026rw"  # Name: hours
+            description = "fldGg4mCniOafMr62"  # Name: description
+            proof = "fldvqK1SUC1oUD8QA"  # Name: proof
+            projects = "fldmAzukDq7wNTHBI"  # Name: Projects
+            username_from_user_from_projects = "fldMZzV5DbA8Mlvqa"  # Name: username (from user) (from Projects)
+            created = "fldkDWVwu3kpoYttI"  # Name: Created
+            image = "fldjsY7X6OroYSZSt"  # Name: image
+            approved_hours = "fld2iKUFrH96fEOZA"  # Name: approvedHours
+            approved_by = "fldUs5cbjuXU6Z2zE"  # Name: approvedBy
+            review_note = "fldXBi0MFTjd0gShV"  # Name: reviewNote
+            reviewed_at = "fldzf90MiwsOFjT4a"  # Name: reviewedAt
+            rereview_request = "flde8rdGtyoTIUnCe"  # Name: rereviewRequest
+            pending_hours = "flddB4TqkqqKCtlhy"  # Name: pendingHours
+            hours_last24h = "fldL19d1NITmkpMKP"  # Name: hoursLast24h
+            counting_hours = "fld8TyzCTVLyHZvNt"  # Name: countingHours
 
 
     class sleepover:

@@ -110,7 +110,17 @@ WITH program_windows AS (
         -- required: aliases never unclaim, so an open window would split hours
         -- with live programs forever.
         ('athena_award', TIMESTAMP WITH TIME ZONE '2025-05-21 00:00:00+00',
-                       TIMESTAMP WITH TIME ZONE '2026-03-01 00:00:00+00')
+                       TIMESTAMP WITH TIME ZONE '2026-03-01 00:00:00+00'),
+        -- Milkyway (game-making, milkyway.hackclub.com): first signups and
+        -- projects 2025-10-07 (beta trickle; public ramp Oct 9-11, first
+        -- unified-YSWS approval 2025-10-28). New projects collapse after
+        -- 2026-04-04 (stragglers to May 1), artlogs end 2026-04-08 (10 stray
+        -- entries through June), and the last unified-YSWS approval is
+        -- 2026-04-30 — so the window closes 2026-05-02. CLOSED window
+        -- required: the site is still up (signups continue into June) and
+        -- aliases never unclaim.
+        ('milkyway',   TIMESTAMP WITH TIME ZONE '2025-10-07 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2026-05-02 00:00:00+00')
         -- This model is the CREDITED-HOURS log (Hackatime + devlog/journal) for
         -- coding programs. Separate, daily-grained programs live in
         -- daily_active_users: fallout (ship-based) and macondo (its own
@@ -328,6 +338,65 @@ blueprint_custom_hourly AS (
                 PARTITION BY user_email, (activity_hour AT TIME ZONE 'UTC')::date
             ) AS day_total_hours
         FROM blueprint_journal_hourly
+    ) x
+),
+
+-- Milkyway (game-making) tracks art time as artlogs: self-reported hours
+-- attached to a project, posted with proof images and reviewed afterwards
+-- (approved_hours). Art time never reaches Hackatime, so artlogs are
+-- Milkyway's custom-time source alongside the Hackatime claims below; raw
+-- hours are credited (the reviewer pipeline approved 787 of 1,197 raw hours
+-- but reviews lag and rejected hours are not adjudicated fraud, matching the
+-- stasis/stack precedent of crediting claimed time). Devlogs are NOT counted:
+-- devlogs.code_hours banks Hackatime time and devlogs.art_hours banks artlog
+-- time accrued since the previous post (SoM double-count rationale), and
+-- devlogs only existed 2025-11-17..2026-01-06 anyway.
+--
+-- Quality controls (audited 2026-06):
+--   * banned users excluded — 15 banned users hold 14.1 of 1,120.6 linked art
+--     hours (1.3%).
+--   * 53 of 1,057 artlogs (5.0%) have no project link and are dropped — the
+--     project is the only path to the author. Zero exact-dupe rows, zero
+--     non-positive hours.
+--   * the app validates entries server-side (max observed 21h, p99 7.9h,
+--     none >24h), so the 24h/entry + 24h/user-day caps are no-op guards.
+milkyway_artlog_hourly AS (
+    SELECT
+        DATE_TRUNC('hour', al.created AT TIME ZONE 'UTC') AS activity_hour,
+        CASE
+            WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+            THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                 || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+            ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        proj.projectname AS project_name,
+        NULLIF(BTRIM(proj.github_url), '') AS code_url,
+        SUM(LEAST(al.hours, 24))::numeric AS entry_hours,
+        COUNT(*) AS entry_count
+    FROM {{ source('airtable_milkyway', 'artlog') }} al
+    JOIN {{ source('airtable_milkyway', 'projects') }} proj ON proj.id = al.projects
+    JOIN {{ source('airtable_milkyway', 'users') }} u ON u.id = proj."user"
+    WHERE al.hours > 0
+      AND NOT COALESCE(u.is_banned, false)
+    GROUP BY 1, 2, 3, 4
+),
+
+milkyway_custom_hourly AS (
+    SELECT
+        activity_hour,
+        'milkyway'::text AS program_name,
+        user_email,
+        project_name,
+        code_url,
+        ROUND((entry_hours * LEAST(day_total_hours, 24) / day_total_hours)::numeric, 4) AS raw_hours_logged,
+        'custom'::text AS logging_method,
+        ('milkyway.artlog.hours (capped 24h/entry + 24h/user-day); entries=' || entry_count::text) AS source_detail
+    FROM (
+        SELECT *,
+            SUM(entry_hours) OVER (
+                PARTITION BY user_email, (activity_hour AT TIME ZONE 'UTC')::date
+            ) AS day_total_hours
+        FROM milkyway_artlog_hourly
     ) x
 ),
 
@@ -649,6 +718,44 @@ athena_award_ht_claims AS (
       AND NOT COALESCE(ru.disregard_submissions, false)
 ),
 
+-- Milkyway has no app database — like athena_award, the app reads/writes its
+-- Airtable base directly, so the airtable_milkyway dlt mirror is the program
+-- db. projects.hackatime_projects is the alias linkage the user set in-app: a
+-- comma-separated list of the user's own Hackatime project names (973 of
+-- 2,939 projects have one; 220 list several). claim_start_ts is
+-- projects.counting_from, the app's own "count Hackatime from here" marker
+-- (set on every project, = created for all but 35). projects.hackatime_hours
+-- / total_hours are banked snapshot totals, NOT counted as time (SoM
+-- double-count rationale); they also exceed the alias's observable Hackatime
+-- (17.1k banked vs 12.6k all-time attributable) — cross-check only.
+--
+-- Quality controls (audited 2026-06):
+--   * users.is_banned excluded — 8 of 433 matched claim users held 180 of
+--     11.0k raw in-window attributed hours (1.6%).
+--   * identity is normalized email (projects' user link -> users.email):
+--     94.8% of claiming users (490 of 517) match Hackatime, in line with
+--     shipwrecked (95.4%).
+--   * counting_from trims 878 raw hours of pre-claim coding that an
+--     unrestricted window join would have credited.
+milkyway_ht_claims AS (
+    SELECT 'milkyway'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias.alias_text)) AS hackatime_alias,
+        proj.projectname AS project_name,
+        NULLIF(BTRIM(proj.github_url), '') AS code_url,
+        COALESCE(proj.counting_from, proj.created) AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('airtable_milkyway', 'projects') }} proj
+    JOIN {{ source('airtable_milkyway', 'users') }} u ON u.id = proj."user"
+    CROSS JOIN LATERAL unnest(string_to_array(proj.hackatime_projects, ',')) AS alias(alias_text)
+    WHERE proj.hackatime_projects IS NOT NULL
+      AND BTRIM(alias.alias_text) <> ''
+      AND NOT COALESCE(u.is_banned, false)
+),
+
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
@@ -663,6 +770,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM shipwrecked_ht_claims
     UNION ALL SELECT * FROM siege_ht_claims
     UNION ALL SELECT * FROM athena_award_ht_claims
+    UNION ALL SELECT * FROM milkyway_ht_claims
 ),
 
 all_claims AS (
@@ -725,6 +833,7 @@ custom_in_window AS (
         UNION ALL SELECT * FROM offtrack_custom_hourly
         UNION ALL SELECT * FROM stasis_custom_hourly
         UNION ALL SELECT * FROM blueprint_custom_hourly
+        UNION ALL SELECT * FROM milkyway_custom_hourly
     ) c
     JOIN program_windows w
         ON w.program_name = c.program_name

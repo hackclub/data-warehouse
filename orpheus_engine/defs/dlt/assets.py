@@ -595,6 +595,12 @@ flavortown_assets = create_airtable_sync_assets(
     description="Loads Flavortown data into the warehouse.airtable_flavortown schema."
 )
 
+milkyway_assets = create_airtable_sync_assets(
+    base_name="milkyway",
+    tables=["users", "projects", "devlogs", "artlog"],
+    description="Loads Milkyway data into the warehouse.airtable_milkyway schema."
+)
+
 sleepover_assets = create_airtable_sync_assets(
     base_name="sleepover",
     tables=[
