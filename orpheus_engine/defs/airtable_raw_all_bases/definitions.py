@@ -289,6 +289,31 @@ class WriteQueue:
             conn.close()
 
 
+def _stream_table_records(table, base_id: str, table_id: str, queue: WriteQueue) -> int:
+    """Stream a table's records page-by-page into the write queue.
+
+    table.all() materializes every record in memory at once; with several
+    large bases in flight that peaked near 30GB of RSS and invited the host
+    OOM killer. Pages go straight to the upsert queue instead. A mid-table
+    retry restarts the table and may re-push rows, but the (base_id,
+    table_id, record_id) upsert makes that idempotent.
+    """
+    count = 0
+    rows: List[Tuple] = []
+    for page in table.iterate():
+        for record in page:
+            fields = _clean_record_fields(record.get("fields", {}))
+            rows.append((base_id, table_id, record["id"], json.dumps(fields).replace("\\u0000", "")))
+        if len(rows) >= 1_000:
+            queue.push_records(rows)
+            count += len(rows)
+            rows = []
+    if rows:
+        queue.push_records(rows)
+        count += len(rows)
+    return count
+
+
 def process_base(base, queue: WriteQueue, log) -> Dict[str, int]:
     """Process a single Airtable base: fetch schema + records, push to queue."""
     base_id = base.id
@@ -318,8 +343,8 @@ def process_base(base, queue: WriteQueue, log) -> Dict[str, int]:
         log.info(f"[{base_name}] fetching table {i+1}/{len(schema.tables)}: {table_name}...")
         try:
             table = base.table(table_id)
-            records = fetch_with_retry(
-                lambda t=table: t.all(),
+            table_records = fetch_with_retry(
+                lambda t=table: _stream_table_records(t, base_id, table_id, queue),
                 log=log,
             )
         except Exception as e:
@@ -327,14 +352,8 @@ def process_base(base, queue: WriteQueue, log) -> Dict[str, int]:
             stats["table_errors"] += 1
             continue
 
-        data_rows = []
-        for record in records:
-            fields = _clean_record_fields(record.get("fields", {}))
-            data_rows.append((base_id, table_id, record["id"], json.dumps(fields).replace("\\u0000", "")))
-
-        stats["records"] += len(data_rows)
-        queue.push_records(data_rows)
-        log.info(f"[{base_name}] {table_name}: {len(data_rows)} records")
+        stats["records"] += table_records
+        log.info(f"[{base_name}] {table_name}: {table_records} records")
 
     return stats
 
