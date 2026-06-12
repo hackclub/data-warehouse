@@ -28,6 +28,8 @@
 --                ~2026-01-16, first public approvals 2026-02-17).
 --   stack, offtrack, beest, stasis, horizons — public Summer 2026 programs
 --                with coding/work-session activity in their own app mirrors.
+--   sleepover  — Airtable-backed program (ongoing, launched ~2026-01-16);
+--                Hackatime-only, ported from spring_2026_analytics.
 --
 -- Sources per program:
 --   Hackatime coding — global hackatime heartbeats, attributed to a program by
@@ -69,6 +71,12 @@ WITH program_windows AS (
         ('stasis',     TIMESTAMP WITH TIME ZONE '2026-03-03 00:00:00+00',
                        TIMESTAMP WITH TIME ZONE '2026-07-01 00:00:00+00'),
         ('horizons',   TIMESTAMP WITH TIME ZONE '2026-02-22 00:00:00+00',
+                       NULL::timestamptz),
+        -- First projects 2026-01-16 (13 created launch day; spring used the
+        -- 01-20 public launch, but the earlier wave is real participants).
+        -- Still running: YSWS submissions through 2026-06-11, projects still
+        -- being created in June. Revisit for a closed window once it ends.
+        ('sleepover',  TIMESTAMP WITH TIME ZONE '2026-01-16 00:00:00+00',
                        NULL::timestamptz),
         -- Launched 2025-06-16 (first real devlog wave); devlogs stop after
         -- 2025-10-02, so the window closes 2025-10-03. The closed window also
@@ -586,6 +594,72 @@ hack_club_the_game_ht_claims AS (
       AND NOT u.is_banned
 ),
 
+-- Sleepover is an Airtable-backed app (no program db): projects carry
+-- hackatime_name (a JSON array string like '["proj"]' for 1,437 projects,
+-- plain text for 170 — audited 2026-06), and link to registered_users (email)
+-- via the DLT junction table. Ported from spring_2026_analytics, which is the
+-- reference implementation. Hackatime is the only time source: projects.hours
+-- and ysws_project_submission hours are banked/reviewed totals, not daily
+-- activity (SoM double-count rationale).
+--
+-- Quality controls (audited 2026-06):
+--   * linkage is complete — all 1,609 alias-bearing project↔user rows resolve
+--     to a registered user with an email; 0 alias projects lack a user link;
+--     0 normalized-email collisions across registered_users ids.
+--   * identity-join coverage: 600 of 634 claim users (94.6%) match a Hackatime
+--     email after normalization (shipwrecked was 95.4%, SoM 97.8%).
+--   * the base has no ban/fraud flag. verification_status is an identity-
+--     verification state, not a fraud signal; 'ineligible' users hold 2 of
+--     1,609 claim projects (~0.1%), so no exclusion is applied.
+--   * scale: claimed aliases carry 10,569 lifetime Hackatime hours; the
+--     claim_start gate cuts that to 3,338 attributed raw hours. The banked
+--     projects.hours total (14,962) includes pre-claim alias history, so the
+--     claims path is deliberately smaller. Spring prod showed the same scale
+--     (3,228 raw / 434 users).
+-- code_url comes from the user's latest YSWS submission for the same-named
+-- project (projects itself has no repo field).
+sleepover_code_urls AS (
+    SELECT y.userid,
+           LOWER(BTRIM(y.project)) AS project_name_key,
+           (ARRAY_AGG(NULLIF(BTRIM(y.code_url), '')
+                      ORDER BY y.automation_first_submitted_at DESC NULLS LAST,
+                               y.id DESC))[1] AS code_url
+    FROM {{ source('airtable_sleepover', 'ysws_project_submission') }} y
+    WHERE y.userid IS NOT NULL AND y.userid != ''
+      AND y.project IS NOT NULL AND y.project != ''
+      AND y.code_url IS NOT NULL AND y.code_url != ''
+    GROUP BY 1, 2
+),
+
+sleepover_ht_claims AS (
+    SELECT 'sleepover'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(ru.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(ru.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(ru.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(ru.email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias.alias_text, ' "')) AS hackatime_alias,
+        proj.name AS project_name,
+        scu.code_url,
+        proj.created_at AS claim_start_ts
+    FROM {{ source('airtable_sleepover', 'projects') }} proj
+    JOIN {{ source('airtable_sleepover', 'projects__registered_users') }} pr
+        ON pr._dlt_parent_id = proj._dlt_id
+    JOIN {{ source('airtable_sleepover', 'registered_users') }} ru
+        ON ru.id = pr.value
+    LEFT JOIN sleepover_code_urls scu
+        ON scu.userid = proj.userid
+        AND scu.project_name_key = LOWER(BTRIM(proj.name))
+    CROSS JOIN LATERAL (
+        SELECT jsonb_array_elements_text(proj.hackatime_name::jsonb) AS alias_text
+        WHERE proj.hackatime_name ~ '^\s*\[.*\]\s*$'
+        UNION ALL
+        SELECT proj.hackatime_name AS alias_text
+        WHERE NOT (proj.hackatime_name ~ '^\s*\[.*\]\s*$')
+    ) AS alias
+    WHERE proj.hackatime_name IS NOT NULL AND proj.hackatime_name != ''
+),
+
 -- Shipwrecked 2025 (Prisma schema, camelCase identifiers) attaches Hackatime
 -- aliases to projects via HackatimeProjectLink (one row per alias). Hackatime
 -- is the program's only real time source: the link's rawHours/hoursOverride
@@ -765,6 +839,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM beest_ht_claims
     UNION ALL SELECT * FROM stasis_ht_claims
     UNION ALL SELECT * FROM horizons_ht_claims
+    UNION ALL SELECT * FROM sleepover_ht_claims
     UNION ALL SELECT * FROM summer_of_making_ht_claims
     UNION ALL SELECT * FROM hack_club_the_game_ht_claims
     UNION ALL SELECT * FROM shipwrecked_ht_claims
