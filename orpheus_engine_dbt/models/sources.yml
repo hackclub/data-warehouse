@@ -320,6 +320,21 @@ sources:
         description: "Summer of Making 2025 projects with hackatime_project_keys array and repo_link."
         meta: { dagster: { deps: ['summer_of_making_2025_warehouse_mirror'] } }
 
+  - name: shipwrecked_the_bay
+    schema: shipwrecked_the_bay
+    quoting:
+      identifier: true
+    tables:
+      - name: User
+        description: "Shipwrecked 2025 users with email and fraud-review status."
+        meta: { dagster: { deps: ['shipwrecked_the_bay_warehouse_mirror'] } }
+      - name: Project
+        description: "Shipwrecked 2025 projects with codeUrl."
+        meta: { dagster: { deps: ['shipwrecked_the_bay_warehouse_mirror'] } }
+      - name: HackatimeProjectLink
+        description: "Shipwrecked 2025 hackatime alias claims per project."
+        meta: { dagster: { deps: ['shipwrecked_the_bay_warehouse_mirror'] } }
+
   - name: hack_club_the_game
     schema: hack_club_the_game
     tables:

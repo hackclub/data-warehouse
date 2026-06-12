@@ -13,6 +13,7 @@ WITH source_info AS (
     SELECT * FROM (VALUES
         ('hackatime', 'shared activity source', NULL::date),
         ('summer_of_making', 'program db', DATE '2025-06-16'),
+        ('shipwrecked', 'program db', DATE '2025-05-28'),
         ('blueprint', 'program db', DATE '2025-09-23'),
         ('flavortown', 'program db', DATE '2025-12-24'),
         ('hack_club_the_game', 'program db', DATE '2026-01-16'),
@@ -147,6 +148,17 @@ source_updates AS (
         SELECT MAX(updated_at)::timestamptz AS last_updated_at FROM {{ source('summer_of_making_2025', 'users') }}
         UNION ALL
         SELECT MAX(updated_at)::timestamptz FROM {{ source('summer_of_making_2025', 'projects') }}
+    ) s
+
+    -- Shipwrecked ended 2025-09-03, but the app is still live and its mirror
+    -- still syncs, so these timestamps reflect mirror freshness (not program
+    -- activity). Project has no timestamp columns, so links stand in for it.
+    UNION ALL
+    SELECT 'shipwrecked', MAX(last_updated_at)
+    FROM (
+        SELECT MAX("updatedAt")::timestamptz AS last_updated_at FROM {{ source('shipwrecked_the_bay', 'User') }}
+        UNION ALL
+        SELECT MAX("createdAt")::timestamptz FROM {{ source('shipwrecked_the_bay', 'HackatimeProjectLink') }}
     ) s
 )
 

@@ -18,7 +18,7 @@
 -- Sources:
 --   Coding/journal/work-session programs (stardance, flavortown, stack,
 --   offtrack, beest, stasis, horizons, blueprint, summer_of_making,
---   hack_club_the_game) come from
+--   hack_club_the_game, shipwrecked) come from
 --   {{ ref('summer_unified_time_log') }}, inheriting its cross-program
 --   equal-split dedup and run windows.
 --   macondo uses its own per-day rollup (daily_project_activity: hackatime_seconds
@@ -35,6 +35,10 @@
 --                 included for the year-over-year comparison. Hackatime-only
 --                 methodology; see summer_unified_time_log for why devlog
 --                 durations are not used.
+--                 shipwrecked — Shipwrecked 2025 (2025-05-28 to 2025-09-03),
+--                 included for the year-over-year comparison. Hackatime-only
+--                 methodology; see summer_unified_time_log for why the banked
+--                 link hours (rawHours/hoursOverride) are not used.
 --   STALE SOURCE: horizons — app mirror has not refreshed since 2026-05-12, so
 --                 DAU is limited to Hackatime claims already present there.
 --

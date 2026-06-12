@@ -15,6 +15,9 @@
 --                historical comparison.
 --   summer_of_making — Summer of Making 2025 (ran 2025-06-16 to 2025-10-02),
 --                kept for the year-over-year historical comparison.
+--   shipwrecked — Shipwrecked 2025 (ran ~2025-05-28 to 2025-09-03, island
+--                event 2025-08-08..11), kept for the year-over-year
+--                historical comparison.
 --   blueprint  — hardware/PCB program (ongoing, launched ~2025-09-23).
 --   hack_club_the_game — gamified ship-anything program (ongoing, beta opened
 --                ~2026-01-16, first public approvals 2026-02-17).
@@ -75,7 +78,16 @@ WITH program_windows AS (
         -- window opens at the beta, not the first public approvals (2026-02-17).
         -- Still running.
         ('hack_club_the_game', TIMESTAMP WITH TIME ZONE '2026-01-16 00:00:00+00',
-                       NULL::timestamptz)
+                       NULL::timestamptz),
+        -- First HackatimeProjectLink rows 2025-05-28 (attributed activity ramps
+        -- the same week); last unified-YSWS approval 2025-09-03, and program-db
+        -- submissions/reviews collapse after September (33 vs 917 in July). The
+        -- island event was 2025-08-08..11. CLOSED window required: the app
+        -- stayed up and aliases never unclaim, so attributed Hackatime activity
+        -- runs at ~100-170 hrs/week for months after the program ended — dead
+        -- claims that would otherwise split hours with live programs.
+        ('shipwrecked', TIMESTAMP WITH TIME ZONE '2025-05-28 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2025-09-04 00:00:00+00')
         -- This model is the CREDITED-HOURS log (Hackatime + devlog/journal) for
         -- coding programs. Separate, daily-grained programs live in
         -- daily_active_users: fallout (ship-based) and macondo (its own
@@ -482,6 +494,38 @@ hack_club_the_game_ht_claims AS (
       AND NOT u.is_banned
 ),
 
+-- Shipwrecked 2025 (Prisma schema, camelCase identifiers) attaches Hackatime
+-- aliases to projects via HackatimeProjectLink (one row per alias). Hackatime
+-- is the program's only real time source: the link's rawHours/hoursOverride
+-- are banked/reviewer-adjusted Hackatime totals (counting them would double
+-- count, same rationale as SoM devlogs), and User.purchasedProgressHours is
+-- shop-bought progress, not time. claim_start_ts comes from the link's
+-- createdAt — Project has no timestamp columns at all.
+--
+-- Quality controls (audited 2026-06): users the program's fraud review marked
+-- User.status = 'FraudSuspect' are excluded — 43 such users held 14.1% of
+-- in-window attributed hours (1,359 of 9,666). Deleted projects are already
+-- absent from the mirror (hard deletes), and per the SoM precedent deletion
+-- alone would not exclude anyway. Identity-join quality: 95.4% of claim users
+-- (562 of 589) match a Hackatime email after normalization (SoM was 97.8%).
+shipwrecked_ht_claims AS (
+    SELECT 'shipwrecked'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(l."hackatimeName")) AS hackatime_alias,
+        proj.name AS project_name,
+        NULLIF(BTRIM(proj."codeUrl"), '') AS code_url,
+        l."createdAt" AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('shipwrecked_the_bay', 'HackatimeProjectLink') }} l
+    JOIN {{ source('shipwrecked_the_bay', 'Project') }} proj ON proj."projectID" = l."projectID"
+    JOIN {{ source('shipwrecked_the_bay', 'User') }} u ON u.id = proj."userId"
+    WHERE l."hackatimeName" IS NOT NULL AND BTRIM(l."hackatimeName") <> ''
+      AND u.status <> 'FraudSuspect'
+),
+
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
@@ -493,6 +537,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM horizons_ht_claims
     UNION ALL SELECT * FROM summer_of_making_ht_claims
     UNION ALL SELECT * FROM hack_club_the_game_ht_claims
+    UNION ALL SELECT * FROM shipwrecked_ht_claims
 ),
 
 all_claims AS (
