@@ -37,6 +37,9 @@ materialize_unified_ysws_job = dg.define_asset_job(
         dg.AssetSelection.assets("airtable/unified_ysws_projects_db/ysws_project_mention_searches_refresh") |
         dg.AssetSelection.assets("airtable/unified_ysws_projects_db/ysws_spot_checks_refresh") |
         dg.AssetSelection.assets("airtable/unified_ysws_projects_db/ysws_spot_check_sessions_refresh") |
+        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/ysws_spotchecks_refresh") |
+        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/eliminated_projects_refresh") |
+        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/project_fines_refresh") |
         # Warehouse assets (no key_prefix)
         dg.AssetSelection.assets("unified_ysws_approved_projects_warehouse") |
         dg.AssetSelection.assets("unified_ysws_ysws_programs_warehouse") |
@@ -46,6 +49,9 @@ materialize_unified_ysws_job = dg.define_asset_job(
         dg.AssetSelection.assets("unified_ysws_ysws_project_mention_searches_warehouse") |
         dg.AssetSelection.assets("unified_ysws_ysws_spot_checks_warehouse") |
         dg.AssetSelection.assets("unified_ysws_ysws_spot_check_sessions_warehouse") |
+        dg.AssetSelection.assets("unified_ysws_ysws_spotchecks_warehouse") |
+        dg.AssetSelection.assets("unified_ysws_eliminated_projects_warehouse") |
+        dg.AssetSelection.assets("unified_ysws_project_fines_warehouse") |
         dg.AssetSelection.assets("unified_ysws_ysws_programs_weighted_referral_count")
     ),
 )

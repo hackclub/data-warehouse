@@ -8,7 +8,13 @@ from urllib.parse import urlparse
 from typing import Optional
 
 from dagster import Definitions, AssetExecutionContext, EnvVar
-from dagster_dbt import DbtCliResource, DbtProject, dbt_assets, DagsterDbtTranslator
+from dagster_dbt import (
+    DbtCliResource,
+    DbtProject,
+    dbt_assets,
+    DagsterDbtTranslator,
+    DagsterDbtTranslatorSettings,
+)
 
 # --- Configuration ---
 # Assume the dbt project is in a directory named 'orpheus_engine_dbt'
@@ -263,7 +269,11 @@ except Exception as e:
 if DBT_PROFILES_DIR_PATH and dbt_project_valid and DBT_MANIFEST_PATH:
     @dbt_assets(
         manifest=DBT_MANIFEST_PATH,
-        # dagster_dbt_translator=DagsterDbtTranslator(), # Optional: Customize asset keys, groups etc.
+        # Multiple sources (e.g. a dlt parent table and its child tables) may map to
+        # the same warehouse asset key in sources.yml.
+        dagster_dbt_translator=DagsterDbtTranslator(
+            settings=DagsterDbtTranslatorSettings(enable_duplicate_source_asset_keys=True)
+        ),
         # select="tag:my_tag", # Optional: Load only a subset of assets
         # exclude="config.materialized:ephemeral", # Optional: Exclude certain models
     )

@@ -946,6 +946,155 @@ class AirtableIDs:
             end_time = "fldFNstKhvejUgdrb"  # Name: End Time
             ysws_spot_checks = "fld2OIOCpgU2MMtxT"  # Name: YSWS Spot Checks
 
+        class ysws_spotchecks:
+            """IDs for Table 'ysws_spotchecks' (ID: tblz0C08dgZdPwQCk)"""
+            TABLE_ID = "tblz0C08dgZdPwQCk"
+
+            review_id = "fldQvjVnDqJUwc8Go"  # Name: review_id
+            project = "fld7uEFJKcZiwb53u"  # Name: project
+            live_record_id = "fldhlp1Iyov0roWw1"  # Name: live_record_id
+            status_first_review = "fld4di74vSJ1tjhPs"  # Name: status_first_review
+            first_review_notes = "fldCc4fNZXQfqEWUV"  # Name: first_review_notes
+            first_review_by = "fldtHK0XeaMxHwVc4"  # Name: first_review_by
+            first_review_at = "fldjSLi1BtFW9slhV"  # Name: first_review_at
+            status_second_review = "fldHh6L2HK68YOCo0"  # Name: status_second_review
+            second_review_notes = "fldpatz9ZpfdqS9nX"  # Name: second_review_notes
+            second_review_by = "fldc3OkgnpXOgkQjt"  # Name: second_review_by
+            status_third_review = "fldx0XjQx9ayd48ZY"  # Name: status_third_review
+            third_review_notes = "fldrRqZx71zEn8mbO"  # Name: third_review_notes
+            third_review_by = "fldSoqVQ78qjuvk29"  # Name: third_review_by
+            ysws_name_from_project = "fldid67bwVbwuZXLE"  # Name: YSWS–Name (from project)
+            project_eliminated = "fldEmZUN97ACZEYvm"  # Name: project_eliminated
+            project_fines = "fldHhWcb9WvDBbQcX"  # Name: project_fines
+            ysws_eliminated_name = "fldkrzLgUXwz1LIEe"  # Name: YSWS Eliminated Name
+            name_ysws = "fldOmVGhz5VR72qyn"  # Name: name_ysws
+            eliminated_record_id = "fldGENwz130XZ5Cga"  # Name: eliminated_record_id
+            record_id = "fldLmQ7ihVPpjq5oF"  # Name: record_id
+            second_review_at = "fldPbKjZb6iu9fCl4"  # Name: second_review_at
+            needs_description = "fldsLxKuKbLSGfw9f"  # Name: needs_description
+            needs_repo_url = "fldu3iW5YIwkhfHWY"  # Name: needs_repo_url
+            needs_public_repo_url = "fldSc0HxScHayAgNL"  # Name: needs_public_repo_url
+            needs_playable_url = "fldauG5OrLl2yZHgT"  # Name: needs_playable_url
+            needs_public_playable_url = "fld8ATWm53mIewS6M"  # Name: needs_public_playable_url
+            is_duplicated = "fld0Md0uEB9f9RhQ4"  # Name: is_duplicated
+            needs_screenshot = "fldCRctWxq5c9dbHl"  # Name: needs_screenshot
+            needs_address = "fldywAaYR4AAboh9X"  # Name: needs_address
+            needs_birthday = "fldfaka70rT8iJQ2D"  # Name: needs_birthday
+            needs_nonzero_hours = "fldJCdDtazH2sN746"  # Name: needs_nonzero_hours
+            needs_under_19_birthday = "fldCcVeMTirlXts8x"  # Name: needs_under_19_birthday
+            ysws_current_owners_from_project = "fldyDCPRKNO8Nt3HZ"  # Name: YSWS–Current Owners (from project)
+            ysws_author_live = "fldU8UPOIsZtTVttj"  # Name: ysws_author_live
+            ysws_author_eliminated = "fld0iAvnbh1GyZkOC"  # Name: ysws_author_eliminated
+            ysws_author = "fldTzbXXg9jEiyIQb"  # Name: ysws_author
+            project_fine_amount = "fldWAgnPqDchaRX6C"  # Name: project_fine_amount
+            ysws_from_project_eliminated = "fldaxAcLz0MCqbiby"  # Name: YSWS (from project_eliminated)
+            ai_checked = "fldsaUsOUPNx2VcOp"  # Name: ai_checked
+            ai_score = "fldr0iFCQJccDkatt"  # Name: ai_score
+            approved_date_live = "fld0ZJFE26MgY0ZSn"  # Name: approved_date_live
+            approved_date_eliminated = "fldsUjsGv38z4XO3S"  # Name: approved_date_eliminated
+            spotcheck_record_id = "fldtOpTNXxv7JUPuF"  # Name: spotcheck_record_id
+            third_review_at = "fld9fxUBDBbonC1Nr"  # Name: third_review_at
+
+        class eliminated_projects:
+            """IDs for Table 'eliminated_projects' (ID: tbl2BdmtTdWIf7l3k)"""
+            TABLE_ID = "tbl2BdmtTdWIf7l3k"
+
+            original_record_id = "fldVOuw25JGllFrjj"  # Name: original_record_id
+            ysws = "fldof1YsRGSeP0M7Z"  # Name: YSWS
+            first_name = "fldC3rU7RceHMdmYw"  # Name: First Name
+            last_name = "fldnbqXwaDweLxmA4"  # Name: Last Name
+            email = "fldzB5zYqBqe1UVlQ"  # Name: Email
+            referral_reason = "fldFIduTmQPnVCCa2"  # Name: Referral Reason
+            how_did_you_hear_about_this = "fldWiAGANhrFnTFks"  # Name: How did you hear about this?
+            what_are_we_doing_well = "fld6QZdnjDM0vrh0C"  # Name: What are we doing well?
+            how_can_we_improve = "fldK1vMJDOD6eVuy7"  # Name: How can we improve?
+            age_when_approved = "fldQs3MAAX7bfwtgF"  # Name: Age When Approved
+            playable_url = "fldJ0IFO08g1VeHYr"  # Name: Playable URL
+            code_url = "fld5C0lD45gQlFUF0"  # Name: Code URL
+            screenshot = "fld2317Yw95rbnBL1"  # Name: Screenshot
+            description = "fld87aRp2RO0lSgRj"  # Name: Description
+            git_hub_username = "fldiO4iDuxrKMMO0K"  # Name: GitHub Username
+            address_line_1 = "fldQqHoRBS1f8NRis"  # Name: Address (Line 1)
+            address_line_2 = "fldJ57xdP0POsbAw6"  # Name: Address (Line 2)
+            city = "fldbQp7pWy8hb5FkL"  # Name: City
+            state_province = "fldf16DvwxXEvZnjb"  # Name: State / Province
+            country = "fldSZXbN0HNzbvgzI"  # Name: Country
+            zip_postal_code = "fldfbILXn57Ipi8uj"  # Name: ZIP / Postal Code
+            birthday = "fldDHkOUmS8wALlGU"  # Name: Birthday
+            hours_spent = "fldcZgR3Fr3VjK9HO"  # Name: Hours Spent
+            override_hours_spent = "fldhSRRurDHrZCeyB"  # Name: Override Hours Spent
+            override_hours_spent_justification = "fldSCogezUH0yE31m"  # Name: Override Hours Spent Justification
+            ysws_weighted_project_contribution = "fldZxJjuT2IemG0oq"  # Name: YSWS–Weighted Project Contribution
+            ysws_weighted_project_author_attribution = "fldJzXA3hCJGSsjJO"  # Name: YSWS–Weighted Project Author Attribution
+            ysws_weighted_project_author_attribution_count = "fldvG93huMrHrQJdt"  # Name: YSWS–Weighted Project Author Attribution Count
+            ysws_weighted_project_contribution_per_author = "fldDA4I3vXMEtS8mW"  # Name: YSWS–Weighted Project Contribution Per Author
+            approved_at = "fld2iQfR2cOMxpOpD"  # Name: Approved At
+            ysws_default_hours_per_grant = "fld9DvulEtpyUasUk"  # Name: YSWS–Default Hours Per Grant
+            created = "fldh3xyM9Th4SnoML"  # Name: Created
+            ysws_name = "fldeSpLlfsxMffhJa"  # Name: YSWS–Name
+            ysws_current_owners = "fldTzWnIM9lOHVLkG"  # Name: YSWS–Current Owners
+            archive_live_url = "fldabeTYCmp4AEtUl"  # Name: Archive - Live URL
+            archive_code_url = "fldukZK12L5ORT2q1"  # Name: Archive - Code URL
+            archive_archived_at = "fldGixAMGUmxI777P"  # Name: Archive - Archived At
+            hack_clubber = "fldeD1dOr7gQ1jHzN"  # Name: Hack Clubber
+            hack_clubber_geocoded_country = "fldbF4K4sdfrMvQjc"  # Name: Hack Clubber–Geocoded Country
+            ysws_spot_checks = "fldsF0n8LDhgoKo4B"  # Name: YSWS Spot Checks
+            geocoded_country = "fld3qX3UTPBCZfhKm"  # Name: Geocoded - Country
+            geocoded_country_code = "fld5hV2LoWqj6bJ9W"  # Name: Geocoded - Country Code
+            geocoded_latitude = "fldLrsuj6vvtIwOvz"  # Name: Geocoded - Latitude
+            geocoded_longitude = "fld4LQOduvYjMmUYs"  # Name: Geocoded - Longitude
+            geocoded_address_hash = "fldrlexFpyP6LHUUk"  # Name: Geocoded - Address Hash
+            archive_hash = "fldUJRJBCJnSogdrR"  # Name: Archive - Hash
+            project_mentions_links = "fldre5crQNmNDgjJ7"  # Name: Project Mentions - Links
+            repo_star_count = "fldCdDpLklgCaDWYi"  # Name: Repo - Star Count
+            repo_stats_last_updated_at = "fldChyLd1ZpawJArw"  # Name: Repo - Stats Last Updated At
+            repo_language = "fldYo4vWGEqIGmp5E"  # Name: Repo - Language
+            repo_exists = "fldTj3eKv9sA9NzSM"  # Name: Repo - Exists?
+            ysws_project_mentions_searches = "fld3MPcFA6Mk5FbuK"  # Name: YSWS Project Mentions - Searches
+            ysws_project_mentions_search_count = "fldvlmZvo2o4iomkV"  # Name: YSWS Project Mentions - Search Count
+            ysws_project_mentions_last_search_links_found = "fldpV7VfQCehQEivv"  # Name: YSWS Project Mentions - Last Search, # Links Found
+            ysws_project_mentions_estimated_search_cost = "fldlmd8eYC24Mc4Y0"  # Name: YSWS Project Mentions - Estimated Search Cost
+            ysws_project_mentions_5_links_on_last_search = "fldw8X6RJ0WYdRZqz"  # Name: YSWS Project Mentions - ≥5 Links on Last Search?
+            ysws_project_mentions_no_searches_and_20_repo_stars = "fld1jNJKk8cMccZSN"  # Name: YSWS Project Mentions - No Searches And ≥20 Repo Stars
+            ysws_project_mentions_repo_stars_at_last_search = "fldjSbeVmae0v6biN"  # Name: YSWS Project Mentions - Repo Stars At Last Search
+            ysws_project_mentions_last_search_at = "fld0lKWwAAKDkBRcK"  # Name: YSWS Project Mentions - Last Search At
+            ysws_project_mentions_5_repo_stars_since_last_search_and_72_hours_passed = "fldcdy8AgyEFiajxa"  # Name: YSWS Project Mentions - ≥5 Repo Stars Since Last Search And 72 Hours Passed
+            ysws_project_mentions_project_wants_search = "fld6lMOWaMxceookw"  # Name: YSWS Project Mentions - Project Wants Search?
+            ysws_project_mentions_reddit_upvotes = "fldGSsM8Q01RlTJud"  # Name: YSWS Project Mentions - Reddit Upvotes
+            ysws_project_mentions_hacker_news_points = "fldBRQ52BvLOr7Sxs"  # Name: YSWS Project Mentions - Hacker News Points
+            ysws_project_mentions_links_found = "fldvufA51fOpWeN7G"  # Name: YSWS Project Mentions - # Links Found
+            ysws_project_mentions_1_search_but_2_searches = "fldP3llods4StH1vl"  # Name: YSWS Project Mentions - ≥1 Search, But <2 Searches?
+            ysws_project_mentions_total_engagement_count = "fldqZ4dZMt16iAdCG"  # Name: YSWS Project Mentions - Total Engagement Count
+            ysws_project_mentions_search_count_copy = "fldVWfSMP96VleXl8"  # Name: YSWS Project Mentions - Search Count copy
+            ysws_project_mentions_weighted_points = "fldN3VPUTdSfyVKto"  # Name: YSWS Project Mentions - Weighted Points
+            ysws_project_mentions_top_link = "fldIHnuBrUEYNFVx5"  # Name: YSWS Project Mentions - Top Link
+            state = "fldgsPC2LkkyEKuN9"  # Name: State
+            county_centralizing = "fldrfz7xswIhgu5Zz"  # Name: County - Centralizing
+            email_trimmed_lowercased = "fldCUQu9gZIGzg10T"  # Name: Email - Trimmed & Lowercased
+            ysws_name_lookup = "fldhFBOAZifRQi81p"  # Name: YSWS Name - Lookup
+            temp_zach_project_metadata_json = "fldSkuIh4hFFiDHq2"  # Name: Temp - Zach - Project Metadata JSON
+            ysws_spotchecks = "fldk8Q9AqLmvC1L2M"  # Name: YSWS - Spotchecks
+            ysws_spotchecks_2 = "fld5OOqZ4I9i9H5r7"  # Name: YSWS - Spotchecks 2
+            ysws_spotchecks_3 = "fldfvKyzPguUZlLF7"  # Name: YSWS - Spotchecks 3
+            project_fine_amount = "fld39tjZ69VwbZ701"  # Name: project_fine_amount
+            created_2 = "fldxjU9d34zBMQpks"  # Name: Created 2
+
+        class project_fines:
+            """IDs for Table 'project_fines' (ID: tblKzxJawDsetINVp)"""
+            TABLE_ID = "tblKzxJawDsetINVp"
+
+            fine_id = "fldT25usG19QqRWzy"  # Name: fine_id
+            project = "fldQSYlWN2fJO6Omp"  # Name: project
+            fine_status = "fldlOFypwG8WvPGu4"  # Name: fine_status
+            project_hours_spend = "fldWmySvDkAKKhokI"  # Name: project_hours_spend
+            project_fine_amount = "fldDNI7LZwM2nWETB"  # Name: project_fine_amount
+            ysws_spotchecks = "fld4KJ85Lyd4g7nNa"  # Name: YSWS - Spotchecks
+            name_ysws_from_ysws_spotchecks = "fldOINnytjbBXLIrU"  # Name: name_ysws (from YSWS - Spotchecks)
+            project_status = "fldfCw0SGEJkLkQuZ"  # Name: project_status
+            ysws_author = "fldWSoKIwANOKrTZ7"  # Name: ysws_author
+            ysws_name = "fldhFgkXxvXvB3gCf"  # Name: ysws_name
+            created = "fldGXEV6kFG3vUTHR"  # Name: Created
+
 
     class slack_nps:
         """IDs for Base 'slack_nps' (ID: appvetUwHQTgkNel3)"""
@@ -962,7 +1111,9 @@ class AirtableIDs:
             have_you_made_a_friend_on_the_hack_club_slack = "fldycpVCLrUHz72ki"  # Name: Have you made a friend on the Hack Club Slack?
             if_you_really_love_the_slack_what_do_you_love_about_it = "fldppkoJMutNgUmjT"  # Name: If you really love the Slack, what do you love about it?
             if_you_gave_the_slack_a_high_or_low_rating_why = "fldNoQ2JMlr11t23W"  # Name: If you gave the Slack a high or low rating, why?
+            what_is_your_feedback_about_the_slack = "fldfohLFnqJqkXFNn"  # Name: What is your feedback about the Slack?
             how_did_you_join_the_slack = "fldXrt54lk2rsF9lG"  # Name: How did you join the Slack?
+            if_you_joined_another_way_please_explain = "fld5dAn9SUAFdYwJW"  # Name: If you joined another way, please explain
             submitted_at = "fld7Ihoq41nQGPbsI"  # Name: Submitted At
             loops_slack_feedback_given_at = "fldMWzdfoCGgvEkBr"  # Name: Loops - slackFeedbackGivenAt
             classification = "fld2MjDhVpp42u2pG"  # Name: Classification
@@ -2364,6 +2515,7 @@ class AirtableIDs:
             """IDs for Table 'fulfillment' (ID: tblWsADwTSnrGaael)"""
             TABLE_ID = "tblWsADwTSnrGaael"
 
+            email = "fld6UJyoPHSt8Jphe"  # Name: email
             id = "fldvECivcxsI3oNXl"  # Name: id
             status = "fldV5Cg8BA5kYXcYK"  # Name: status
             date = "fldtEmNn40c4VMeJG"  # Name: date
@@ -2393,6 +2545,9 @@ class AirtableIDs:
             admin_owner = "fld8wDZ3KUOBUaDSa"  # Name: admin_owner
             dm_history = "fldnhi1kTMY6I8VT4"  # Name: dm_history
             fufilliment_status = "fldK2HO3ZLp0W9uct"  # Name: Fufilliment Status
+            phone_number = "fldY3AIGYSRVWhUc5"  # Name: phone_number
+            first_name = "flduX8AabZjeQgLzI"  # Name: first_name
+            last_name = "fldKm5B8lEmvpwdOL"  # Name: last_name
 
         class ysws_config:
             """IDs for Table 'ysws_config' (ID: tbl5HPeWrC4YCdClJ)"""
@@ -2515,7 +2670,9 @@ class AirtableIDs:
             metrics_history_estimated_cost = "fldvyqlaK6Mh6nmYa"  # Name: Metrics History Estimated Cost
             last_scraped = "fldI9m6RSM5TT0lgn"  # Name: Last Scraped
             automatically_process_videos = "fldiaa2pcBuPHb8JY"  # Name: Automatically Process Videos?
+            override_refresh_data_every_x_hours = "fldZIkxG1afxcJh9L"  # Name: Override - Refresh Data Every X Hours
             videos = "fldCsX6X2oUC86gSj"  # Name: Videos
+            retention_calibration_data_json = "fldxg0EJ0Ys4Z3ClY"  # Name: Retention Calibration Data JSON
             subscriber_follower_count_history_json = "fldiZjgmjoCSadmTF"  # Name: Subscriber / Follower Count History JSON
 
         class payments:
@@ -2575,6 +2732,7 @@ class AirtableIDs:
             attributed_author_count = "fldY37GD1n3dXbcPS"  # Name: Attributed Author Count
             weighted_hours_watched_per_author = "fldNDrGa26hWzHBJ6"  # Name: Weighted Hours Watched Per Author
             record_created_at = "fldp4WxgYwnAvMEni"  # Name: Record Created At
+            ai_screenplay_error = "fldXsSqMNpcz1aCEL"  # Name: AI - Screenplay Error
 
 
 # fmt: on

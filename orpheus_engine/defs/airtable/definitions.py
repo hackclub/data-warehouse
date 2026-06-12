@@ -126,6 +126,15 @@ airtable_config = AirtableServiceConfig(
                 ),
                 "ysws_spot_check_sessions": AirtableTableConfig(
                     table_id="tblJCBhT1pYJcrQjV"
+                ),
+                "ysws_spotchecks": AirtableTableConfig(
+                    table_id="tblz0C08dgZdPwQCk"
+                ),
+                "eliminated_projects": AirtableTableConfig(
+                    table_id="tbl2BdmtTdWIf7l3k"
+                ),
+                "project_fines": AirtableTableConfig(
+                    table_id="tblKzxJawDsetINVp"
                 )
             }
         ),

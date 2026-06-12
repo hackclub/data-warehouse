@@ -2354,7 +2354,10 @@ ysws_refresh_airtable_assets = create_airtable_assets(
         "ysws_project_mentions",
         "ysws_project_mention_searches", 
         "ysws_spot_checks",
-        "ysws_spot_check_sessions"
+        "ysws_spot_check_sessions",
+        "ysws_spotchecks",
+        "eliminated_projects",
+        "project_fines"
     ],
     deps=[AssetKey(["unified_ysws_db_processing_done"])],
     suffix="_refresh"
@@ -2371,7 +2374,10 @@ ysws_warehouse_refresh_assets = create_airtable_sync_assets(
         "ysws_project_mentions",
         "ysws_project_mention_searches", 
         "ysws_spot_checks",
-        "ysws_spot_check_sessions"
+        "ysws_spot_check_sessions",
+        "ysws_spotchecks",
+        "eliminated_projects",
+        "project_fines"
     ],
     description="Loads refreshed YSWS data into warehouse after all processing is complete",
     source_suffix="_refresh",  # Use the refreshed Airtable sources
