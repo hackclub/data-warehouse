@@ -23,6 +23,7 @@ clean-targets:         # Directories removed by `dbt clean`
 
 on-run-end:
   - "GRANT USAGE ON SCHEMA public_summer_2026_analytics TO metabase, metabase_unified_analytics_reader"
+  - "GRANT USAGE ON SCHEMA public_stardance_analytics TO metabase, metabase_unified_analytics_reader, \"stardance-mcp\", \"stardance-sankey\""
 
 # Default settings for all models  
 models:
@@ -60,3 +61,7 @@ models:
       +materialized: table
       +grants:
         select: ["metabase"]
+    stardance_analytics:
+      +materialized: table
+      +grants:
+        select: ["metabase", "metabase_unified_analytics_reader", "\"stardance-mcp\"", "\"stardance-sankey\""]
