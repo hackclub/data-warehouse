@@ -1780,10 +1780,10 @@ beest_replication_config = {
 # --- Siege Database Replication Configuration ---
 # Siege (siege.hackclub.com) is a finished YSWS program (ran ~2025-08-31 to
 # ~2026-04-07): Rails app, Slack-OAuth sign-in. The DB lives on Coolify worker
-# "a" (project olive-at-siege, database id 5685); Coolify never published a
-# host port for it, so the warehouse reaches it through an nginx stream proxy
-# on 100.80.243.122:8543 (see /opt/siege-warehouse-proxy on that host — replace
-# with Coolify's own "publicly available" proxy on the same port when possible).
+# "a" (project olive-at-siege, database id 5685), published by Coolify's DB
+# proxy on port 13192. The connection URL uses the worker's Tailscale IP
+# (100.80.243.122) rather than a.selfhosted.hackclub.com because the proxy
+# speaks unencrypted postgres (sslmode=disable is Tailscale-only here).
 # The program is over, so this is effectively a one-time mirror; incremental
 # keys keep the scheduled run cheap anyway.
 siege_replication_config = {
@@ -1896,6 +1896,7 @@ siege_replication_config = {
         "public.solid_queue_ready_executions": {"disabled": True},
         "public.solid_queue_recurring_executions": {"disabled": True},
         "public.solid_queue_recurring_tasks": {"disabled": True},
+        "public.solid_queue_scheduled_executions": {"disabled": True},
         "public.solid_queue_semaphores": {"disabled": True},
         "public.pg_stat_statements": {"disabled": True},
         "public.pg_stat_statements_info": {"disabled": True},
