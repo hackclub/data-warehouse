@@ -18,6 +18,8 @@
 --   shipwrecked — Shipwrecked 2025 (ran ~2025-05-28 to 2025-09-03, island
 --                event 2025-08-08..11), kept for the year-over-year
 --                historical comparison.
+--   siege      — Siege (ran 2025-08-31 to ~2026-04-07), kept for the
+--                historical comparison.
 --   athena_award — Athena Award (girls-focused, ran ~2025-05-21 to 2026-02,
 --                Airtable-backed app), kept for the year-over-year
 --                historical comparison.
@@ -91,6 +93,15 @@ WITH program_windows AS (
         -- claims that would otherwise split hours with live programs.
         ('shipwrecked', TIMESTAMP WITH TIME ZONE '2025-05-28 00:00:00+00',
                        TIMESTAMP WITH TIME ZONE '2025-09-04 00:00:00+00'),
+        -- Siege: first ballots 2025-08-29, first projects 2025-09-01, first
+        -- unified-YSWS approval 2025-08-31 (start). Core weekly game ended
+        -- 2025-12-20 (last votes); project status changes ran to 2026-02-25
+        -- and YSWS approvals to 2026-04-07, so the window closes 2026-04-08.
+        -- CLOSED window required: the app's never-unclaimed aliases still
+        -- accrue ~750 Hackatime h/month as of 2026-06, which must not credit
+        -- to siege or split live programs.
+        ('siege',      TIMESTAMP WITH TIME ZONE '2025-08-31 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2026-04-08 00:00:00+00'),
         -- First registrations 2025-05-21 (first unified-YSWS approvals
         -- 2025-05-27). Attributed activity peaks Oct 2025 (~4.0k hrs, the
         -- submission deadline rush), tapers Nov 2025 – Feb 2026 (387 -> 122
@@ -538,6 +549,45 @@ shipwrecked_ht_claims AS (
       AND u.status <> 'FraudSuspect'
 ),
 
+-- Siege (weekly project game, ran 2025-08-31 to ~2026-04-07) attaches
+-- Hackatime aliases to projects via projects.hackatime_projects (a JSON array
+-- of alias strings; every non-null value is an array). Hackatime-only
+-- attribution: Siege has no self-reported time source — its hackatime_days
+-- table is a per-DAY global rollup (no user/project grain, still updating
+-- daily after program end), the per-user analog of the SoM hackatime_projects
+-- trap, so it is not used.
+--
+-- Quality controls (audited 2026-06): banned users (users.status = 'banned';
+-- 25 of the 436 alias-claiming users) held 774 of 15,221 raw in-window hours
+-- (5.1%), and Siege's spot-check verdicts (projects.fraud_status = 'fraud';
+-- 39 projects) held another 151 hours (1.0%) — both excluded. 'sus' (4
+-- projects) and 'unchecked' are not adjudicated fraud and are kept. Identity
+-- join coverage: of 405 eligible claim users, 94.3% have in-window Hackatime
+-- activity by normalized email and 87.4% match on email+alias (354 users /
+-- 14,295 raw hours credited pre-dedup). users.email has one duplicate pair
+-- and no NULLs.
+siege_ht_claims AS (
+    SELECT 'siege'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias.alias_text)) AS hackatime_alias,
+        proj.name AS project_name,
+        NULLIF(BTRIM(proj.repo_url), '') AS code_url,
+        proj.created_at AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('siege', 'projects') }} proj
+    JOIN {{ source('siege', 'users') }} u ON u.id = proj.user_id
+    CROSS JOIN LATERAL (
+        SELECT jsonb_array_elements_text(proj.hackatime_projects::jsonb) AS alias_text
+        WHERE jsonb_typeof(proj.hackatime_projects::jsonb) = 'array'
+    ) AS alias
+    WHERE proj.hackatime_projects IS NOT NULL
+      AND u.status <> 'banned'
+      AND COALESCE(proj.fraud_status, '') <> 'fraud'
+),
+
 -- Athena Award has no app database — its app reads/writes the Airtable base
 -- directly, so the airtable_athena_award mirror IS the program db.
 -- projects.project_name is the Hackatime alias the user picked in-app from
@@ -611,6 +661,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM summer_of_making_ht_claims
     UNION ALL SELECT * FROM hack_club_the_game_ht_claims
     UNION ALL SELECT * FROM shipwrecked_ht_claims
+    UNION ALL SELECT * FROM siege_ht_claims
     UNION ALL SELECT * FROM athena_award_ht_claims
 ),
 

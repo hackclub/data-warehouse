@@ -338,6 +338,16 @@ sources:
         description: "Shipwrecked 2025 hackatime alias claims per project."
         meta: { dagster: { deps: ['shipwrecked_the_bay_warehouse_mirror'] } }
 
+  - name: siege
+    schema: siege
+    tables:
+      - name: users
+        description: "Siege users with email, slack_id, and status (incl. 'banned')."
+        meta: { dagster: { deps: ['siege_warehouse_mirror'] } }
+      - name: projects
+        description: "Siege projects with hackatime_projects JSON alias array, repo_url, and fraud_status spot-check verdicts."
+        meta: { dagster: { deps: ['siege_warehouse_mirror'] } }
+
   - name: hack_club_the_game
     schema: hack_club_the_game
     tables:
