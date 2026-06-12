@@ -40,7 +40,11 @@ EXCLUDED_SCHEMAS = frozenset({
 
 # Tables to exclude (schema.table format)
 EXCLUDED_TABLES = frozenset({
-    # Add any specific tables to skip here
+    # Frozen APM telemetry from the 2025 event; the Sling streams are disabled
+    # so the data no longer changes — skip the ~100M-row hash scans and
+    # metadata COPYs they would otherwise cost every run.
+    "summer_of_making_2025.active_insights_jobs",
+    "summer_of_making_2025.active_insights_requests",
 })
 
 # =============================================================================
@@ -1035,6 +1039,51 @@ def escape_sql_string(s: str) -> str:
 _ducklake_temp_dirs: Dict[int, str] = {}
 _ducklake_temp_dirs_lock = threading.Lock()
 
+# Fraction of available RAM the whole DuckLake sync (all workers combined) may
+# claim. The warehouse host also runs Postgres (~21GB shared buffers) and the
+# other ETL jobs; an over-eager budget here is what previously OOMed the host
+# and got a Postgres backend killed mid-COPY.
+DUCKLAKE_MEMORY_FRACTION = 0.25
+
+# Default cap on concurrent sync workers (each holds a DuckDB connection with
+# its own memory budget). Overridable via DUCKLAKE_SYNC_MAX_WORKERS.
+DEFAULT_SYNC_MAX_WORKERS = 4
+
+
+def _detect_available_ram_gb() -> float:
+    """RAM available to this process in GB, preferring the cgroup limit.
+
+    os.sysconf reports *host* RAM even inside a container, so check the
+    container's cgroup v2/v1 limit first; fall back to host RAM, then to a
+    conservative default.
+    """
+    for path in (
+        "/sys/fs/cgroup/memory.max",                     # cgroup v2
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",   # cgroup v1
+    ):
+        try:
+            with open(path) as f:
+                raw = f.read().strip()
+            if raw and raw != "max":
+                limit = int(raw)
+                # cgroup v1 reports a huge sentinel value when unlimited
+                if 0 < limit < 1 << 56:
+                    return limit / (1024 ** 3)
+        except (OSError, ValueError):
+            continue
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024 ** 3)
+    except (ValueError, OSError):
+        return 8.0
+
+
+def _ducklake_memory_budget_gb() -> float:
+    """Total memory budget in GB shared by all DuckLake sync workers."""
+    override = os.environ.get("DUCKLAKE_MEMORY_LIMIT_GB")
+    if override:
+        return float(override)
+    return _detect_available_ram_gb() * DUCKLAKE_MEMORY_FRACTION
+
 
 def cleanup_ducklake_connection(conn: duckdb.DuckDBPyConnection):
     """
@@ -1102,17 +1151,16 @@ def get_ducklake_connection(num_workers: int = 1) -> duckdb.DuckDBPyConnection:
     with _ducklake_temp_dirs_lock:
         _ducklake_temp_dirs[id(conn)] = temp_dir
     
-    # Auto-calculate memory limit: (system RAM × 70%) ÷ num_workers
-    # This prevents N workers from each trying to use 80% of RAM
-    try:
-        total_ram_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-        total_ram_gb = total_ram_bytes / (1024 ** 3)
-        per_worker_gb = (total_ram_gb * 0.7) / max(num_workers, 1)
-        per_worker_gb = max(per_worker_gb, 0.5)  # At least 512MB
-        conn.execute(f"SET memory_limit = '{per_worker_gb:.1f}GB'")
-    except (ValueError, OSError):
-        # Fallback if sysconf unavailable (e.g., non-Linux)
-        conn.execute("SET memory_limit = '2GB'")
+    # Split the global memory budget across workers so N connections can't
+    # collectively exceed it. The budget is container-aware (cgroup limit) and
+    # overridable via DUCKLAKE_MEMORY_LIMIT_GB.
+    per_worker_gb = max(_ducklake_memory_budget_gb() / max(num_workers, 1), 0.5)
+    conn.execute(f"SET memory_limit = '{per_worker_gb:.1f}GB'")
+
+    # Each DuckDB connection defaults to one thread per core; with N worker
+    # connections that multiplies peak memory and CPU. Split cores across workers.
+    threads = max(2, (os.cpu_count() or 4) // max(num_workers, 1))
+    conn.execute(f"SET threads = {threads}")
     
     # Disable insertion order preservation to reduce memory usage for bulk inserts
     # Row order is irrelevant for analytics - queries should use ORDER BY explicitly
@@ -1823,6 +1871,7 @@ def sync_table_incremental(
         "bulk_load": 0.0,
         "dedup_check": 0.0,
         "dedup_delete": 0.0,
+        "fetch_changed": 0.0,
         "delete_op": 0.0,
         "update_op": 0.0,
         "insert_op": 0.0,
@@ -1978,14 +2027,56 @@ def sync_table_incremental(
     rows_deleted = 0
     rows_updated = 0
     rows_inserted = 0
-    
+
     # Ensure warehouse is attached for data fetch
     ensure_warehouse_attached(duck_conn)
-    
+
     # Build column list
     cols_quoted = ", ".join([f'"{c}"' for c in column_names])
     cols_with_hash = cols_quoted + ", _row_hash"
-    
+
+    # Step 4.0: Materialize only the changed rows locally instead of streaming
+    # the whole table out of Postgres for each UPDATE/INSERT join below (on
+    # large tables that full-table COPY is what previously drove the host OOM).
+    # Every row needing insert/update was re-hashed by warehouse_row_hashes, so
+    # its _row_hash_at is >= the minimum _row_hash_at across the diff — a
+    # simple comparison the DuckDB postgres scanner pushes down to the COPY it
+    # issues against the warehouse.
+    src_relation = f'warehouse."{schema}"."{table}"'
+    if diff['to_insert'] > 0 or diff['to_update'] > 0:
+        if pk_columns:
+            pk_join_wm = " AND ".join([f'meta."{c}" = dst."{c}"' for c in pk_columns])
+            counterpart = f"{pk_join_wm} AND dst._row_hash IS NOT DISTINCT FROM meta._row_hash"
+        else:
+            counterpart = "dst._row_hash = meta._row_hash"
+        watermark, null_hash_at = duck_conn.execute(f"""
+            SELECT min(meta._row_hash_at),
+                   count(*) FILTER (WHERE meta._row_hash_at IS NULL)
+            FROM _sync_metadata meta
+            WHERE NOT EXISTS (
+                SELECT 1 FROM ducklake."{schema}"."{table}" dst
+                WHERE {counterpart}
+            )
+        """).fetchone()
+        # A diff row without _row_hash_at would be invisible to the watermark
+        # filter; fall back to the full-table read rather than miss it.
+        if watermark is not None and null_hash_at == 0:
+            t0 = time.time()
+            duck_conn.execute("DROP TABLE IF EXISTS _sync_changed_rows")
+            duck_conn.execute(f"""
+                CREATE TEMP TABLE _sync_changed_rows AS
+                SELECT {cols_with_hash}
+                FROM warehouse."{schema}"."{table}"
+                WHERE _row_hash_at >= TIMESTAMPTZ '{watermark.isoformat()}'
+            """)
+            src_relation = "_sync_changed_rows"
+            changed_rows = duck_conn.execute("SELECT COUNT(*) FROM _sync_changed_rows").fetchone()[0]
+            timing["fetch_changed"] = time.time() - t0
+            logger.info(
+                f"  [{table_name}] FETCH CHANGED: {changed_rows:,} rows since "
+                f"{watermark} in {timing['fetch_changed']*1000:.0f}ms"
+            )
+
     if pk_columns:
         # PK-based sync: DELETE, UPDATE, INSERT
         pk_join_meta = " AND ".join([f'src."{c}" = meta."{c}"' for c in pk_columns])
@@ -2029,7 +2120,7 @@ def sync_table_incremental(
             duck_conn.execute(f"""
                 UPDATE ducklake."{schema}"."{table}" dst
                 SET {set_clause}
-                FROM warehouse."{schema}"."{table}" src
+                FROM {src_relation} src
                 WHERE {pk_join_dst}
                 AND dst._row_hash IS DISTINCT FROM src._row_hash
                 AND EXISTS (
@@ -2056,7 +2147,7 @@ def sync_table_incremental(
             duck_conn.execute(f"""
                 INSERT INTO ducklake."{schema}"."{table}" ({cols_with_hash})
                 SELECT {cols_with_hash}
-                FROM warehouse."{schema}"."{table}" src
+                FROM {src_relation} src
                 WHERE src._row_hash IS NOT NULL
                 AND EXISTS (
                     SELECT 1 FROM _sync_metadata meta
@@ -2115,7 +2206,7 @@ def sync_table_incremental(
                 FROM (
                     SELECT {cols_with_hash},
                            ROW_NUMBER() OVER (PARTITION BY _row_hash ORDER BY _row_hash) as rn
-                    FROM warehouse."{schema}"."{table}" src
+                    FROM {src_relation} src
                     WHERE src._row_hash IS NOT NULL
                     AND EXISTS (
                         SELECT 1 FROM _sync_metadata meta
@@ -2138,13 +2229,14 @@ def sync_table_incremental(
                 f"({rows_inserted/(timing['insert_op']+0.001):.0f} rows/sec)"
             )
     
-    # Cleanup temp table
+    # Cleanup temp tables
     t0 = time.time()
     duck_conn.execute("DROP TABLE IF EXISTS _sync_metadata")
+    duck_conn.execute("DROP TABLE IF EXISTS _sync_changed_rows")
     timing["cleanup"] = time.time() - t0
-    
+
     timing["total"] = time.time() - total_start
-    
+
     # Summary line
     ops_summary = []
     if rows_deleted > 0:
@@ -2613,12 +2705,16 @@ def _ducklake_sync_impl(context: dg.AssetExecutionContext) -> dg.Output[None]:
             },
         )
     
-    # Get worker count (use same logic as row hash computation)
+    # Get worker count (use same logic as row hash computation), but cap it:
+    # each sync worker is a DuckDB connection doing local joins/buffers, so
+    # the Postgres-derived count is an upper bound, not a target.
     pg_conn = get_warehouse_connection()
     try:
         num_workers = get_postgres_worker_count(pg_conn)
     finally:
         pg_conn.close()
+    max_workers = int(os.environ.get("DUCKLAKE_SYNC_MAX_WORKERS", str(DEFAULT_SYNC_MAX_WORKERS)))
+    num_workers = max(1, min(num_workers, max_workers))
     
     # Pre-create all unique schemas to avoid transaction conflicts between workers
     unique_schemas = sorted(set(schema for schema, _ in tables))

@@ -395,42 +395,81 @@ hackatime_replication_config = {
 }
 
 
-def _ensure_hackatime_target_indexes(context: AssetExecutionContext) -> None:
+def _replication_index_specs(
+    replication_config: Mapping[str, Any],
+) -> list[tuple[str, str, tuple[str, ...]]]:
+    """Derive (schema, table, columns) target index specs for a replication
+    config's incremental streams: one index on the primary key (merge upserts)
+    and one on the update key (MAX(update_key) cursor lookups).
+
+    Wildcard streams ("public.*") can't be enumerated statically, so only
+    explicitly listed streams are covered.
+    """
+    defaults = replication_config.get("defaults", {})
+    specs: list[tuple[str, str, tuple[str, ...]]] = []
+    for stream_name, stream_config in replication_config.get("streams", {}).items():
+        if "*" in stream_name:
+            continue
+        merged = {**defaults, **(stream_config or {})}
+        if merged.get("disabled") or merged.get("mode") != "incremental":
+            continue
+
+        source_table = stream_name.split(".", 1)[-1]
+        target = merged.get("object", "").replace("{stream_table}", source_table)
+        if "." not in target:
+            continue
+        schema_name, table_name = target.split(".", 1)
+
+        primary_key = list(merged.get("primary_key") or [])
+        update_key = merged.get("update_key")
+        if primary_key:
+            specs.append((schema_name, table_name, tuple(primary_key)))
+        if update_key and [update_key] != primary_key:
+            specs.append((schema_name, table_name, (update_key,)))
+    return specs
+
+
+def _ensure_incremental_target_indexes(
+    context: AssetExecutionContext,
+    replication_config: Mapping[str, Any],
+) -> None:
     """Keep Sling incremental cursor lookups and merges off full-table scans."""
     warehouse_url = os.getenv("WAREHOUSE_COOLIFY_URL")
     if not warehouse_url:
-        raise ValueError("WAREHOUSE_COOLIFY_URL is required for Hackatime index preflight")
+        raise ValueError("WAREHOUSE_COOLIFY_URL is required for the target index preflight")
 
-    index_specs: list[tuple[str, tuple[str, ...]]] = []
-    for table_name, primary_key in {
-        **_HACKATIME_UPDATED_AT_STREAMS,
-        **_HACKATIME_CREATED_AT_STREAMS,
-    }.items():
-        update_key = "updated_at" if table_name in _HACKATIME_UPDATED_AT_STREAMS else "created_at"
-        index_specs.append((table_name, tuple(primary_key)))
-        index_specs.append((table_name, (update_key,)))
+    index_specs = _replication_index_specs(replication_config)
+    if not index_specs:
+        return
 
     conn = psycopg2.connect(warehouse_url)
     conn.autocommit = True
     try:
         with conn.cursor() as cursor:
-            cursor.execute("CREATE SCHEMA IF NOT EXISTS hackatime")
-            for table_name, columns in index_specs:
-                cursor.execute("SELECT to_regclass(%s)", (f"hackatime.{table_name}",))
+            for schema_name in sorted({schema for schema, _, _ in index_specs}):
+                cursor.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema_name))
+                )
+            for schema_name, table_name, columns in index_specs:
+                cursor.execute(
+                    "SELECT to_regclass(%s)",
+                    (sql.Identifier(schema_name, table_name).as_string(conn),),
+                )
                 if cursor.fetchone()[0] is None:
                     continue
 
-                index_name = _safe_index_name("hackatime", table_name, *columns)
+                index_name = _safe_index_name(schema_name, table_name, *columns)
                 context.log.info(
-                    "Ensuring Hackatime target index %s on %s(%s)",
+                    "Ensuring target index %s on %s.%s(%s)",
                     index_name,
+                    schema_name,
                     table_name,
                     ", ".join(columns),
                 )
                 cursor.execute(
                     sql.SQL("CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {}.{} ({})").format(
                         sql.Identifier(index_name),
-                        sql.Identifier("hackatime"),
+                        sql.Identifier(schema_name),
                         sql.Identifier(table_name),
                         sql.SQL(", ").join(sql.Identifier(column) for column in columns),
                     )
@@ -523,17 +562,14 @@ summer_of_making_2025_replication_config = {
         "public.solid_queue_recurring_tasks": {"disabled": True},
         "public.solid_queue_scheduled_executions": {"disabled": True},
         "public.solid_queue_semaphores": {"disabled": True},
+        # Disabled: ActiveInsights APM telemetry (request timings / job-queue
+        # bookkeeping) from an event that ended in 2025, with no downstream
+        # consumers. At 87M/13M rows they dominated sync cost — the 2026-06-11
+        # warehouse OOM happened mid-COPY of active_insights_jobs. Existing
+        # warehouse data is kept; re-enable if anyone actually needs them.
+        "public.active_insights_requests": {"disabled": True},
+        "public.active_insights_jobs": {"disabled": True},
         # Large tables configured for incremental sync
-        "public.active_insights_requests": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",  # 87M rows
-        },
-        "public.active_insights_jobs": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",  # 8.6M rows
-        },
         "public.vote_changes": {
             "mode": "incremental",
             "primary_key": ["id"],
@@ -1848,7 +1884,7 @@ def hackatime_warehouse_mirror(
 ) -> Nothing:
     """Replicates the entire Hackatime DB → warehouse in a single shot."""
     context.log.info("Starting Hackatime → warehouse Sling replication")
-    _ensure_hackatime_target_indexes(context)
+    _ensure_incremental_target_indexes(context, hackatime_replication_config)
 
     # Iterate through the generator **without yielding** its events.
     for _ in sling.replicate(
@@ -1939,6 +1975,7 @@ def summer_of_making_2025_warehouse_mirror(
 ) -> Nothing:
     """Replicates the entire Summer of Making 2025 DB → warehouse in a single shot."""
     context.log.info("Starting Summer of Making 2025 → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, summer_of_making_2025_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -1961,6 +1998,7 @@ def hackatime_legacy_warehouse_mirror(
 ) -> Nothing:
     """Replicates the entire Hackatime Legacy DB → warehouse in a single shot."""
     context.log.info("Starting Hackatime Legacy → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, hackatime_legacy_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -1983,6 +2021,7 @@ def flavortown_warehouse_mirror(
 ) -> Nothing:
     """Replicates the entire FlavorTown DB → warehouse in a single shot."""
     context.log.info("Starting FlavorTown → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, flavortown_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -2027,6 +2066,7 @@ def blueprint_warehouse_mirror(
 ) -> Nothing:
     """Replicates the entire Blueprint DB → warehouse in a single shot."""
     context.log.info("Starting Blueprint → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, blueprint_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -2049,6 +2089,7 @@ def stasis_warehouse_mirror(
 ) -> Nothing:
     """Replicates the entire Stasis DB → warehouse in a single shot."""
     context.log.info("Starting Stasis → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, stasis_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -2071,6 +2112,7 @@ def fallout_warehouse_mirror(
 ) -> Nothing:
     """Replicates the entire Fallout DB → warehouse in a single shot."""
     context.log.info("Starting Fallout → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, fallout_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -2093,6 +2135,7 @@ def horizons_warehouse_mirror(
 ) -> Nothing:
     """Replicates the entire Horizons DB → warehouse in a single shot."""
     context.log.info("Starting Horizons → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, horizons_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -2203,6 +2246,7 @@ def flavortown_ahoy_warehouse_mirror(
 ) -> Nothing:
     """Replicates FlavorTown Ahoy analytics DB → warehouse with incremental sync."""
     context.log.info("Starting FlavorTown Ahoy → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, flavortown_ahoy_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -2225,6 +2269,7 @@ def stardance_ahoy_warehouse_mirror(
 ) -> Nothing:
     """Replicates Stardance Ahoy analytics DB → warehouse with incremental sync."""
     context.log.info("Starting Stardance Ahoy → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, stardance_ahoy_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -2247,6 +2292,7 @@ def stardance_warehouse_mirror(
 ) -> Nothing:
     """Replicates the main Stardance app DB → warehouse with incremental sync."""
     context.log.info("Starting Stardance → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, stardance_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -2269,6 +2315,7 @@ def hcb_warehouse_mirror(
 ) -> Nothing:
     """Replicates HCB users and user_seen_at_histories → warehouse via SSH tunnel."""
     context.log.info("Starting HCB → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, hcb_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -2362,6 +2409,7 @@ def joe_warehouse_mirror(
 ) -> Nothing:
     """Replicates Joe (fraud case management) DB → warehouse."""
     context.log.info("Starting Joe → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, joe_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -2405,6 +2453,7 @@ def review_warehouse_mirror(
 ) -> Nothing:
     """Replicates the entire Review DB → warehouse in a single shot."""
     context.log.info("Starting Review → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, review_replication_config)
 
     for _ in sling.replicate(
         context=context,
@@ -2427,6 +2476,7 @@ def auth_warehouse_mirror(
 ) -> Nothing:
     """Replicates Auth DB tables → warehouse with explicit column selection."""
     context.log.info("Starting Auth → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, auth_replication_config)
 
     for _ in sling.replicate(
         context=context,
