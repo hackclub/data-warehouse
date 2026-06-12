@@ -894,26 +894,58 @@ hackatime_matches AS (
         AND (w.end_at_exclusive IS NULL OR hd.activity_hour < w.end_at_exclusive)
 ),
 
--- Custom hours, bounded to each program's run window
+-- Custom hours, bounded to each program's run window.
+--
+-- 24h/user-day cap on self-reported time (audited 2026-06-12): none of the
+-- source apps except blueprint enforce a server-side ceiling on duration
+-- fields, so each (program, user, UTC day) is proportionally rescaled to a
+-- 24h total here, extending the blueprint precedent to every custom path
+-- (blueprint additionally keeps its own per-entry cap upstream; for the
+-- program-day totals the two are equivalent — only intra-day project
+-- attribution differs). Measured share of custom hours above 24h/user-day
+-- at adoption: flavortown 4.7% (4,262 of 90,548h; worst user-day 590h),
+-- stack 7.0% (25 of 351h), stasis 2.1% (477 of 22,549h), stardance 1.2%
+-- (154 of 12,357h), offtrack and blueprint 0%; milkyway joined later with
+-- its own upstream 24h guards and is covered here too. Real multi-day banked
+-- entries and fabricated claims are indistinguishable here, so both are
+-- truncated to 24h on the posting day (same trade-off blueprint documents).
+-- DAU is unaffected by the cap. The cap applies per logging path: a user-day
+-- can still exceed 24h when a program counts hackatime AND custom time
+-- (different sources, deliberately not netted against each other).
 custom_in_window AS (
     SELECT
-        c.activity_hour,
-        (c.activity_hour AT TIME ZONE 'UTC')::date AS activity_date,
-        c.program_name, c.user_email, c.project_name, c.code_url,
-        c.raw_hours_logged, c.logging_method, c.source_detail
+        activity_hour,
+        activity_date,
+        program_name, user_email, project_name, code_url,
+        CASE WHEN day_total_hours > 24
+             THEN ROUND((raw_hours_logged * 24 / day_total_hours)::numeric, 4)
+             ELSE raw_hours_logged
+        END AS raw_hours_logged,
+        logging_method, source_detail
     FROM (
-        SELECT * FROM stardance_custom_hourly
-        UNION ALL SELECT * FROM flavortown_custom_hourly
-        UNION ALL SELECT * FROM stack_custom_hourly
-        UNION ALL SELECT * FROM offtrack_custom_hourly
-        UNION ALL SELECT * FROM stasis_custom_hourly
-        UNION ALL SELECT * FROM blueprint_custom_hourly
-        UNION ALL SELECT * FROM milkyway_custom_hourly
-    ) c
-    JOIN program_windows w
-        ON w.program_name = c.program_name
-        AND c.activity_hour >= w.start_at
-        AND (w.end_at_exclusive IS NULL OR c.activity_hour < w.end_at_exclusive)
+        SELECT
+            c.activity_hour,
+            (c.activity_hour AT TIME ZONE 'UTC')::date AS activity_date,
+            c.program_name, c.user_email, c.project_name, c.code_url,
+            c.raw_hours_logged, c.logging_method, c.source_detail,
+            SUM(c.raw_hours_logged) OVER (
+                PARTITION BY c.program_name, c.user_email,
+                             (c.activity_hour AT TIME ZONE 'UTC')::date
+            ) AS day_total_hours
+        FROM (
+            SELECT * FROM stardance_custom_hourly
+            UNION ALL SELECT * FROM flavortown_custom_hourly
+            UNION ALL SELECT * FROM stack_custom_hourly
+            UNION ALL SELECT * FROM offtrack_custom_hourly
+            UNION ALL SELECT * FROM stasis_custom_hourly
+            UNION ALL SELECT * FROM blueprint_custom_hourly
+            UNION ALL SELECT * FROM milkyway_custom_hourly
+        ) c
+        JOIN program_windows w
+            ON w.program_name = c.program_name
+            AND c.activity_hour >= w.start_at
+            AND (w.end_at_exclusive IS NULL OR c.activity_hour < w.end_at_exclusive)
+    ) windowed
 ),
 
 -- ============================================================
