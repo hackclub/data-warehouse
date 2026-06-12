@@ -40,7 +40,8 @@ methodology_labels AS (
 program_labels AS (
     SELECT * FROM (VALUES
         ('summer_of_making', 'Summer of Making'),
-        ('hack_club_the_game', 'Hack Club: The Game')
+        ('hack_club_the_game', 'Hack Club: The Game'),
+        ('athena_award', 'Athena Award')
     ) AS t(program_name, program_label)
 )
 

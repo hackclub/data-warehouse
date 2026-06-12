@@ -12,8 +12,10 @@
 WITH source_info AS (
     SELECT * FROM (VALUES
         ('hackatime', 'shared activity source', NULL::date),
+        ('athena_award', 'program db', DATE '2025-05-21'),
         ('summer_of_making', 'program db', DATE '2025-06-16'),
         ('shipwrecked', 'program db', DATE '2025-05-28'),
+        ('siege', 'program db', DATE '2025-08-31'),
         ('blueprint', 'program db', DATE '2025-09-23'),
         ('flavortown', 'program db', DATE '2025-12-24'),
         ('hack_club_the_game', 'program db', DATE '2026-01-16'),
@@ -150,6 +152,13 @@ source_updates AS (
         SELECT MAX(updated_at)::timestamptz FROM {{ source('summer_of_making_2025', 'projects') }}
     ) s
 
+    -- Athena Award ended ~2026-02 and its backend is the Airtable base itself
+    -- (no app db), so base rows no longer change; the dlt load time is the
+    -- mirror-freshness signal instead.
+    UNION ALL
+    SELECT 'athena_award', MAX(inserted_at)::timestamptz
+    FROM {{ source('airtable_athena_award', '_dlt_loads') }}
+
     -- Shipwrecked ended 2025-09-03, but the app is still live and its mirror
     -- still syncs, so these timestamps reflect mirror freshness (not program
     -- activity). Project has no timestamp columns, so links stand in for it.
@@ -159,6 +168,16 @@ source_updates AS (
         SELECT MAX("updatedAt")::timestamptz AS last_updated_at FROM {{ source('shipwrecked_the_bay', 'User') }}
         UNION ALL
         SELECT MAX("createdAt")::timestamptz FROM {{ source('shipwrecked_the_bay', 'HackatimeProjectLink') }}
+    ) s
+
+    -- Siege ended ~2026-04-07, but its app still touches user rows daily, so
+    -- like SoM this reflects mirror freshness rather than program activity.
+    UNION ALL
+    SELECT 'siege', MAX(last_updated_at)
+    FROM (
+        SELECT MAX(updated_at)::timestamptz AS last_updated_at FROM {{ source('siege', 'users') }}
+        UNION ALL
+        SELECT MAX(updated_at)::timestamptz FROM {{ source('siege', 'projects') }}
     ) s
 )
 
