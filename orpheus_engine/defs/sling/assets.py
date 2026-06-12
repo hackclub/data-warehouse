@@ -75,6 +75,7 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "OFFTRACK_COOLIFY_URL",
     "MACONDO_COOLIFY_URL",
     "BEEST_COOLIFY_URL",
+    "SIEGE_COOLIFY_URL",
     "WAREHOUSE_COOLIFY_URL",
 ]
 
@@ -198,6 +199,12 @@ beest_db_connection = SlingConnectionResource(
     connection_string=EnvVar("BEEST_COOLIFY_URL"),
 )
 
+siege_db_connection = SlingConnectionResource(
+    name="SIEGE_DB",
+    type="postgres",
+    connection_string=EnvVar("SIEGE_COOLIFY_URL"),
+)
+
 review_db_connection = SlingConnectionResource(
     name="REVIEW_DB",
     type="postgres",
@@ -280,6 +287,7 @@ sling_replication_resource = SlingResource(
         offtrack_db_connection,
         macondo_db_connection,
         beest_db_connection,
+        siege_db_connection,
         review_db_connection,
         joe_db_connection,
         auth_db_connection,
@@ -1769,6 +1777,131 @@ beest_replication_config = {
     },
 }
 
+# --- Siege Database Replication Configuration ---
+# Siege (siege.hackclub.com) is a finished YSWS program (ran ~2025-08-31 to
+# ~2026-04-07): Rails app, Slack-OAuth sign-in. The DB lives on Coolify worker
+# "a" (project olive-at-siege, database id 5685); Coolify never published a
+# host port for it, so the warehouse reaches it through an nginx stream proxy
+# on 100.80.243.122:8543 (see /opt/siege-warehouse-proxy on that host — replace
+# with Coolify's own "publicly available" proxy on the same port when possible).
+# The program is over, so this is effectively a one-time mirror; incremental
+# keys keep the scheduled run cheap anyway.
+siege_replication_config = {
+    "source": "SIEGE_DB",
+    "target": "WAREHOUSE_DB",
+
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "siege.{stream_table}",
+    },
+
+    "streams": {
+        "public.*": None,
+
+        # --- Incremental: id + updated_at ---
+        "public.addresses": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.ballots": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.global_bets": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.hackatime_days": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.meeple_cosmetics": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.meeples": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.personal_bets": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.projects": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.shop_purchases": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.user_weeks": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.votes": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.users": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+            # Siege has no token/credential/otp columns anywhere (Slack OAuth
+            # only, verified against information_schema 2026-06-12); the list
+            # pins today's columns so future app migrations can't leak secrets.
+            "select": [
+                "id", "slack_id", "email", "name", "team_id", "team_name",
+                "created_at", "updated_at", "is_admin", "rank", "coins",
+                "status", "idv_rec", "referrer_id", "main_device",
+                "display_name", "audit_logs", "on_fraud_team",
+                "ruby_unlocked", "emerald_unlocked", "amethyst_unlocked",
+                "current_runes",
+            ],
+        },
+
+        # --- Incremental: append-only with created_at ---
+        "public.active_storage_attachments": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+        "public.active_storage_blobs": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+
+        # --- Disabled: Rails/queue infrastructure tables ---
+        "public.schema_migrations": {"disabled": True},
+        "public.ar_internal_metadata": {"disabled": True},
+        "public.solid_cache_entries": {"disabled": True},
+        "public.solid_queue_blocked_executions": {"disabled": True},
+        "public.solid_queue_claimed_executions": {"disabled": True},
+        "public.solid_queue_failed_executions": {"disabled": True},
+        "public.solid_queue_jobs": {"disabled": True},
+        "public.solid_queue_pauses": {"disabled": True},
+        "public.solid_queue_processes": {"disabled": True},
+        "public.solid_queue_ready_executions": {"disabled": True},
+        "public.solid_queue_recurring_executions": {"disabled": True},
+        "public.solid_queue_recurring_tasks": {"disabled": True},
+        "public.solid_queue_semaphores": {"disabled": True},
+        "public.pg_stat_statements": {"disabled": True},
+        "public.pg_stat_statements_info": {"disabled": True},
+    },
+}
+
 # --- HCB Database Replication Configuration ---
 # For calculating monthly actives and transaction ledger
 hcb_replication_config = {
@@ -2228,6 +2361,29 @@ def beest_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=beest_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+@dg.asset(
+    name="siege_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def siege_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the entire Siege DB → warehouse in a single shot."""
+    context.log.info("Starting Siege → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, siege_replication_config)
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=siege_replication_config,
     ):
         pass
 
