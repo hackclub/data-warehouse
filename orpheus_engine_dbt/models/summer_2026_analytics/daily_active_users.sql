@@ -25,6 +25,11 @@
 --   + journal_seconds).
 --   fallout (hardware) logs time via build timelapses (lookout + lapse, duration>0)
 --   and devlog journals. Ships are intentionally not counted as DAU.
+--   highway (hardware, Summer 2025) kept journals as JOURNAL.md files in each
+--   submitted GitHub repo, so daily activity = commit days on the submitted
+--   repos (highway_github scrape + the program's Airtable submissions in
+--   airtable_raw_all_bases). DAU only — commits carry no durations, so highway
+--   has no hours series.
 --
 -- PROGRAM STATUS:
 --   active here : stardance, flavortown (historical baseline), fallout, macondo,
@@ -48,6 +53,12 @@
 --                 methodology via the program's Airtable base (its app's
 --                 backend); see summer_unified_time_log for why the banked
 --                 hackatime_duration/approved_duration are not used.
+--                 highway — Highway 2025 (submissions 2025-05 to 2025-11,
+--                 Undercity event 2025-07-11..14), included for the
+--                 year-over-year comparison. GitHub-commit-day methodology
+--                 (see highway_dau below); only ~37% of submissions were
+--                 linkable to Hackatime projects, so the Hackatime path would
+--                 have undercounted ~2x.
 --   STALE SOURCE: horizons — app mirror has not refreshed since 2026-05-12, so
 --                 DAU is limited to Hackatime claims already present there.
 --
@@ -125,12 +136,69 @@ fallout_dau AS (
     GROUP BY 1, activity_date
 ),
 
+-- Highway (hardware, Summer 2025): journals were JOURNAL.md files committed to
+-- each submitted GitHub repo, so a participant's daily activity trace is the
+-- commit history of their submitted repos (highway_github backfill scrape).
+-- QUALITY CONTROLS (audited 2026-06-12):
+--   * 'Purged' submissions excluded — the program's purge bin holds duplicates,
+--     all-AI journals, and fraud (123 of 1,692 submissions, 88 emails; 51 of
+--     those emails also have legit Fulfilled projects, which still count).
+--     Rejected submissions are kept: rejection was quality review (bad README,
+--     BOM issues), not a fraud signal, and the build activity was real.
+--   * A commit day credits the SUBMITTER(S) of the repo, not the commit author:
+--     commit author emails/logins are unreliable (noreply addresses) and team
+--     projects were submitted per-member. Identity = normalized email.
+--   * Window 2025-05-01 .. 2025-11-01 (exclusive): submissions span 2025-05 to
+--     2025-11 (peak Jul, Undercity 2025-07-11..14); later unified-db approvals
+--     are review lag, not activity. Commits outside the window (repos predating
+--     or outliving the program) are not Highway activity.
+highway_norm AS (
+    SELECT
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(r.fields->>'Email'))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '@', 2)
+             ELSE NULLIF(SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '+', 1), '')
+        END AS user_email,
+        LOWER((REGEXP_MATCH(r.fields->>'Github_Url',
+                            'github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)'))[1])
+        || '/' ||
+        REGEXP_REPLACE(
+            LOWER((REGEXP_MATCH(r.fields->>'Github_Url',
+                                'github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)'))[2]),
+            '\.git$', '') AS repo_key
+    FROM {{ source('airtable_raw_all_bases', 'records') }} r
+    WHERE r.base_id = 'appuDQSHCdCHyOrxw'
+      AND r.table_id = 'tbl9QnZ320NTGJHJj'          -- Highway Projects table
+      AND COALESCE(r.fields->>'Status', '') <> 'Purged'
+      AND r.fields->>'Github_Url' ~* 'github\.com/'
+),
+
+highway_dau AS (
+    SELECT
+        'highway'::text AS program_name,
+        (c.authored_at AT TIME ZONE 'UTC')::date AS activity_date,
+        COUNT(DISTINCT h.user_email) AS dau,
+        'github_commit_days'::text AS dau_methodology
+    FROM highway_norm h
+    JOIN {{ source('highway_github', 'repos') }} gr
+        ON gr.repo_key = h.repo_key
+        AND gr.scrape_status = 'ok'
+    JOIN {{ source('highway_github', 'commits') }} c ON c.repo_key = h.repo_key
+    WHERE h.user_email IS NOT NULL
+      AND (c.authored_at AT TIME ZONE 'UTC') <= NOW()
+      AND (c.authored_at AT TIME ZONE 'UTC')::date >= DATE '2025-05-01'
+      AND (c.authored_at AT TIME ZONE 'UTC')::date < DATE '2025-11-01'
+    GROUP BY 1, 2
+),
+
 combined AS (
     SELECT program_name, activity_date, dau, dau_methodology FROM coding_dau
     UNION ALL
     SELECT program_name, activity_date, dau, dau_methodology FROM macondo_dau
     UNION ALL
     SELECT program_name, activity_date, dau, dau_methodology FROM fallout_dau
+    UNION ALL
+    SELECT program_name, activity_date, dau, dau_methodology FROM highway_dau
 )
 
 SELECT program_name, activity_date, dau, dau_methodology

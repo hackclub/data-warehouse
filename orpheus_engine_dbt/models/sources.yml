@@ -432,3 +432,17 @@ sources:
       - name: records
         description: "Raw Airtable records from all bases (base_id, table_id, record_id, fields JSONB)."
         meta: { dagster: { deps: ['airtable_raw_all_bases_sync'] } }
+
+  - name: highway_github
+    schema: highway_github
+    description: >
+      One-time gh-proxy backfill of commit history for Highway-submitted GitHub
+      repos (Highway ended Oct 2025; its journals are JOURNAL.md files in the
+      repos, so commits are the only daily-grained activity trace).
+    tables:
+      - name: commits
+        description: "One row per (repo_key, sha): authored_at/committed_at, author_login/email, message_head."
+        meta: { dagster: { deps: ['highway_github_commits'] } }
+      - name: repos
+        description: "One row per scraped repo with scrape_status (ok/not_found/empty/error) and commit_count."
+        meta: { dagster: { deps: ['highway_github_commits'] } }

@@ -17,6 +17,7 @@ import orpheus_engine.defs.ysws_programs_sync.definitions as ysws_programs_sync_
 import orpheus_engine.defs.airtable_audit_logs.definitions as airtable_audit_logs_defs
 import orpheus_engine.defs.airtable_users.definitions as airtable_users_defs
 import orpheus_engine.defs.zoom.definitions as zoom_defs
+import orpheus_engine.defs.highway_github.definitions as highway_github_defs
 import orpheus_engine.schedules as schedules
 
 from orpheus_engine.defs.shared.airtable_enterprise import AirtableEnterpriseResource
@@ -55,6 +56,7 @@ def _build_definitions() -> dg.Definitions:
         airtable_audit_logs_defs.defs,
         airtable_users_defs.defs,
         zoom_defs.defs,
+        highway_github_defs.defs,
         schedules.defs,
         dg.Definitions(assets=[analytics_hack_clubbers]),
         dg.Definitions(resources={

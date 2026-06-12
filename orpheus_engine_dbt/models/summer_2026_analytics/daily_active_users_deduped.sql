@@ -64,12 +64,52 @@ fallout_active_users AS (
     WHERE j.discarded_at IS NULL AND (j.created_at AT TIME ZONE 'UTC') <= NOW()
 ),
 
+-- Highway: commit days on submitted repos; see daily_active_users.highway_dau
+-- for the methodology and quality-control audit.
+highway_norm AS (
+    SELECT
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(r.fields->>'Email'))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '@', 2)
+             ELSE NULLIF(SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '+', 1), '')
+        END AS user_key,
+        LOWER((REGEXP_MATCH(r.fields->>'Github_Url',
+                            'github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)'))[1])
+        || '/' ||
+        REGEXP_REPLACE(
+            LOWER((REGEXP_MATCH(r.fields->>'Github_Url',
+                                'github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)'))[2]),
+            '\.git$', '') AS repo_key
+    FROM {{ source('airtable_raw_all_bases', 'records') }} r
+    WHERE r.base_id = 'appuDQSHCdCHyOrxw'
+      AND r.table_id = 'tbl9QnZ320NTGJHJj'
+      AND COALESCE(r.fields->>'Status', '') <> 'Purged'
+      AND r.fields->>'Github_Url' ~* 'github\.com/'
+),
+
+highway_active_users AS (
+    SELECT DISTINCT
+        (c.authored_at AT TIME ZONE 'UTC')::date AS activity_date,
+        h.user_key
+    FROM highway_norm h
+    JOIN {{ source('highway_github', 'repos') }} gr
+        ON gr.repo_key = h.repo_key
+        AND gr.scrape_status = 'ok'
+    JOIN {{ source('highway_github', 'commits') }} c ON c.repo_key = h.repo_key
+    WHERE h.user_key IS NOT NULL
+      AND (c.authored_at AT TIME ZONE 'UTC') <= NOW()
+      AND (c.authored_at AT TIME ZONE 'UTC')::date >= DATE '2025-05-01'
+      AND (c.authored_at AT TIME ZONE 'UTC')::date < DATE '2025-11-01'
+),
+
 all_active_users AS (
     SELECT activity_date, user_key FROM coding_active_users
     UNION ALL
     SELECT activity_date, user_key FROM macondo_active_users
     UNION ALL
     SELECT activity_date, user_key FROM fallout_active_users
+    UNION ALL
+    SELECT activity_date, user_key FROM highway_active_users
 )
 
 SELECT

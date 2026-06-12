@@ -10,6 +10,10 @@
 -- Coding/work-session programs use credited_hours_logged from the unified time
 -- log so overlapping Hackatime sessions are split consistently with DAU.
 -- Macondo and Fallout use their program-native daily activity/timelapse sources.
+-- Highway is intentionally ABSENT: its DAU is GitHub-commit-day based (commits
+-- carry no durations), and the only duration data is reviewer-approved totals
+-- (no daily grain) plus a ~37%-coverage Hackatime linkage that would understate
+-- hours ~2x. The dashboard mart COALESCEs missing hours to 0.
 -- Current date is excluded because same-day data is incomplete.
 
 WITH coding_hours AS (

@@ -32,7 +32,8 @@ methodology_labels AS (
         ('hackatime_time', 'Hackatime time'),
         ('custom_time', 'Custom time'),
         ('daily_project_activity_time', 'Daily project activity time'),
-        ('hardware_build_time_and_journals', 'Hardware build time + journals')
+        ('hardware_build_time_and_journals', 'Hardware build time + journals'),
+        ('github_commit_days', 'GitHub commit days')
     ) AS t(dau_methodology, dau_methodology_label)
 ),
 

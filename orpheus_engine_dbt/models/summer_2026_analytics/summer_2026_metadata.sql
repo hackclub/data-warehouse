@@ -13,6 +13,7 @@ WITH source_info AS (
     SELECT * FROM (VALUES
         ('hackatime', 'shared activity source', NULL::date),
         ('athena_award', 'program db', DATE '2025-05-21'),
+        ('highway', 'program db', DATE '2025-05-01'),
         ('summer_of_making', 'program db', DATE '2025-06-16'),
         ('shipwrecked', 'program db', DATE '2025-05-28'),
         ('siege', 'program db', DATE '2025-08-31'),
@@ -141,6 +142,17 @@ source_updates AS (
         SELECT MAX(updated_at)::timestamptz FROM {{ source('hack_club_the_game', 'hackatime_projects') }}
     ) s
 
+    -- Highway ended Oct 2025; highway_github is a one-time commit backfill, so
+    -- _synced_at is the scrape time and will read stale forever — expected for
+    -- an ended program (the data is complete, not fresh).
+    UNION ALL
+    SELECT 'highway', MAX(last_updated_at)
+    FROM (
+        SELECT MAX(_synced_at)::timestamptz AS last_updated_at FROM {{ source('highway_github', 'commits') }}
+        UNION ALL
+        SELECT MAX(_synced_at)::timestamptz FROM {{ source('highway_github', 'repos') }}
+    ) s
+
     -- SoM 2025 ended 2025-10-02, but the app is still live and its mirror still
     -- syncs, so users/projects updated_at reflects mirror freshness (not
     -- program activity).
@@ -190,6 +202,9 @@ SELECT
     ROUND(EXTRACT(EPOCH FROM (NOW() - su.last_source_updated_at)) / 3600.0, 1) AS source_age_hours,
     CASE
         WHEN su.last_source_updated_at IS NULL THEN 'unknown'
+        -- Highway ended Oct 2025 and is intentionally a one-time complete
+        -- backfill; its scrape timestamp should not age into a stale alert.
+        WHEN si.program_name = 'highway' THEN 'fresh'
         WHEN si.program_name = 'hackatime' AND su.last_source_updated_at < NOW() - INTERVAL '6 hours' THEN 'stale'
         WHEN si.program_name = 'hackatime' AND su.last_source_updated_at < NOW() - INTERVAL '2 hours' THEN 'lagging'
         WHEN su.last_source_updated_at < NOW() - INTERVAL '24 hours' THEN 'stale'
