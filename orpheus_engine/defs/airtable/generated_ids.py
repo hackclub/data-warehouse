@@ -1068,7 +1068,7 @@ class AirtableIDs:
             ysws_project_mentions_search_count_copy = "fldVWfSMP96VleXl8"  # Name: YSWS Project Mentions - Search Count copy
             ysws_project_mentions_weighted_points = "fldN3VPUTdSfyVKto"  # Name: YSWS Project Mentions - Weighted Points
             ysws_project_mentions_top_link = "fldIHnuBrUEYNFVx5"  # Name: YSWS Project Mentions - Top Link
-            state = "fldgsPC2LkkyEKuN9"  # Name: State 
+            state = "fldgsPC2LkkyEKuN9"  # Name: State
             county_centralizing = "fldrfz7xswIhgu5Zz"  # Name: County - Centralizing
             email_trimmed_lowercased = "fldCUQu9gZIGzg10T"  # Name: Email - Trimmed & Lowercased
             ysws_name_lookup = "fldhFBOAZifRQi81p"  # Name: YSWS Name - Lookup
