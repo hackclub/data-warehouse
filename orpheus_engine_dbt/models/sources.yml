@@ -380,6 +380,22 @@ sources:
         description: "DLT load metadata for tracking Athena Award sync times."
         meta: { dagster: { deps: ['athena_award_projects_warehouse'] } }
 
+  - name: airtable_milkyway
+    schema: airtable_milkyway
+    tables:
+      - name: projects
+        description: "Milkyway projects; hackatime_projects is a comma-separated list of the user's Hackatime alias names, counting_from is the app's claim-start marker, hackatime_hours/total_hours are banked snapshot totals."
+        meta: { dagster: { deps: ['milkyway_projects_warehouse'] } }
+      - name: users
+        description: "Milkyway users with email and is_banned."
+        meta: { dagster: { deps: ['milkyway_users_warehouse'] } }
+      - name: artlog
+        description: "Milkyway art-time logs: self-reported hours per project with reviewer-approved approved_hours."
+        meta: { dagster: { deps: ['milkyway_artlog_warehouse'] } }
+      - name: _dlt_loads
+        description: "DLT load metadata for tracking Milkyway sync times."
+        meta: { dagster: { deps: ['milkyway_projects_warehouse'] } }
+
   - name: airtable_sleepover
     schema: airtable_sleepover
     tables:
