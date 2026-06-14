@@ -14,6 +14,12 @@
 -- carry no durations), and the only duration data is reviewer-approved totals
 -- (no daily grain) plus a ~37%-coverage Hackatime linkage that would understate
 -- hours ~2x. The dashboard mart COALESCEs missing hours to 0.
+-- Neighborhood, Construct, and Shiba are included through the unified log:
+-- Neighborhood via Hackatime alias claims, Construct via capped devlog minutes,
+-- Shiba via capped Airtable creator posts + logged-in play telemetry, and
+-- Midnight via Hackatime alias claims. Horizons uses the unified log before
+-- its app-native daily rollup begins on 2026-04-22, then qualified
+-- user_daily_activity seconds from there.
 -- Current date is excluded because same-day data is incomplete.
 
 WITH coding_hours AS (
@@ -22,6 +28,8 @@ WITH coding_hours AS (
         (activity_hour AT TIME ZONE 'UTC')::date AS activity_date,
         SUM(credited_hours_logged)::numeric AS hours_logged
     FROM {{ ref('summer_unified_time_log') }}
+    WHERE program_name <> 'horizons'
+       OR (activity_hour AT TIME ZONE 'UTC')::date < DATE '2026-04-22'
     GROUP BY 1, 2
 ),
 
@@ -35,6 +43,19 @@ macondo_hours AS (
       AND dpa.day::date >= DATE '2026-03-23'
       AND dpa.day::date < CURRENT_DATE
     GROUP BY 1, 2
+),
+
+horizons_hours AS (
+    SELECT
+        'horizons'::text AS program_name,
+        uda.local_date::date AS activity_date,
+        SUM(uda.seconds)::numeric / 3600.0 AS hours_logged
+    FROM {{ source('horizons', 'user_daily_activity') }} uda
+    WHERE uda.local_date::date >= DATE '2026-04-22'
+      AND uda.local_date::date < CURRENT_DATE
+      AND uda.qualified
+      AND uda.seconds > 0
+    GROUP BY 1, uda.local_date::date
 ),
 
 fallout_hours AS (
@@ -78,6 +99,8 @@ combined AS (
     SELECT program_name, activity_date, hours_logged FROM coding_hours
     UNION ALL
     SELECT program_name, activity_date, hours_logged FROM macondo_hours
+    UNION ALL
+    SELECT program_name, activity_date, hours_logged FROM horizons_hours
     UNION ALL
     SELECT program_name, activity_date, hours_logged FROM fallout_hours
 )

@@ -299,6 +299,25 @@ sources:
       - name: user_sessions
         description: "Horizons app user sessions, used as an app mirror freshness signal."
         meta: { dagster: { deps: ['horizons_warehouse_mirror'] } }
+      - name: user_daily_activity
+        description: "Horizons per-user local-date activity rollup with seconds and qualified flag."
+        meta: { dagster: { deps: ['horizons_warehouse_mirror'] } }
+
+  - name: midnight
+    schema: midnight
+    tables:
+      - name: users
+        description: "Midnight users with email, Slack ID, Hackatime linkage, and fraud flags."
+        meta: { dagster: { deps: ['midnight_warehouse_mirror'] } }
+      - name: projects
+        description: "Midnight projects with now_hackatime_projects array, repo_url, and is_fraud flag."
+        meta: { dagster: { deps: ['midnight_warehouse_mirror'] } }
+      - name: submissions
+        description: "Midnight review submissions with approval_status and approved_hours banked totals."
+        meta: { dagster: { deps: ['midnight_warehouse_mirror'] } }
+      - name: user_sessions
+        description: "Midnight app user sessions, used as a freshness signal."
+        meta: { dagster: { deps: ['midnight_warehouse_mirror'] } }
 
   - name: blueprint
     schema: blueprint
@@ -347,6 +366,33 @@ sources:
       - name: projects
         description: "Siege projects with hackatime_projects JSON alias array, repo_url, and fraud_status spot-check verdicts."
         meta: { dagster: { deps: ['siege_warehouse_mirror'] } }
+
+  - name: construct
+    schema: construct
+    quoting:
+      identifier: true
+    tables:
+      - name: user
+        description: "Construct users with Slack ID and trust fields; token columns excluded from the Sling mirror."
+        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+      - name: project
+        description: "Construct projects with URLs and review/submission status."
+        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+      - name: devlog
+        description: "Construct devlogs with timeSpent minutes, used for custom daily activity."
+        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+      - name: ship
+        description: "Construct ship events, used for source freshness and validation."
+        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+      - name: legion_review
+        description: "Construct Legion review actions, used for freshness and quality checks."
+        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+      - name: t1_review
+        description: "Construct T1 review actions, used for quality checks."
+        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+      - name: t2_review
+        description: "Construct T2 review actions, used for quality checks."
+        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
 
   - name: hack_club_the_game
     schema: hack_club_the_game
@@ -414,6 +460,19 @@ sources:
       - name: _dlt_loads
         description: "DLT load metadata for tracking sleepover sync times."
         meta: { dagster: { deps: ['dlt_airtable_sleepover'] } }
+
+  - name: airtable_neighborhood
+    schema: airtable_neighborhood
+    tables:
+      - name: hackatime_projects
+        description: "Neighborhood Airtable Hackatime project alias rows, linked to neighbors."
+        meta: { dagster: { deps: ['neighborhood_hackatime_projects_warehouse'] } }
+      - name: neighbors
+        description: "Neighborhood Airtable participant records."
+        meta: { dagster: { deps: ['neighborhood_neighbors_warehouse'] } }
+      - name: _dlt_loads
+        description: "DLT load metadata for tracking Neighborhood sync times."
+        meta: { dagster: { deps: ['neighborhood_hackatime_projects_warehouse'] } }
 
   - name: unified_ysws
     schema: airtable_unified_ysws_projects_db

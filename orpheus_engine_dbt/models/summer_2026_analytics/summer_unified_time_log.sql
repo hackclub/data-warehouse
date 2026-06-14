@@ -23,9 +23,14 @@
 --   athena_award — Athena Award (girls-focused, ran ~2025-05-21 to 2026-02,
 --                Airtable-backed app), kept for the year-over-year
 --                historical comparison.
+--   neighborhood — Neighborhood 2025 (ran ~2025-05 to 2025-07), kept for
+--                the year-over-year historical comparison.
 --   blueprint  — hardware/PCB program (ongoing, launched ~2025-09-23).
 --   hack_club_the_game — gamified ship-anything program (ongoing, beta opened
 --                ~2026-01-16, first public approvals 2026-02-17).
+--   construct  — 3D/modeling program (ongoing, app activity began 2025-12).
+--   shiba      — game-making program (ran ~2025-08 to 2026-02), Airtable-backed.
+--   midnight   — game-making program (ran ~2025-11 to 2026-04), Hackatime-backed.
 --   stack, offtrack, beest, stasis, horizons — public Summer 2026 programs
 --                with coding/work-session activity in their own app mirrors.
 --   sleepover  — Airtable-backed program (ongoing, launched ~2026-01-16);
@@ -34,7 +39,8 @@
 -- Sources per program:
 --   Hackatime coding — global hackatime heartbeats, attributed to a program by
 --                      the user's claimed project alias (user_hackatime_projects).
---   Custom logging   — post_devlogs.duration_seconds.
+--   Custom logging   — program-native devlogs, journals, creator posts, and
+--                      activity telemetry where those are the daily source.
 --
 -- DEDUP (equal split), inspired by spring:
 --   If the same coding hour is claimed by multiple programs — either because the
@@ -70,8 +76,12 @@ WITH program_windows AS (
                        NULL::timestamptz),
         ('stasis',     TIMESTAMP WITH TIME ZONE '2026-03-03 00:00:00+00',
                        TIMESTAMP WITH TIME ZONE '2026-07-01 00:00:00+00'),
+        -- Horizons uses Hackatime claims only until its app-native daily
+        -- activity rollup begins. Closing this unified-log window also keeps
+        -- old Horizons Hackatime claims from splitting live programs after the
+        -- daily_user_activity handoff.
         ('horizons',   TIMESTAMP WITH TIME ZONE '2026-02-22 00:00:00+00',
-                       NULL::timestamptz),
+                       TIMESTAMP WITH TIME ZONE '2026-04-22 00:00:00+00'),
         -- First projects 2026-01-16 (13 created launch day; spring used the
         -- 01-20 public launch, but the earlier wave is real participants).
         -- Still running: YSWS submissions through 2026-06-11, projects still
@@ -128,13 +138,39 @@ WITH program_windows AS (
         -- required: the site is still up (signups continue into June) and
         -- aliases never unclaim.
         ('milkyway',   TIMESTAMP WITH TIME ZONE '2025-10-07 00:00:00+00',
-                       TIMESTAMP WITH TIME ZONE '2026-05-02 00:00:00+00')
+                       TIMESTAMP WITH TIME ZONE '2026-05-02 00:00:00+00'),
+        -- Neighborhood's Airtable Hackatime project rows start 2025-05-02;
+        -- attributed Hackatime is concentrated May-Jul 2025 (23.9k hours),
+        -- then collapses to a dead-claim tail (577h in Aug, <300h/month
+        -- after). Unified-YSWS approvals run 2025-06-17..2025-07-29. CLOSED
+        -- window required so never-unclaimed aliases do not split current
+        -- programs.
+        ('neighborhood', TIMESTAMP WITH TIME ZONE '2025-05-01 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2025-08-01 00:00:00+00'),
+        -- Construct app activity begins 2025-12-02 (users/projects) and
+        -- devlogs begin 2025-12-04; unified-YSWS approvals run through
+        -- 2026-06 and the app is still active, so this window is open.
+        ('construct',  TIMESTAMP WITH TIME ZONE '2025-12-02 00:00:00+00',
+                       NULL::timestamptz),
+        -- Shiba creator posts start 2025-08-18, unified-YSWS approvals run
+        -- 2025-09-26..2025-12-01, creator posts fade after 2025-10, and the
+        -- final logged-in play heartbeat is 2026-02-12. CLOSED historical
+        -- window prevents old game pages/play telemetry from reviving Shiba.
+        ('shiba',      TIMESTAMP WITH TIME ZONE '2025-08-18 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2026-02-13 00:00:00+00'),
+        -- Midnight project rows start 2025-11-05, approvals run
+        -- 2025-11-17..2026-04-21, and the app has no native daily activity
+        -- table. CLOSED window prevents never-unclaimed aliases from crediting
+        -- old Midnight claims after the program ended.
+        ('midnight',   TIMESTAMP WITH TIME ZONE '2025-11-05 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2026-04-22 00:00:00+00')
         -- This model is the CREDITED-HOURS log (Hackatime + devlog/journal) for
         -- coding programs. Separate, daily-grained programs live in
         -- daily_active_users: fallout (ship-based) and macondo (its own
         -- daily_project_activity rollup).
-        -- Horizons' app mirror is currently stale, so this only includes
-        -- Hackatime claims already present in the mirror.
+        -- Horizons keeps Hackatime claims here for pre-2026-04-22 history;
+        -- daily_active_users/daily_hours switch to app-native
+        -- user_daily_activity from 2026-04-22 onward.
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -164,6 +200,15 @@ hackatime_hourly AS (
       AND hpa.hackatime_hours > 0
       AND hpa.activity_time <= NOW()
     GROUP BY 1, 2, 3
+),
+
+-- Shared Hackatime user id -> first email map. Beest, Athena Award, and
+-- Construct all use app Slack/Hackatime IDs rather than storing participant
+-- email directly in the project-time source.
+beest_htid_email AS (
+    SELECT DISTINCT hackatime_user_id, hackatime_first_email
+    FROM {{ ref('hourly_project_activity') }}
+    WHERE hackatime_first_email IS NOT NULL
 ),
 
 -- ============================================================
@@ -408,6 +453,260 @@ milkyway_custom_hourly AS (
     ) x
 ),
 
+-- Construct logs custom time in devlog.timeSpent, measured in minutes. The
+-- source app is still live and its inspected production DB had 18,312 devlogs
+-- on 2026-06-12 (16,374 non-deleted). Distribution was clean relative to
+-- Blueprint-style free input: p50=31m, p90=90m, p99=120m, max=425m. Still, two
+-- user-days exceeded 24h (max 1,714m), so the same safety shape is applied:
+-- cap each entry at 24h and proportionally rescale each user-day to <=24h.
+--
+-- Quality controls (audited 2026-06):
+--   * user.trust='blue' is required. Non-blue trust users held 451.4 of
+--     11,093.8 raw devlog hours (4.1%); those are excluded. hackatimeTrust was
+--     blue for almost everyone and is not used as the fraud gate.
+--   * session.token and user.idvToken are excluded in the Sling mirror; this
+--     model only needs Slack identity, trust, project, and devlog fields.
+--   * Slack ID maps to Hackatime user -> email where possible so Construct can
+--     participate in cross-program URL/user dedup. If no Hackatime email exists
+--     for a Slack ID, a stable construct_user_<id> key preserves DAU/hours but
+--     cannot dedup against other programs.
+construct_slack_email AS (
+    SELECT
+        hu.slack_uid,
+        MIN(
+            CASE
+                WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
+                THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 1), '+', 1)
+                     || '@' || SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 2)
+                ELSE SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '+', 1)
+            END
+        ) AS user_email
+    FROM {{ source('hackatime_raw', 'users') }} hu
+    JOIN beest_htid_email m ON m.hackatime_user_id = hu.id
+    WHERE hu.slack_uid IS NOT NULL
+    GROUP BY 1
+),
+
+construct_devlog_hourly AS (
+    SELECT
+        DATE_TRUNC('hour', d."createdAt" AT TIME ZONE 'UTC') AS activity_hour,
+        COALESCE(cse.user_email, 'construct_user_' || u.id::text) AS user_email,
+        proj.name AS project_name,
+        NULLIF(BTRIM(proj.url), '') AS code_url,
+        SUM(LEAST(d."timeSpent", 24 * 60))::numeric / 60.0 AS entry_hours,
+        COUNT(*) AS entry_count
+    FROM {{ source('construct', 'devlog') }} d
+    JOIN {{ source('construct', 'user') }} u ON u.id = d."userId"
+    LEFT JOIN {{ source('construct', 'project') }} proj ON proj.id = d."projectId"
+    LEFT JOIN construct_slack_email cse ON cse.slack_uid = u."slackId"
+    WHERE d."timeSpent" > 0
+      AND NOT COALESCE(d.deleted, false)
+      AND u.trust = 'blue'
+    GROUP BY 1, 2, 3, 4
+),
+
+construct_custom_hourly AS (
+    SELECT
+        activity_hour,
+        'construct'::text AS program_name,
+        user_email,
+        project_name,
+        code_url,
+        ROUND((entry_hours * LEAST(day_total_hours, 24) / day_total_hours)::numeric, 4) AS raw_hours_logged,
+        'custom'::text AS logging_method,
+        ('construct.devlog.timeSpent minutes (trust=blue; capped 24h/entry + 24h/user-day); entries=' || entry_count::text) AS source_detail
+    FROM (
+        SELECT *,
+            SUM(entry_hours) OVER (
+                PARTITION BY user_email, (activity_hour AT TIME ZONE 'UTC')::date
+            ) AS day_total_hours
+        FROM construct_devlog_hourly
+    ) x
+),
+
+-- Shiba's app-backed Airtable base is currently available only through the
+-- generic airtable_raw_all_bases mirror (base appg245A41MWc6Rej, synced
+-- 2026-06-12). It contains both creator posts and logged-in player telemetry.
+--
+-- Creator posts are the credited-hour source: 4,582 valid post rows / 266
+-- users / 11,171.9 raw hours after selecting the greatest positive value from
+-- HoursSpent, TimeSpentOnAsset, and InCaseHoursGoAway. The source has no
+-- user-level ban flag, but Games.Banned by Fraud Dept is an adjudicated project
+-- flag; 94 post rows / 2 users / 262.2h are excluded. Ten entries exceed 24h
+-- (max 55.2h) and three user-days remain over 24h after entry capping, so the
+-- standard 24h/entry + 24h/user-day cap is applied.
+--
+-- User Activity is 15-second heartbeat/play telemetry. Only rows with
+-- PlayerSlackId are counted; CreatorSlackId identifies the game owner and is
+-- not the active user. This adds logged-in play/test DAU (290 users / 61.8h)
+-- without attributing anonymous play to project owners.
+-- Final modeled validation after fraud exclusion + caps: 408 users / 10,896.8h
+-- (10,838.1h creator posts + 58.7h play telemetry).
+shiba_users AS (
+    SELECT
+        LOWER(BTRIM(r.fields->>'slack id')) AS slack_id,
+        MIN(
+            CASE
+                WHEN POSITION('@' IN LOWER(BTRIM(r.fields->>'Email'))) > 0
+                THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '@', 1), '+', 1)
+                     || '@' || SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '@', 2)
+                ELSE SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '+', 1)
+            END
+        ) AS user_email
+    FROM {{ source('airtable_raw_all_bases', 'records') }} r
+    WHERE r.base_id = 'appg245A41MWc6Rej'
+      AND r.table_id = 'tblfD2WCyqAIOBBbz' -- Users
+      AND NULLIF(BTRIM(r.fields->>'slack id'), '') IS NOT NULL
+      AND NULLIF(BTRIM(r.fields->>'Email'), '') IS NOT NULL
+    GROUP BY 1
+),
+
+shiba_games AS (
+    SELECT
+        r.record_id AS game_id,
+        COALESCE((r.fields->>'Banned by Fraud Dept')::boolean, false) AS banned_by_fraud_dept
+    FROM {{ source('airtable_raw_all_bases', 'records') }} r
+    WHERE r.base_id = 'appg245A41MWc6Rej'
+      AND r.table_id = 'tblrmmG1si4Ti9KlT' -- Games
+),
+
+shiba_post_rows AS (
+    SELECT
+        DATE_TRUNC('hour', NULLIF(r.fields->>'Created At', '')::timestamptz AT TIME ZONE 'UTC') AS activity_hour,
+        COALESCE(su.user_email, 'shiba_slack_' || LOWER(BTRIM(s.slack_id))) AS user_email,
+        COALESCE(
+            NULLIF(
+                CASE
+                    WHEN jsonb_typeof(r.fields->'Game Name') = 'array' THEN r.fields->'Game Name'->>0
+                    ELSE r.fields->>'Game Name'
+                END,
+                ''
+            ),
+            'Shiba creator post'
+        ) AS project_name,
+        COALESCE(
+            NULLIF(
+                CASE
+                    WHEN jsonb_typeof(r.fields->'GitHubUrl') = 'array' THEN r.fields->'GitHubUrl'->>0
+                    ELSE r.fields->>'GitHubUrl'
+                END,
+                ''
+            ),
+            NULLIF(BTRIM(r.fields->>'Link to Github Asset'), '')
+        ) AS code_url,
+        LEAST(
+            GREATEST(
+                COALESCE(NULLIF(r.fields->>'HoursSpent', '')::numeric, 0),
+                COALESCE(NULLIF(r.fields->>'TimeSpentOnAsset', '')::numeric, 0),
+                COALESCE(NULLIF(r.fields->>'InCaseHoursGoAway', '')::numeric, 0)
+            ),
+            24
+        ) AS entry_hours,
+        'posts'::text AS activity_source
+    FROM {{ source('airtable_raw_all_bases', 'records') }} r
+    CROSS JOIN LATERAL (
+        SELECT jsonb_array_elements_text(
+            CASE
+                WHEN jsonb_typeof(r.fields->'slack id') = 'array' THEN r.fields->'slack id'
+                WHEN r.fields ? 'slack id' THEN jsonb_build_array(r.fields->'slack id')
+                ELSE '[]'::jsonb
+            END
+        ) AS slack_id
+    ) s
+    LEFT JOIN LATERAL (
+        SELECT jsonb_array_elements_text(
+            CASE
+                WHEN jsonb_typeof(r.fields->'Game') = 'array' THEN r.fields->'Game'
+                WHEN r.fields ? 'Game' THEN jsonb_build_array(r.fields->'Game')
+                ELSE '[]'::jsonb
+            END
+        ) AS game_id
+    ) g ON true
+    LEFT JOIN shiba_users su ON su.slack_id = LOWER(BTRIM(s.slack_id))
+    LEFT JOIN shiba_games sg ON sg.game_id = g.game_id
+    WHERE r.base_id = 'appg245A41MWc6Rej'
+      AND r.table_id = 'tblrkDBkvpySnSiHB' -- Posts
+      AND NULLIF(r.fields->>'Created At', '') IS NOT NULL
+      AND GREATEST(
+            COALESCE(NULLIF(r.fields->>'HoursSpent', '')::numeric, 0),
+            COALESCE(NULLIF(r.fields->>'TimeSpentOnAsset', '')::numeric, 0),
+            COALESCE(NULLIF(r.fields->>'InCaseHoursGoAway', '')::numeric, 0)
+          ) > 0
+      AND NOT COALESCE(sg.banned_by_fraud_dept, false)
+),
+
+shiba_play_rows AS (
+    SELECT
+        DATE_TRUNC('hour', NULLIF(r.fields->>'Timestamp', '')::timestamptz AT TIME ZONE 'UTC') AS activity_hour,
+        COALESCE(su.user_email, 'shiba_slack_' || LOWER(BTRIM(s.player_slack))) AS user_email,
+        'Shiba play activity'::text AS project_name,
+        NULL::text AS code_url,
+        LEAST(COALESCE(NULLIF(r.fields->>'Time Spent (seconds)', '')::numeric, 0) / 3600.0, 24) AS entry_hours,
+        'play_activity'::text AS activity_source
+    FROM {{ source('airtable_raw_all_bases', 'records') }} r
+    CROSS JOIN LATERAL (
+        SELECT jsonb_array_elements_text(
+            CASE
+                WHEN jsonb_typeof(r.fields->'PlayerSlackId') = 'array' THEN r.fields->'PlayerSlackId'
+                WHEN r.fields ? 'PlayerSlackId' THEN jsonb_build_array(r.fields->'PlayerSlackId')
+                ELSE '[]'::jsonb
+            END
+        ) AS player_slack
+    ) s
+    LEFT JOIN LATERAL (
+        SELECT jsonb_array_elements_text(
+            CASE
+                WHEN jsonb_typeof(r.fields->'Game') = 'array' THEN r.fields->'Game'
+                WHEN r.fields ? 'Game' THEN jsonb_build_array(r.fields->'Game')
+                ELSE '[]'::jsonb
+            END
+        ) AS game_id
+    ) g ON true
+    LEFT JOIN shiba_users su ON su.slack_id = LOWER(BTRIM(s.player_slack))
+    LEFT JOIN shiba_games sg ON sg.game_id = g.game_id
+    WHERE r.base_id = 'appg245A41MWc6Rej'
+      AND r.table_id = 'tblFe4Jf66a70xhlf' -- User Activity
+      AND NULLIF(r.fields->>'Timestamp', '') IS NOT NULL
+      AND COALESCE(NULLIF(r.fields->>'Time Spent (seconds)', '')::numeric, 0) > 0
+      AND NOT COALESCE(sg.banned_by_fraud_dept, false)
+),
+
+shiba_activity_hourly AS (
+    SELECT
+        activity_hour,
+        user_email,
+        project_name,
+        code_url,
+        activity_source,
+        SUM(entry_hours)::numeric AS entry_hours,
+        COUNT(*) AS entry_count
+    FROM (
+        SELECT * FROM shiba_post_rows
+        UNION ALL
+        SELECT * FROM shiba_play_rows
+    ) s
+    GROUP BY 1, 2, 3, 4, 5
+),
+
+shiba_custom_hourly AS (
+    SELECT
+        activity_hour,
+        'shiba'::text AS program_name,
+        user_email,
+        project_name,
+        code_url,
+        ROUND((entry_hours * LEAST(day_total_hours, 24) / day_total_hours)::numeric, 4) AS raw_hours_logged,
+        'custom'::text AS logging_method,
+        ('shiba.airtable.' || activity_source || ' (capped 24h/entry + 24h/user-day); entries=' || entry_count::text) AS source_detail
+    FROM (
+        SELECT *,
+            SUM(entry_hours) OVER (
+                PARTITION BY user_email, (activity_hour AT TIME ZONE 'UTC')::date
+            ) AS day_total_hours
+        FROM shiba_activity_hourly
+    ) x
+),
+
 -- ============================================================
 -- 3. HACKATIME CLAIMS: per-program alias -> project mapping
 -- ============================================================
@@ -449,13 +748,6 @@ flavortown_ht_claims AS (
 -- projects.hackatime_project_name as a JSON array string (e.g. '["my-proj"]').
 -- Map the hackatime user id to the Hackatime email so beest joins the shared
 -- (user_email, alias) matching path, and unnest the alias array.
--- (hack_club_the_game_ht_claims reuses this map for the same reason.)
-beest_htid_email AS (
-    SELECT DISTINCT hackatime_user_id, hackatime_first_email
-    FROM {{ ref('hourly_project_activity') }}
-    WHERE hackatime_first_email IS NOT NULL
-),
-
 beest_ht_claims AS (
     SELECT 'beest'::text AS program_name,
         CASE WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
@@ -499,6 +791,11 @@ stasis_ht_claims AS (
 ),
 
 horizons_ht_claims AS (
+    -- Horizons has app-native daily user activity from 2026-04-22 onward; that
+    -- is used directly in the daily rollups. This claim bridge is retained for
+    -- earlier history only. Quality controls (audited 2026-06): exclude Joe
+    -- fraud-failed projects (134 claimed projects / 203 alias rows). User-level
+    -- is_fraud/is_sus flags were 0 at audit time but remain as future gates.
     SELECT 'horizons'::text AS program_name,
         CASE WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
              THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
@@ -514,6 +811,43 @@ horizons_ht_claims AS (
     CROSS JOIN LATERAL unnest(proj.now_hackatime_projects::text[]) AS alias(alias_text)
     WHERE proj.now_hackatime_projects IS NOT NULL
       AND proj.now_hackatime_projects <> '{}'
+      AND NOT (
+          proj.joe_fraud_reviewed_at IS NOT NULL
+          AND NOT COALESCE(proj.joe_fraud_passed, false)
+      )
+      AND NOT COALESCE(u.is_fraud, false)
+      AND NOT COALESCE(u.is_sus, false)
+),
+
+-- Midnight uses the same K8S app family as Horizons. It has app sessions and
+-- approved/banked submission hours, but no program-native daily activity table;
+-- daily credited time comes from explicit projects.now_hackatime_projects
+-- aliases joined to global Hackatime. submissions.approved_hours is a review
+-- total and is not counted as daily activity.
+--
+-- Quality controls (audited 2026-06): projects.is_fraud excludes 19 projects.
+-- users.is_fraud currently excludes 0 users but is kept as a future-proof user
+-- fraud gate. Eligible source claims were 2,348 aliases / 812 users; in-window
+-- Hackatime matched 611 users / 11,549.7 raw hours, with one Hackatime user-day
+-- over 24h (24.65h).
+midnight_ht_claims AS (
+    SELECT 'midnight'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias.alias_text, ' "')) AS hackatime_alias,
+        proj.project_title AS project_name,
+        NULLIF(BTRIM(proj.repo_url), '') AS code_url,
+        proj.created_at AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('midnight', 'projects') }} proj
+    JOIN {{ source('midnight', 'users') }} u ON u.user_id = proj.user_id
+    CROSS JOIN LATERAL unnest(proj.now_hackatime_projects::text[]) AS alias(alias_text)
+    WHERE proj.now_hackatime_projects IS NOT NULL
+      AND proj.now_hackatime_projects <> '{}'
+      AND NOT COALESCE(proj.is_fraud, false)
+      AND NOT COALESCE(u.is_fraud, false)
 ),
 
 -- Summer of Making 2025 attaches Hackatime aliases to projects via
@@ -836,6 +1170,36 @@ milkyway_ht_claims AS (
       AND NOT COALESCE(u.is_banned, false)
 ),
 
+-- Neighborhood 2025 is Airtable-backed. airtable_neighborhood.hackatime_projects
+-- is an explicit alias table linked to a neighbor (1,359/1,368 rows have a
+-- neighbor, 1,208 have a GitHub URL), not a full per-user Hackatime mirror.
+-- Hackatime is the only daily time source; total_time_hours on the Airtable
+-- row is a banked aggregate and is not counted.
+--
+-- Quality controls (audited 2026-06): no ban/fraud flag exists in the
+-- Neighborhood Airtable mirror. The review-like fields are operational:
+-- hard_review=true covered 24 alias rows / 1,085 banked hours, and
+-- staff_verified=true covered 325 alias rows / 9,331 banked hours; neither is
+-- an adjudicated fraud signal. In-window Hackatime had 487 users / 23,735.4
+-- hours and no user-day over 24h. Bad aliases (52 rows) are filtered by the
+-- shared bad_aliases list.
+neighborhood_ht_claims AS (
+    SELECT 'neighborhood'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(hp.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(hp.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(hp.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(hp.email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(hp.name)) AS hackatime_alias,
+        COALESCE(NULLIF(BTRIM(n.project_name), ''), hp.name) AS project_name,
+        NULLIF(BTRIM(hp.github_link), '') AS code_url,
+        hp.created_at AS claim_start_ts
+    FROM {{ source('airtable_neighborhood', 'hackatime_projects') }} hp
+    LEFT JOIN {{ source('airtable_neighborhood', 'neighbors') }} n ON n.id = hp.neighbor
+    WHERE hp.name IS NOT NULL AND BTRIM(hp.name) <> ''
+      AND hp.email IS NOT NULL AND BTRIM(hp.email) <> ''
+),
+
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
@@ -846,12 +1210,14 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM stasis_ht_claims
     UNION ALL SELECT * FROM horizons_ht_claims
     UNION ALL SELECT * FROM sleepover_ht_claims
+    UNION ALL SELECT * FROM midnight_ht_claims
     UNION ALL SELECT * FROM summer_of_making_ht_claims
     UNION ALL SELECT * FROM hack_club_the_game_ht_claims
     UNION ALL SELECT * FROM shipwrecked_ht_claims
     UNION ALL SELECT * FROM siege_ht_claims
     UNION ALL SELECT * FROM athena_award_ht_claims
     UNION ALL SELECT * FROM milkyway_ht_claims
+    UNION ALL SELECT * FROM neighborhood_ht_claims
 ),
 
 all_claims AS (
@@ -946,6 +1312,8 @@ custom_in_window AS (
             UNION ALL SELECT * FROM stasis_custom_hourly
             UNION ALL SELECT * FROM blueprint_custom_hourly
             UNION ALL SELECT * FROM milkyway_custom_hourly
+            UNION ALL SELECT * FROM construct_custom_hourly
+            UNION ALL SELECT * FROM shiba_custom_hourly
         ) c
         JOIN program_windows w
             ON w.program_name = c.program_name

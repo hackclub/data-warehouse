@@ -17,8 +17,12 @@ WITH source_info AS (
         ('summer_of_making', 'program db', DATE '2025-06-16'),
         ('shipwrecked', 'program db', DATE '2025-05-28'),
         ('siege', 'program db', DATE '2025-08-31'),
+        ('shiba', 'program db', DATE '2025-08-18'),
+        ('neighborhood', 'program db', DATE '2025-05-01'),
         ('blueprint', 'program db', DATE '2025-09-23'),
         ('milkyway', 'program db', DATE '2025-10-07'),
+        ('construct', 'program db', DATE '2025-12-02'),
+        ('midnight', 'program db', DATE '2025-11-05'),
         ('flavortown', 'program db', DATE '2025-12-24'),
         ('hack_club_the_game', 'program db', DATE '2026-01-16'),
         ('sleepover', 'program db', DATE '2026-01-16'),
@@ -122,6 +126,20 @@ source_updates AS (
         SELECT MAX(updated_at)::timestamptz FROM {{ source('horizons', 'projects') }}
         UNION ALL
         SELECT MAX(created_at)::timestamptz FROM {{ source('horizons', 'user_sessions') }}
+        UNION ALL
+        SELECT MAX(updated_at)::timestamptz FROM {{ source('horizons', 'user_daily_activity') }}
+    ) s
+
+    UNION ALL
+    SELECT 'midnight', MAX(last_updated_at)
+    FROM (
+        SELECT MAX(updated_at)::timestamptz AS last_updated_at FROM {{ source('midnight', 'users') }}
+        UNION ALL
+        SELECT MAX(updated_at)::timestamptz FROM {{ source('midnight', 'projects') }}
+        UNION ALL
+        SELECT MAX(updated_at)::timestamptz FROM {{ source('midnight', 'submissions') }}
+        UNION ALL
+        SELECT MAX(created_at)::timestamptz FROM {{ source('midnight', 'user_sessions') }}
     ) s
 
     UNION ALL
@@ -162,6 +180,20 @@ source_updates AS (
     SELECT 'sleepover', MAX(inserted_at)::timestamptz
     FROM {{ source('airtable_sleepover', '_dlt_loads') }}
 
+    UNION ALL
+    SELECT 'construct', MAX(last_updated_at)
+    FROM (
+        SELECT MAX("lastLoginAt")::timestamptz AS last_updated_at FROM {{ source('construct', 'user') }}
+        UNION ALL
+        SELECT MAX("updatedAt")::timestamptz FROM {{ source('construct', 'project') }}
+        UNION ALL
+        SELECT MAX("updatedAt")::timestamptz FROM {{ source('construct', 'devlog') }}
+        UNION ALL
+        SELECT MAX("timestamp")::timestamptz FROM {{ source('construct', 'ship') }}
+        UNION ALL
+        SELECT MAX("timestamp")::timestamptz FROM {{ source('construct', 'legion_review') }}
+    ) s
+
     -- SoM 2025 ended 2025-10-02, but the app is still live and its mirror still
     -- syncs, so users/projects updated_at reflects mirror freshness (not
     -- program activity).
@@ -186,6 +218,19 @@ source_updates AS (
     UNION ALL
     SELECT 'milkyway', MAX(inserted_at)::timestamptz
     FROM {{ source('airtable_milkyway', '_dlt_loads') }}
+
+    -- Neighborhood ended 2025-07-31. Its source is Airtable/DLT, so dlt load
+    -- time reflects mirror freshness while the activity window remains closed.
+    UNION ALL
+    SELECT 'neighborhood', MAX(inserted_at)::timestamptz
+    FROM {{ source('airtable_neighborhood', '_dlt_loads') }}
+
+    -- Shiba is Airtable-backed but not configured as a named DLT schema. It is
+    -- synced through the all-bases mirror; the Shiba base id is appg245A41MWc6Rej.
+    UNION ALL
+    SELECT 'shiba', MAX(_synced_at)::timestamptz
+    FROM {{ source('airtable_raw_all_bases', 'records') }}
+    WHERE base_id = 'appg245A41MWc6Rej'
 
     -- Shipwrecked ended 2025-09-03, but the app is still live and its mirror
     -- still syncs, so these timestamps reflect mirror freshness (not program

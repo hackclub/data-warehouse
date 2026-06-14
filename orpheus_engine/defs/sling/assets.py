@@ -1,7 +1,7 @@
 from dagster import EnvVar, AssetExecutionContext, Nothing
 from dagster_sling import SlingResource, SlingConnectionResource
 from typing import Mapping, Any
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode, urlunparse
 import dagster as dg
 import hashlib
 import ipaddress
@@ -69,6 +69,7 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "STASIS_COOLIFY_URL",
     "FALLOUT_COOLIFY_URL",
     "HORIZONS_K8S_URL",
+    "MIDNIGHT_K8S_URL",
     "REVIEW_COOLIFY_URL",
     "JOE_COOLIFY_URL",
     "STACK_COOLIFY_URL",
@@ -76,11 +77,39 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "MACONDO_COOLIFY_URL",
     "BEEST_COOLIFY_URL",
     "SIEGE_COOLIFY_URL",
+    "CONSTRUCT_COOLIFY_URL",
     "WAREHOUSE_COOLIFY_URL",
 ]
 
 for _env_var in _SLING_CONNECTION_URL_ENV_VARS:
     _validate_sslmode_disable_is_tailscale(_env_var)
+
+
+def _sling_connection_url(env_var_name: str) -> EnvVar:
+    """
+    Sling's Postgres driver treats sslrootcert=system as a literal file path,
+    while libpq/psycopg use it to mean the OS trust store. When that value is
+    present, expose a process-local derived env var with the parameter removed;
+    Sling will still use system roots by default for sslmode=verify-full.
+    """
+    raw_url = os.getenv(env_var_name)
+    if not raw_url:
+        return EnvVar(env_var_name)
+
+    parsed = urlparse(raw_url)
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    cleaned_query_pairs = [
+        (key, value)
+        for key, value in query_pairs
+        if not (key == "sslrootcert" and value == "system")
+    ]
+    if len(cleaned_query_pairs) == len(query_pairs):
+        return EnvVar(env_var_name)
+
+    derived_env_var_name = f"{env_var_name}_SLING"
+    cleaned_url = urlunparse(parsed._replace(query=urlencode(cleaned_query_pairs)))
+    os.environ.setdefault(derived_env_var_name, cleaned_url)
+    return EnvVar(derived_env_var_name)
 
 # --- Define Connections ---
 
@@ -172,7 +201,13 @@ fallout_db_connection = SlingConnectionResource(
 horizons_db_connection = SlingConnectionResource(
     name="HORIZONS_DB",
     type="postgres",
-    connection_string=EnvVar("HORIZONS_K8S_URL"),
+    connection_string=_sling_connection_url("HORIZONS_K8S_URL"),
+)
+
+midnight_db_connection = SlingConnectionResource(
+    name="MIDNIGHT_DB",
+    type="postgres",
+    connection_string=_sling_connection_url("MIDNIGHT_K8S_URL"),
 )
 
 stack_db_connection = SlingConnectionResource(
@@ -203,6 +238,12 @@ siege_db_connection = SlingConnectionResource(
     name="SIEGE_DB",
     type="postgres",
     connection_string=EnvVar("SIEGE_COOLIFY_URL"),
+)
+
+construct_db_connection = SlingConnectionResource(
+    name="CONSTRUCT_DB",
+    type="postgres",
+    connection_string=EnvVar("CONSTRUCT_COOLIFY_URL"),
 )
 
 review_db_connection = SlingConnectionResource(
@@ -283,11 +324,13 @@ sling_replication_resource = SlingResource(
         stasis_db_connection,
         fallout_db_connection,
         horizons_db_connection,
+        midnight_db_connection,
         stack_db_connection,
         offtrack_db_connection,
         macondo_db_connection,
         beest_db_connection,
         siege_db_connection,
+        construct_db_connection,
         review_db_connection,
         joe_db_connection,
         auth_db_connection,
@@ -1590,6 +1633,14 @@ horizons_replication_config = {
             "mode": "incremental",
             "primary_key": ["project_id"],
             "update_key": "updated_at",
+            "select": [
+                "project_id", "user_id", "project_title", "project_type",
+                "now_hackatime_hours", "approved_hours",
+                "now_hackatime_projects", "repo_url", "created_at",
+                "updated_at", "joe_project_id", "joe_fraud_passed",
+                "joe_fraud_reviewed_at", "joe_outcome_status",
+                "joe_outcome_recorded_at", "deleted_at", "perm_reject",
+            ],
         },
         "public.shop_item_variants": {
             "mode": "incremental",
@@ -1614,6 +1665,14 @@ horizons_replication_config = {
             "mode": "incremental",
             "primary_key": ["submission_id"],
             "update_key": "updated_at",
+            "select": [
+                "submission_id", "project_id", "approved_hours",
+                "approval_status", "reviewed_by", "reviewed_at",
+                "created_at", "updated_at", "hackatime_hours",
+                "airtable_rec_id", "finalized_at", "pending_send_email",
+                "review_passed", "silent_reject", "claim_heartbeat_at",
+                "claimed_at", "claimed_by_id",
+            ],
         },
         "public.users": {
             "mode": "incremental",
@@ -1654,6 +1713,11 @@ horizons_replication_config = {
             "primary_key": ["id"],
             "update_key": "created_at",
         },
+        "public.user_daily_activity": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
 
         # --- Disabled: infrastructure ---
         "public._prisma_migrations": {"disabled": True},
@@ -1663,6 +1727,67 @@ horizons_replication_config = {
         # --- Full-refresh: no suitable update key ---
         # users_airtable (no id, no timestamps)
     }
+}
+
+# --- Midnight Database Replication Configuration ---
+# Midnight is the same K8S app family as Horizons. Mirror only analytics-safe
+# tables/columns; OTP/token tables and admin sessions are intentionally omitted.
+midnight_replication_config = {
+    "source": "MIDNIGHT_DB",
+    "target": "WAREHOUSE_DB",
+
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "midnight.{stream_table}",
+    },
+
+    "streams": {
+        "public.projects": {
+            "mode": "incremental",
+            "primary_key": ["project_id"],
+            "update_key": "updated_at",
+            "select": [
+                "project_id", "user_id", "project_type", "created_at",
+                "updated_at", "airtable_rec_id", "approved_hours",
+                "description", "hours_justification", "now_hackatime_hours",
+                "now_hackatime_projects", "playable_url", "project_title",
+                "repo_url", "screenshot_url", "is_locked", "is_fraud",
+            ],
+        },
+        "public.submissions": {
+            "mode": "incremental",
+            "primary_key": ["submission_id"],
+            "update_key": "updated_at",
+            "select": [
+                "submission_id", "project_id", "playable_url",
+                "screenshot_url", "description", "repo_url", "approved_hours",
+                "hours_justification", "approval_status", "reviewed_by",
+                "reviewed_at", "created_at", "updated_at",
+            ],
+        },
+        "public.users": {
+            "mode": "incremental",
+            "primary_key": ["user_id"],
+            "update_key": "updated_at",
+            "select": [
+                "user_id", "email", "first_name", "last_name", "birthday",
+                "role", "onboard_complete", "onboarded_at", "address_line_1",
+                "address_line_2", "city", "state", "country", "zip_code",
+                "airtable_rec_id", "created_at", "updated_at",
+                "hackatime_account", "raffle_pos", "referral_code",
+                "slack_user_id", "is_fraud",
+            ],
+        },
+        "public.user_sessions": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+            "select": [
+                "id", "user_id", "is_verified", "verified_at",
+                "expires_at", "created_at",
+            ],
+        },
+    },
 }
 
 # --- Stack Database Replication Configuration ---
@@ -1900,6 +2025,91 @@ siege_replication_config = {
         "public.solid_queue_semaphores": {"disabled": True},
         "public.pg_stat_statements": {"disabled": True},
         "public.pg_stat_statements_info": {"disabled": True},
+    },
+}
+
+# --- Construct Database Replication Configuration ---
+# Construct (construct.hackclub.com) is an active 3D/modeling YSWS program.
+# Only analytics-relevant columns are mirrored. session.token, user.idvToken,
+# free-form review feedback/notes, and uploaded/model file blobs are excluded.
+construct_replication_config = {
+    "source": "CONSTRUCT_DB",
+    "target": "WAREHOUSE_DB",
+
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "construct.{stream_table}",
+    },
+
+    "streams": {
+        "public.devlog": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updatedAt",
+            "select": [
+                "id", "userId", "projectId", "timeSpent", "deleted",
+                "createdAt", "updatedAt", "lapseId",
+            ],
+        },
+        "public.project": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updatedAt",
+            "select": [
+                "id", "userId", "name", "description", "url", "status",
+                "deleted", "createdAt", "updatedAt", "submittedToAirtable",
+                "doubleDippingWith",
+            ],
+        },
+        "public.ship": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "timestamp",
+            "select": [
+                "id", "userId", "projectId", "url", "timestamp", "clubId",
+            ],
+        },
+        "public.user": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "lastLoginAt",
+            "select": [
+                "id", "slackId", "name", "hackatimeTrust", "trust",
+                "clay", "brick", "shopScore", "hasBasePrinter",
+                "hasT1Review", "hasT2Review", "hasAdmin", "createdAt",
+                "lastLoginAt", "isPrinter", "referralId", "stickersShipped",
+                "printerFulfilment",
+            ],
+        },
+        "public.legion_review": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "timestamp",
+            "select": [
+                "id", "userId", "projectId", "filamentUsed", "action", "timestamp",
+            ],
+        },
+        "public.t1_review": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "timestamp",
+            "select": ["id", "userId", "projectId", "action", "timestamp"],
+        },
+        "public.t2_review": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "timestamp",
+            "select": [
+                "id", "userId", "projectId", "shopScoreMultiplier",
+                "shopScore", "timestamp",
+            ],
+        },
+        "public.schema_migrations": {"disabled": True},
+        "public.ar_internal_metadata": {"disabled": True},
+        "public.session": {"disabled": True},
+        "public.ovenpheus_log": {"disabled": True},
+        "public.impersonate_audit_log": {"disabled": True},
+        "public.currency_audit_log": {"disabled": True},
     },
 }
 
@@ -2282,6 +2492,29 @@ def horizons_warehouse_mirror(
     return None
 
 @dg.asset(
+    name="midnight_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def midnight_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates analytics-safe Midnight DB columns into the warehouse."""
+    context.log.info("Starting Midnight → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, midnight_replication_config)
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=midnight_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+@dg.asset(
     name="stack_warehouse_mirror",
     group_name="sling",
     compute_kind="sling",
@@ -2385,6 +2618,29 @@ def siege_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=siege_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+@dg.asset(
+    name="construct_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def construct_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the analytics-safe Construct DB columns into the warehouse."""
+    context.log.info("Starting Construct → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, construct_replication_config)
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=construct_replication_config,
     ):
         pass
 

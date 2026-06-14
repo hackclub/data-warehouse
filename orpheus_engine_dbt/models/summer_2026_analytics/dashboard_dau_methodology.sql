@@ -20,6 +20,7 @@ SELECT DISTINCT
         WHEN 'hackatime_time' THEN 'Hackatime time'
         WHEN 'custom_time' THEN 'Custom time'
         WHEN 'daily_project_activity_time' THEN 'Daily project activity time'
+        WHEN 'daily_user_activity_time' THEN 'Daily user activity time'
         WHEN 'hardware_build_time_and_journals' THEN 'Hardware build time + journals'
         WHEN 'github_commit_days' THEN 'GitHub commit days'
         ELSE REPLACE(dau_methodology, '_', ' ')

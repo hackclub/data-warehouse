@@ -19,9 +19,10 @@
 --   Coding/journal/work-session programs (stardance, flavortown, stack,
 --   offtrack, beest, stasis, horizons, blueprint, summer_of_making,
 --   hack_club_the_game, shipwrecked, siege, athena_award, milkyway,
---   sleepover) come from
+--   sleepover, neighborhood, construct, shiba, midnight) come from
 --   {{ ref('summer_unified_time_log') }}, inheriting its cross-program
---   equal-split dedup and run windows.
+--   equal-split dedup and run windows. Horizons switches to its app-native
+--   user_daily_activity table from 2026-04-22 onward.
 --   macondo uses its own per-day rollup (daily_project_activity: hackatime_seconds
 --   + journal_seconds).
 --   fallout (hardware) logs time via build timelapses (lookout + lapse, duration>0)
@@ -38,7 +39,9 @@
 --                 horizons, blueprint, hack_club_the_game (Hackatime-only;
 --                 beta opened 2026-01-16, first public approvals 2026-02-17),
 --                 sleepover (Hackatime-only; Airtable-backed app, launched
---                 2026-01-16, ported from spring_2026_analytics)
+--                 2026-01-16, ported from spring_2026_analytics),
+--                 construct — Construct (active; app activity began 2025-12-02),
+--                 custom devlog minutes with trust filtering and duration caps.
 --   historical  : summer_of_making — SoM 2025 (2025-06-16 to 2025-10-02),
 --                 included for the year-over-year comparison. Hackatime-only
 --                 methodology; see summer_unified_time_log for why devlog
@@ -66,10 +69,22 @@
 --                 claims + artlog art-time via the program's Airtable base
 --                 (its app's backend); banned users excluded, devlog hours
 --                 not counted (banked; see summer_unified_time_log).
---   STALE SOURCE: horizons — app mirror has not refreshed since 2026-05-12, so
---                 DAU is limited to Hackatime claims already present there.
+--                 neighborhood — Neighborhood 2025 (2025-05-01 to 2025-07-31),
+--                 Hackatime-only via its Airtable Hackatime project alias rows;
+--                 see summer_unified_time_log for why Airtable total_time_hours
+--                 is not used.
+--                 midnight — Midnight (2025-11-05 to 2026-04-21),
+--                 Hackatime-only via projects.now_hackatime_projects; fraud
+--                 projects excluded.
+--                 shiba — Shiba (2025-08-18 to 2026-02-12), Airtable
+--                 raw-all-bases creator posts + logged-in play telemetry with
+--                 duration caps.
+--                 horizons — Horizons uses Hackatime claims before 2026-04-22,
+--                 then app-native qualified user_daily_activity seconds.
 --
--- Identity = normalized email; a person counts once per program per day.
+-- Identity = normalized email where the source provides or can bridge to one;
+-- otherwise a stable source-specific user key. A person counts once per program
+-- per day.
 -- ============================================================================
 
 WITH coding_dau AS (
@@ -85,6 +100,8 @@ WITH coding_dau AS (
             ELSE 'custom_time'
         END AS dau_methodology
     FROM {{ ref('summer_unified_time_log') }}
+    WHERE program_name <> 'horizons'
+       OR (activity_hour AT TIME ZONE 'UTC')::date < DATE '2026-04-22'
     GROUP BY program_name, (activity_hour AT TIME ZONE 'UTC')::date
 ),
 
@@ -101,6 +118,20 @@ macondo_dau AS (
       AND dpa.day::date >= DATE '2026-03-23'
       AND dpa.day::date < CURRENT_DATE
     GROUP BY 1, dpa.day::date
+),
+
+horizons_dau AS (
+    SELECT
+        'horizons'::text AS program_name,
+        uda.local_date::date AS activity_date,
+        COUNT(DISTINCT uda.user_id) AS dau,
+        'daily_user_activity_time'::text AS dau_methodology
+    FROM {{ source('horizons', 'user_daily_activity') }} uda
+    WHERE uda.local_date::date >= DATE '2026-04-22'
+      AND uda.local_date::date < CURRENT_DATE
+      AND uda.qualified
+      AND uda.seconds > 0
+    GROUP BY 1, uda.local_date::date
 ),
 
 -- Fallout (hardware): logged time = build-time timelapses (lookout/lapse,
@@ -202,6 +233,8 @@ combined AS (
     SELECT program_name, activity_date, dau, dau_methodology FROM coding_dau
     UNION ALL
     SELECT program_name, activity_date, dau, dau_methodology FROM macondo_dau
+    UNION ALL
+    SELECT program_name, activity_date, dau, dau_methodology FROM horizons_dau
     UNION ALL
     SELECT program_name, activity_date, dau, dau_methodology FROM fallout_dau
     UNION ALL
