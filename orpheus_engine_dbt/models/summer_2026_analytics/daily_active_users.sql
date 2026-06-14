@@ -19,8 +19,8 @@
 --   Coding/journal/work-session programs (stardance, flavortown, stack,
 --   offtrack, beest, stasis, horizons, blueprint, summer_of_making,
 --   hack_club_the_game, shipwrecked, siege, athena_award, milkyway,
---   sleepover, neighborhood, construct, shiba, midnight, carnival) come from
---   {{ ref('summer_unified_time_log') }}, inheriting its cross-program
+--   sleepover, neighborhood, construct, shiba, midnight, carnival, moonshot)
+--   come from {{ ref('summer_unified_time_log') }}, inheriting its cross-program
 --   equal-split dedup and run windows. Horizons switches to its app-native
 --   user_daily_activity table from 2026-04-22 onward.
 --   macondo uses its own per-day rollup (daily_project_activity: hackatime_seconds
@@ -80,6 +80,11 @@
 --                 midnight — Midnight (2025-11-05 to 2026-04-21),
 --                 Hackatime-only via projects.now_hackatime_projects; fraud
 --                 projects excluded.
+--                 moonshot — Moonshot (2025-10-25 to 2025-12-31), Hackatime-only
+--                 via HackatimeProjectLink alias claims (same Prisma schema as
+--                 shipwrecked); FraudSuspect users excluded, banked
+--                 rawHours/hoursOverride not counted. One-time manual backfill
+--                 from a normally-stopped DB (see summer_unified_time_log).
 --                 shiba — Shiba (2025-08-18 to 2026-02-12), Airtable
 --                 raw-all-bases creator posts + logged-in play telemetry with
 --                 duration caps.

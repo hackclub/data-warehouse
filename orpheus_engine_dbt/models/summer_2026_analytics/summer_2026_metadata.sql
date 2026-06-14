@@ -34,7 +34,8 @@ WITH source_info AS (
         ('stack', 'program db', DATE '2026-05-01'),
         ('offtrack', 'program db', DATE '2026-05-01'),
         ('stardance', 'program db', DATE '2026-05-31'),
-        ('carnival', 'program db', DATE '2025-12-01')
+        ('carnival', 'program db', DATE '2025-12-01'),
+        ('moonshot', 'program db', DATE '2025-10-25')
     ) AS t(program_name, source_type, program_start_date)
 ),
 
@@ -264,6 +265,17 @@ source_updates AS (
         UNION ALL
         SELECT MAX(updated_at)::timestamptz FROM {{ source('carnival', 'project_hackatime_project') }}
     ) s
+
+    -- Moonshot ended Dec 2025 and is a one-time manual backfill from a normally
+    -- stopped DB, so these timestamps are frozen at the last program activity
+    -- (data complete, not fresh); the status CASE pins it 'fresh' like highway.
+    UNION ALL
+    SELECT 'moonshot', MAX(last_updated_at)
+    FROM (
+        SELECT MAX("updatedAt")::timestamptz AS last_updated_at FROM {{ source('moonshot', 'User') }}
+        UNION ALL
+        SELECT MAX("createdAt")::timestamptz FROM {{ source('moonshot', 'HackatimeProjectLink') }}
+    ) s
 )
 
 SELECT
@@ -278,6 +290,9 @@ SELECT
         -- Highway ended Oct 2025 and is intentionally a one-time complete
         -- backfill; its scrape timestamp should not age into a stale alert.
         WHEN si.program_name = 'highway' THEN 'fresh'
+        -- Moonshot ended Dec 2025; one-time manual backfill from a stopped DB, so
+        -- its frozen timestamps should not age into a stale alert (data complete).
+        WHEN si.program_name = 'moonshot' THEN 'fresh'
         WHEN si.program_name = 'hackatime' AND su.last_source_updated_at < NOW() - INTERVAL '6 hours' THEN 'stale'
         WHEN si.program_name = 'hackatime' AND su.last_source_updated_at < NOW() - INTERVAL '2 hours' THEN 'lagging'
         WHEN su.last_source_updated_at < NOW() - INTERVAL '24 hours' THEN 'stale'

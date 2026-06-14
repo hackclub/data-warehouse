@@ -173,7 +173,15 @@ WITH program_windows AS (
         -- (~25 raw hrs across Aug-Nov 2025) sit below the start. The app is still
         -- active (devlogs/sessions through 2026-06-14), so the window is open.
         ('carnival',   TIMESTAMP WITH TIME ZONE '2025-12-01 00:00:00+00',
-                       NULL::timestamptz)
+                       NULL::timestamptz),
+        -- Moonshot (moonshot.hackclub.com, ended). App opened ~2025-10-25 (first
+        -- HackatimeProjectLink rows), YSWS approvals 2025-11..12, and app activity
+        -- (links/reviews/shop orders) collapses after December (Jan 2026: 8 links,
+        -- 3 reviews vs Dec's 198/665). CLOSED window 2026-01-01 required: the app's
+        -- aliases never unclaim, so in-window Hackatime keeps a dead-claim tail of
+        -- ~250-330 hrs/mo through spring 2026 that must not split live programs.
+        ('moonshot',   TIMESTAMP WITH TIME ZONE '2025-10-25 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2026-01-01 00:00:00+00')
         -- This model is the CREDITED-HOURS log (Hackatime + devlog/journal) for
         -- coding programs. Separate, daily-grained programs live in
         -- daily_active_users: fallout (ship-based) and macondo (its own
@@ -1254,6 +1262,48 @@ carnival_ht_claims AS (
       AND NOT COALESCE(u.is_frozen, false)
 ),
 
+-- Moonshot (moonshot.hackclub.com, ended Dec 2025) is the same Prisma schema as
+-- Shipwrecked: HackatimeProjectLink attaches Hackatime aliases to projects (one
+-- row per alias), and Project has no timestamp columns. Hackatime is the only
+-- time source — the link's rawHours/hoursOverride are banked/reviewer-adjusted
+-- Hackatime totals (counting them would double count, SoM rationale), and
+-- User.purchasedProgressHours is shop-bought progress, not time. Identity is the
+-- user's normalized email (present for all 2,338 users).
+--
+-- claim_start_ts is the program launch (2025-10-25, first link row), not each
+-- link's createdAt: links were created 2025-10-25..2026-03 as people joined, and
+-- gating on the link timestamp would drop legitimate in-window coding done before
+-- a participant linked. The CLOSED program window does the real gating.
+--
+-- Quality controls (audited 2026-06-14):
+--   * User.status = 'FraudSuspect' is the program's fraud flag (UserStatus enum:
+--     Unknown/L1/L2/FraudSuspect) — excluded, mirroring Shipwrecked. 0 users are
+--     FraudSuspect today, but the gate is kept as a future-proof exclusion.
+--   * identity-join coverage: 336 of 351 alias-claiming users (95.7%) have
+--     in-window Hackatime by normalized email (Shipwrecked 95.4%); 322 (91.7%)
+--     match on email+alias.
+--   * scale: 6,207 raw in-window hours / 322 users / 4,659 user-days pre-dedup.
+--     The mirror is a one-time manual backfill (DB normally stopped); see
+--     sources.yml for the refresh procedure.
+moonshot_ht_claims AS (
+    SELECT 'moonshot'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(l."hackatimeName")) AS hackatime_alias,
+        proj.name AS project_name,
+        NULLIF(BTRIM(proj."codeUrl"), '') AS code_url,
+        TIMESTAMP WITH TIME ZONE '2025-10-25 00:00:00+00' AS claim_start_ts
+    FROM {{ source('moonshot', 'HackatimeProjectLink') }} l
+    JOIN {{ source('moonshot', 'Project') }} proj ON proj."projectID" = l."projectID"
+    JOIN {{ source('moonshot', 'User') }} u ON u.id = proj."userId"
+    WHERE l."hackatimeName" IS NOT NULL AND BTRIM(l."hackatimeName") <> ''
+      AND u.email IS NOT NULL AND BTRIM(u.email) <> ''
+      AND u.status <> 'FraudSuspect'
+),
+
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
@@ -1273,6 +1323,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM milkyway_ht_claims
     UNION ALL SELECT * FROM neighborhood_ht_claims
     UNION ALL SELECT * FROM carnival_ht_claims
+    UNION ALL SELECT * FROM moonshot_ht_claims
 ),
 
 all_claims AS (
