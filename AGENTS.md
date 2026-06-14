@@ -15,6 +15,8 @@ Welcome to the Hack Club Data Warehouse. This is a Dagster project, which we dev
   - `docker_deploy/dagster.yaml` - Dagster instance config for production (NOT project root)
   - Docker sets `DAGSTER_HOME=/opt/dagster/dagster_home` and copies dagster.yaml there
 
+Note: If you are working in a git worktree and need credentials, check the parent repo's .env.
+
 ## Deployment Notes
 - **Production**: Uses Docker with configs in `docker_deploy/` directory
 - **Dagster Config**: Production dagster.yaml is in `docker_deploy/`, not project root
