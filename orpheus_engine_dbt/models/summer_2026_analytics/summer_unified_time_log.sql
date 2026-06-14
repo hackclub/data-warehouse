@@ -601,6 +601,12 @@ hack_club_the_game_ht_claims AS (
 -- reference implementation. Hackatime is the only time source: projects.hours
 -- and ysws_project_submission hours are banked/reviewed totals, not daily
 -- activity (SoM double-count rationale).
+-- Sleepover's own banked project hours count post-program-launch Hackatime,
+-- not only hours after the Airtable project row was created: re-audited
+-- 2026-06-14, project-grain Hackatime from 2026-01-16 matches many
+-- projects.hours rows exactly, while using projects.created_at as the claim
+-- gate drops the same source-approved work. Therefore claim_start_ts is the
+-- program launch, still filtered by explicit project↔alias linkage.
 --
 -- Quality controls (audited 2026-06):
 --   * linkage is complete — all 1,609 alias-bearing project↔user rows resolve
@@ -611,11 +617,11 @@ hack_club_the_game_ht_claims AS (
 --   * the base has no ban/fraud flag. verification_status is an identity-
 --     verification state, not a fraud signal; 'ineligible' users hold 2 of
 --     1,609 claim projects (~0.1%), so no exclusion is applied.
---   * scale: claimed aliases carry 10,569 lifetime Hackatime hours; the
---     claim_start gate cuts that to 3,338 attributed raw hours. The banked
---     projects.hours total (14,962) includes pre-claim alias history, so the
---     claims path is deliberately smaller. Spring prod showed the same scale
---     (3,228 raw / 434 users).
+--   * scale re-audit: claimed aliases carry 10,586 lifetime Hackatime hours;
+--     program-start gating counts 9,236 raw hours / 559 users; the old
+--     projects.created_at gate counted only 3,345 raw hours / 447 users. At
+--     project grain, banked projects.hours total 14,375; duplicated aliases
+--     across projects explain why this exceeds the deduped claim-pair total.
 -- code_url comes from the user's latest YSWS submission for the same-named
 -- project (projects itself has no repo field).
 sleepover_code_urls AS (
@@ -641,7 +647,7 @@ sleepover_ht_claims AS (
         LOWER(BTRIM(alias.alias_text, ' "')) AS hackatime_alias,
         proj.name AS project_name,
         scu.code_url,
-        proj.created_at AS claim_start_ts
+        TIMESTAMP WITH TIME ZONE '2026-01-16 00:00:00+00' AS claim_start_ts
     FROM {{ source('airtable_sleepover', 'projects') }} proj
     JOIN {{ source('airtable_sleepover', 'projects__registered_users') }} pr
         ON pr._dlt_parent_id = proj._dlt_id
