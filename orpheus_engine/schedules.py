@@ -115,6 +115,11 @@ materialize_frequent_job = dg.define_asset_job(
         # Sleepover (source + warehouse mirrors)
         dg.AssetSelection.groups("airtable_sleepover") |
         dg.AssetSelection.groups("dlt_airtable_sleepover") |
+        # Daydream game-jam series (two bases: submissions/podium + events/attendees)
+        dg.AssetSelection.groups("airtable_daydream") |
+        dg.AssetSelection.groups("dlt_airtable_daydream") |
+        dg.AssetSelection.groups("airtable_daydream_ops") |
+        dg.AssetSelection.groups("dlt_airtable_daydream_ops") |
         # Stardance (Sling warehouse mirrors)
         dg.AssetSelection.assets("stardance_warehouse_mirror") |
         dg.AssetSelection.assets("stardance_ahoy_warehouse_mirror") |

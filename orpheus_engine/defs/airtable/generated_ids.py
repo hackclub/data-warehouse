@@ -2131,6 +2131,222 @@ class AirtableIDs:
             project_name_from_project_name = "fldpW3ZdjHHblH7UZ"  # Name: Project Name (from Project Name)
 
 
+    class daydream:
+        """IDs for Base 'daydream' (ID: appwaZaIisBPGT8fQ)"""
+        BASE_ID = "appwaZaIisBPGT8fQ"
+
+        class ysws_project_submission:
+            """IDs for Table 'ysws_project_submission' (ID: tbllQUvlAUMEqA8Kn)"""
+            TABLE_ID = "tbllQUvlAUMEqA8Kn"
+
+            code_url = "fld6M6wwBFerqXrBk"  # Name: Code URL
+            playable_url = "fldqZnoy94Oar4Xhg"  # Name: Playable URL
+            how_did_you_hear_about_this = "fldGZo6Hi06Cg1Oab"  # Name: How did you hear about this?
+            what_are_we_doing_well = "fldFURpws9Y6qoiqq"  # Name: What are we doing well?
+            how_can_we_improve = "fld2EYy0kbKkoyjYZ"  # Name: How can we improve?
+            first_name = "fldECiuyWTJQJ8bw2"  # Name: First Name
+            last_name = "fld7Y0G3jEBwHTSqw"  # Name: Last Name
+            email = "fldlqkvrqq6nE13Bo"  # Name: Email
+            screenshot = "fld3H3eFiQULNXMwZ"  # Name: Screenshot
+            description = "fldsGjPre1pYHb3fs"  # Name: Description
+            git_hub_username = "fldgxRf7gvA8csNUK"  # Name: GitHub Username
+            address_line_1 = "fldmmrSd1Jn05fJy5"  # Name: Address (Line 1)
+            address_line_2 = "fld9DhohtG9WIw1QL"  # Name: Address (Line 2)
+            city = "fldfL3C19PPeUDviB"  # Name: City
+            state_province = "fldK9vcQjXzEAiAj3"  # Name: State / Province
+            country = "fldxUJwfKIMHZLSVg"  # Name: Country
+            zip_postal_code = "fldmaHQq2VBSuNzdY"  # Name: ZIP / Postal Code
+            birthday = "fld7uoKkTFimNUnOL"  # Name: Birthday
+            optional_override_hours_spent = "fldQdVq2A0XLanavO"  # Name: Optional - Override Hours Spent
+            optional_override_hours_spent_justification = "fldhcqpkTzSSL5lJy"  # Name: Optional - Override Hours Spent Justification
+            automation_submit_to_unified_ysws = "fldkBNoNg2G8GBOiI"  # Name: Automation - Submit to Unified YSWS
+            automation_error = "flds8LgVhycHxEB7k"  # Name: Automation - Error
+            automation_first_submitted_at = "fldLpRoHaqg1PykjB"  # Name: Automation - First Submitted At
+            automation_ysws_record_id = "fldCBqmfOADIMnz1I"  # Name: Automation - YSWS Record ID
+            loops_special_set_full_name = "fldibBA13kRipftID"  # Name: Loops - Special - setFullName
+            loops_birthday = "fldjq1v9nxkJf989O"  # Name: Loops - birthday
+            loops_special_set_full_address = "fldZQ0HvWBQnB0mda"  # Name: Loops - Special - setFullAddress
+            automation_status = "fldFzocq07P4cctrI"  # Name: Automation - Status
+
+        class projects:
+            """IDs for Table 'projects' (ID: tbllBrOIosYY6UegV)"""
+            TABLE_ID = "tbllBrOIosYY6UegV"
+
+            project_id = "fldsdbA2K36eCvhpj"  # Name: project_id
+            code_url = "fldoSW0Sik1Qiwloi"  # Name: code_url
+            gameplay_url = "fldHDHUtJ6jvxExIJ"  # Name: gameplay_url
+            thumbnail = "fldwoVeAhzwUgBMIB"  # Name: thumbnail
+            readme = "fldlxxQVHySk9patA"  # Name: readme
+            email = "fldGPMUj8zxkgXVHn"  # Name: email
+            title_2 = "fld7QYRdXExNYNHHK"  # Name: title 2
+            additional_teammate_1 = "fld9qbDjTLtIspNAu"  # Name: additional_teammate_1
+            additional_teammate_2 = "fldvCpSSZTXZ1c8TS"  # Name: additional_teammate_2
+            reported_personal_hours = "fld1ayk5qFJhRwSNk"  # Name: reported_personal_hours
+            normalized_3x_hours = "fldtLNvEYA5rjpH9i"  # Name: normalized_3x_hours
+            normalized_personal_hours = "fld2B39KsxCIcDz7w"  # Name: normalized_personal_hours
+            event = "fldsoAwoLR7AwSIKc"  # Name: event
+            number_of_team_members = "fldGFhSyERIjdYjoM"  # Name: number_of_team_members
+            event_organizer_email = "fldVt49r2VqMGrKuu"  # Name: event__organizer_email
+            ysws_status = "fldEmEBWC5jfh69Dq"  # Name: ysws_status
+            hours_per_person = "fldytYyA1P7dK1gQi"  # Name: hours_per_person
+            total_project_hours = "fldU3wZEH03Lu1GBq"  # Name: total_project_hours
+            tmp_submitted_primary_project = "fld6HVjdcfqCtUmIt"  # Name: tmp - submitted_primary_project
+            tmp_submit_primary_project = "fldwDELhZJsfPXgAT"  # Name: tmp - Submit Primary Project
+            submitted_for_teammate_1 = "fldOH3Zo7zCTVCm5N"  # Name: submitted_for_teammate_1
+            trigger_submission_for_teammate_1 = "fldHZym4uCapeNAYS"  # Name: trigger_submission_for_teammate_1
+            submitted_for_teammate_2 = "fldBnbI3qbihvxGlg"  # Name: submitted_for_teammate_2
+            trigger_submission_for_teammate_2 = "fldJJRUEsjNsCF1iC"  # Name: trigger_submission_for_teammate_2
+            tmp_daydream_red_sea_votes = "fldIsVfG7LGX70p2b"  # Name: Tmp - Daydream Red Sea Votes
+            tmp_daydream_tanta_votes = "flduRpzamXOlLu9FR"  # Name: Tmp - Daydream Tanta votes
+            votes = "fldQAkQWFNqxEq2a4"  # Name: Votes
+            invalid_type = "fldKGoLCofRGASErV"  # Name: invalid_type
+
+        class podium_attendees:
+            """IDs for Table 'podium_attendees' (ID: tblCm4rncGpjkpGOn)"""
+            TABLE_ID = "tblCm4rncGpjkpGOn"
+
+            id = "fldvFx66Vcb8BJh19"  # Name: id
+            event = "fldPwCvWy6cyaa1IS"  # Name: event
+            city = "fldckdXzELnHw04uW"  # Name: city
+            state = "fldDFrTgISBVb0uOi"  # Name: state
+            email = "fldS3c5qVI3FM9GHZ"  # Name: email
+            first_name = "fldg1IOcuDpTlLknb"  # Name: first_name
+            last_name = "fldGdEUJmSSe3oXrY"  # Name: last_name
+            dob = "fldMRZjpGtTr7UFjA"  # Name: dob
+            address_1 = "fldBHPjyq2c3wSye7"  # Name: address_1
+            address_2 = "fldKhiFVOCnL1aAPT"  # Name: address_2
+            country = "fldEZbLDbj1YdNb7Q"  # Name: country
+            zip_code = "fld664p3BVc0nXRpa"  # Name: zip_code
+
+        class patch_names:
+            """IDs for Table 'patch_names' (ID: tblr7qLScamaWEB61)"""
+            TABLE_ID = "tblr7qLScamaWEB61"
+
+            email = "fldiLnbaaSGUT4UDb"  # Name: email
+            loops_special_set_full_name = "fldM8EPpUDxBCkdph"  # Name: Loops - Special - setFullName
+
+        class ysws_config:
+            """IDs for Table 'ysws_config' (ID: tblWM12weIkABbplp)"""
+            TABLE_ID = "tblWM12weIkABbplp"
+
+            key = "fldS2A8EUE5Dx8WzS"  # Name: Key
+            value = "fld27CCm7Xg3FF4DT"  # Name: Value
+
+
+    class daydream_ops:
+        """IDs for Base 'daydream_ops' (ID: appRHzPloxM3u4hUA)"""
+        BASE_ID = "appRHzPloxM3u4hUA"
+
+        class all_attendees_ever:
+            """IDs for Table 'all_attendees_ever' (ID: tbl7rZK72iqV3h9Jm)"""
+            TABLE_ID = "tbl7rZK72iqV3h9Jm"
+
+            id = "fldgbIC9eD5Kt0X3P"  # Name: id
+            event = "fldVjFNQWMBIxVK89"  # Name: event
+            city = "fld7qq4vHYrvDzTIy"  # Name: city
+            state = "fldgfWCEDpKqRigCy"  # Name: state
+            email = "fldOoECrnZrzrlIEH"  # Name: email
+            preferred_name = "flddNJS9g1ttIl2Zn"  # Name: preferred_name
+            first_name = "fldSOYKOfVM6aEPxo"  # Name: first_name
+            last_name = "fldCJtyF5lshmZvZG"  # Name: last_name
+            dob = "fld7nxLxaCQHhIOrf"  # Name: dob
+            address_1 = "fld67ngAVlRvrdx4A"  # Name: address_1
+            address_2 = "fld8jTKwalaQXcygP"  # Name: address_2
+            country = "fldqSYhP8F6xD6e8g"  # Name: country
+            zip_code = "fldAe0vin5KijB21z"  # Name: zip_code
+
+        class projects:
+            """IDs for Table 'projects' (ID: tblYNkpmgpAdZBV2I)"""
+            TABLE_ID = "tblYNkpmgpAdZBV2I"
+
+            project_id = "fldd74GByKbt8VfBr"  # Name: project_id
+            code_url = "fldevYtulQsUghcEn"  # Name: code_url
+            gameplay_url = "fldqRgi7vEDE024ka"  # Name: gameplay_url
+            thumbnail = "fldErqdE4qn0k1h0l"  # Name: thumbnail
+            readme = "fldWxkdXc3rq7t9GV"  # Name: readme
+            email = "fld9SO0blNFEqCer6"  # Name: email
+            title = "fldYNx5FW8OxQl00W"  # Name: title
+            additional_teammate_1 = "fldR5Ru07qLUlTaQn"  # Name: additional_teammate_1
+            additional_teammate_2 = "fldnQw0heWfAL3rfY"  # Name: additional_teammate_2
+            reported_personal_hours = "fldJgzisXSIcU4BQD"  # Name: reported_personal_hours
+            event = "fld71rXiV4764osCW"  # Name: event
+            github_button = "fldNZ2F82SUnKa60x"  # Name: github_button
+            itch_button = "fldkM3zoWBct2aWCp"  # Name: itch_button
+            number_of_team_members = "fldB1we0OKZ30c00M"  # Name: number_of_team_members
+            event_organizer_email = "fldRaaO7llJvryvli"  # Name: event__organizer_email
+            ysws_status = "fldopd7r1rQXc9oY5"  # Name: ysws_status
+            cool_magic_game = "fldScaCHGFNVh5Gxh"  # Name: cool (magic) game
+            hours_per_person = "fldWHj2etPLlabxXJ"  # Name: hours_per_person
+            total_project_hours = "fldeGSacyX8OH6Chu"  # Name: total_project_hours
+            tmp_submitted_primary_project = "fld5jLOWfQgGmvYID"  # Name: tmp - submitted_primary_project
+            tmp_submit_primary_project = "fldidrjTzcQVprDhp"  # Name: tmp - Submit Primary Project
+            submitted_for_teammate_1 = "fldMpTX2SlLlNJcpf"  # Name: submitted_for_teammate_1
+            trigger_submission_for_teammate_1 = "fldbhuAIAtmcyWsNw"  # Name: trigger_submission_for_teammate_1
+            submitted_for_teammate_2 = "flda5unnonvsML8xU"  # Name: submitted_for_teammate_2
+            trigger_submission_for_teammate_2 = "fldS04Ehuaz7EcMoZ"  # Name: trigger_submission_for_teammate_2
+            tmp_daydream_red_sea_votes = "fldC9udKzDWUuXDMU"  # Name: Tmp - Daydream Red Sea Votes
+            tmp_daydream_tanta_votes = "fldc8VJ55BTzyijU8"  # Name: Tmp - Daydream Tanta votes
+            daydream_bengaluru = "fldoCmx5kbFzas1W6"  # Name: Daydream Bengaluru
+            votes = "fldVplL8colIPiOs7"  # Name: Votes
+            invalid_type = "fldEcYDnFV9HY4HDP"  # Name: invalid_type
+            tmp_definitely_invalid = "fldg3oAP3Ulrgo7t9"  # Name: tmp definitely invalid
+            tmp_definitely_ready = "fldB7uR4v2LxEX7R3"  # Name: tmp definitely ready
+
+        class confirmed_events:
+            """IDs for Table 'confirmed_events' (ID: tbl4a18NRx3I4qGPu)"""
+            TABLE_ID = "tbl4a18NRx3I4qGPu"
+
+            event_name = "fldjVKODf631SModP"  # Name: event_name
+            poc_first_name = "fldkqtLdhbdq8S1ss"  # Name: poc_first_name
+            poc_last_name = "fld63kPR74eAyzNW1"  # Name: poc_last_name
+            location = "fldJMHjhlsYAOh3eQ"  # Name: location
+            slug = "fldWQZb1aDh5SZCB6"  # Name: slug
+            street_address = "fldWQwEVETJbBRps4"  # Name: street_address
+            street_address_2 = "fldiWVK70b5UHo9Dx"  # Name: street_address_2
+            city = "fld147MKIyCtIcpfr"  # Name: city
+            state = "fldZRCPiCIEZSx0c5"  # Name: state
+            country = "fldIDSFxlqL51mSUI"  # Name: country
+            zipcode = "fldtGv1G0h30mbng3"  # Name: zipcode
+            event_format = "fld94NfWbB8H7pzXw"  # Name: event_format
+            email = "fldjZ1jfW28dTm7Y2"  # Name: email
+            poc_preferred_name = "fldBCz5yPgCEuP1WS"  # Name: poc_preferred_name
+            poc_slack_id = "fldp65sfkpwitccT9"  # Name: poc_slack_id
+            poc_phone = "fldlMnTmLUkM0eBXP"  # Name: poc_phone
+            poc_age = "fldpU4DxrZCIJR71K"  # Name: poc_age
+            poc_dob = "fldVraIGabotcMaMb"  # Name: poc_dob
+            estimated_attendee_count = "fldMOj4qGQtsCwsw7"  # Name: estimated_attendee_count
+            signup_amount = "fldwGqWIzhJY8rI9b"  # Name: signup_amount
+            merchandise_allocation = "fldvVQYSFWh28ugfT"  # Name: merchandise_allocation
+            tshirt_money_sent = "fldLKWOLE1IKGehVO"  # Name: tshirt money sent
+            tshirts_sent = "fldQh8NUc4kJFmWlR"  # Name: Tshirts sent
+            project_url = "fldfJ1mcq4i0jdqlK"  # Name: project_url
+            project_description = "fld4zwaTjq77HZu5c"  # Name: project_description
+            lat = "fldYbXUzkOOY6JifI"  # Name: lat
+            long = "fldpsjfS8hViAk8YS"  # Name: long
+            triage_status = "fldS2ICItXmiuGvtz"  # Name: triage_status
+            notes = "fldWxYmxSRLQhpYMy"  # Name: notes
+            loops_daydream_applied_to_organize_at = "fld3j4Sb9eKU1Qdoq"  # Name: Loops - daydreamAppliedToOrganizeAt
+            venues = "fldiSklPCC8i5TVkJ"  # Name: venues
+            has_confirmed_venue = "fldnIdjwlOeAWcu8L"  # Name: has_confirmed_venue
+            signups_closed = "fldHsposY7PdoIDVt"  # Name: signups_closed
+            checkin_closed = "fldCotVIcPOgoQaNa"  # Name: checkin_closed
+            event_postponed = "fldqhuMHmY990446l"  # Name: event_postponed
+            checked_in_attendee_count = "fldGouSPA7MKAoGi7"  # Name: checked_in_attendee_count
+            percentage_checked_in = "fldbn5567vzoVfKZV"  # Name: percentage_checked_in
+            percentage_scanned = "fldg3vzeYDq1XQMkE"  # Name: percentage_scanned
+            projects = "fldsT2eeshIyWbg50"  # Name: projects
+            scanned_in_attendees_count = "fldnYy3F7xNbbErRh"  # Name: scanned_in_attendees_count
+            number_of_attendeees_that_shipped = "fldjlv4f7LDgPoQi3"  # Name: number_of_attendeees_that_shipped
+            project_count = "fldORTNtQ5cus1s7z"  # Name: project_count
+            ship_rate = "fldZ1l3KwZxh5jfpI"  # Name: ship_rate
+            more_shipped_people_than_scanned_in = "fldygDcZ4pDElFdxZ"  # Name: more shipped people than scanned in
+            percentage_scanned_by_checkin = "fld5CkWjBSsUccOFG"  # Name: percentage_scanned_by_checkin
+            sunday_start = "fldmJFX8AeoSUqhdC"  # Name: sunday_start
+            tmp_attendees_should_receive_feedback = "fldL7cTeSKZ9DzVFa"  # Name: tmp attendees_should_receive_feedback
+            total_project_count = "fldHbLANvR4WiN0Fi"  # Name: total_project_count
+            projects_copy = "fldofe7A6Z6cB6Oby"  # Name: projects copy
+
+
     class synced_data_warehouse_slack_users:
         """IDs for Base 'synced_data_warehouse_slack_users' (ID: app5iK28ZvD6sx7qW)"""
         BASE_ID = "app5iK28ZvD6sx7qW"

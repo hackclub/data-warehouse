@@ -279,6 +279,48 @@ airtable_config = AirtableServiceConfig(
                 )
             }
         ),
+        # Daydream (global in-person game-jam series) has two complementary
+        # Airtable bases and no app DB; these bases are the program data. This is
+        # distinct from the Shiba backend appg245A41MWc6Rej and from
+        # campfire.daydream_events (event-ops aggregates). Non-empty tables only.
+        # Project hours are static per-project numbers (reported_personal_hours)
+        # with no per-day timestamp; the only activity timestamp is the YSWS
+        # submission time, so this supports a coarse hours/attendance view.
+        # PII: attendee tables carry addresses/DOB.
+        "daydream": AirtableBaseConfig(  # submissions / projects / podium
+            base_id="appwaZaIisBPGT8fQ",
+            tables={
+                "ysws_project_submission": AirtableTableConfig(
+                    table_id="tbllQUvlAUMEqA8Kn"
+                ),  # 2,659
+                "projects": AirtableTableConfig(
+                    table_id="tbllBrOIosYY6UegV"
+                ),  # 1,315
+                "podium_attendees": AirtableTableConfig(
+                    table_id="tblCm4rncGpjkpGOn"
+                ),  # 14,183
+                "patch_names": AirtableTableConfig(
+                    table_id="tblr7qLScamaWEB61"
+                ),  # 915
+                "ysws_config": AirtableTableConfig(
+                    table_id="tblWM12weIkABbplp"
+                ),  # 1
+            }
+        ),
+        "daydream_ops": AirtableBaseConfig(  # events / attendees
+            base_id="appRHzPloxM3u4hUA",
+            tables={
+                "all_attendees_ever": AirtableTableConfig(
+                    table_id="tbl7rZK72iqV3h9Jm"
+                ),  # 17,000
+                "projects": AirtableTableConfig(
+                    table_id="tblYNkpmgpAdZBV2I"
+                ),  # 1,509
+                "confirmed_events": AirtableTableConfig(
+                    table_id="tbl4a18NRx3I4qGPu"
+                ),  # 102
+            }
+        ),
         "synced_data_warehouse_slack_users": AirtableBaseConfig(
             base_id="app5iK28ZvD6sx7qW",
             tables={

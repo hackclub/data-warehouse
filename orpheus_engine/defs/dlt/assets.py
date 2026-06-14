@@ -618,6 +618,26 @@ hack_club_videos_db_assets = create_airtable_sync_assets(
     description="Loads hack_club_videos_db data into the warehouse.airtable_hack_club_videos_db schema."
 )
 
+# Daydream game-jam series: two Airtable bases (no app DB). Project hours are
+# static per-project numbers (no per-day grain); see airtable/definitions.py.
+daydream_assets = create_airtable_sync_assets(
+    base_name="daydream",
+    tables=[
+        "ysws_project_submission",
+        "projects",
+        "podium_attendees",
+        "patch_names",
+        "ysws_config",
+    ],
+    description="Loads daydream data into the warehouse.airtable_daydream schema."
+)
+
+daydream_ops_assets = create_airtable_sync_assets(
+    base_name="daydream_ops",
+    tables=["all_attendees_ever", "projects", "confirmed_events"],
+    description="Loads daydream_ops data into the warehouse.airtable_daydream_ops schema."
+)
+
 # --- DLT Asset: Loads Data into Warehouse using DLT ---
 @asset(
     compute_kind="dlt", # Tagging the compute type for UI clarity
