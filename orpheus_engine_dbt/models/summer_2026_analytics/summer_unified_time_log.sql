@@ -163,7 +163,17 @@ WITH program_windows AS (
         -- table. CLOSED window prevents never-unclaimed aliases from crediting
         -- old Midnight claims after the program ended.
         ('midnight',   TIMESTAMP WITH TIME ZONE '2025-11-05 00:00:00+00',
-                       TIMESTAMP WITH TIME ZONE '2026-04-22 00:00:00+00')
+                       TIMESTAMP WITH TIME ZONE '2026-04-22 00:00:00+00'),
+        -- Carnival (carnival.hackclub.com, Hackatime-tracked coding YSWS). The
+        -- app's project↔alias linkage (project_hackatime_project) only carries a
+        -- 2026-05 created_at (a migration artifact), so the window — not the
+        -- linkage timestamp — gates time. In-window Hackatime for the linked
+        -- aliases ramps 2025-12 (28h/7 users) -> 2026-01 (131h/16 users) and
+        -- peaks Feb-May 2026; a handful of pre-program rows on reused alias names
+        -- (~25 raw hrs across Aug-Nov 2025) sit below the start. The app is still
+        -- active (devlogs/sessions through 2026-06-14), so the window is open.
+        ('carnival',   TIMESTAMP WITH TIME ZONE '2025-12-01 00:00:00+00',
+                       NULL::timestamptz)
         -- This model is the CREDITED-HOURS log (Hackatime + devlog/journal) for
         -- coding programs. Separate, daily-grained programs live in
         -- daily_active_users: fallout (ship-based) and macondo (its own
@@ -1200,6 +1210,50 @@ neighborhood_ht_claims AS (
       AND hp.email IS NOT NULL AND BTRIM(hp.email) <> ''
 ),
 
+-- Carnival (carnival.hackclub.com) links Hackatime via project_hackatime_project
+-- (one row per alias; 137 rows / 131 aliases over 132 projects). Hackatime is the
+-- only daily time source: devlog.duration_seconds banks Hackatime time
+-- (hackatime_pulled_at is set on every devlog), and project.hackatime_total_seconds
+-- / hours_spent_seconds are banked snapshot totals — counting any of them next to
+-- the Hackatime claims would double count (SoM rationale). Identity is the user's
+-- normalized email (carnival.user.email; hackatime_user_id is set on only 83/570
+-- users, so email is the join key).
+--
+-- claim_start_ts is the program launch (2025-12-01), NOT the linkage row's
+-- created_at: every project_hackatime_project.created_at is 2026-05-04+ (the app
+-- backfilled the table in May), so gating on it would wrongly drop Dec-Apr coding.
+-- The program window does the real gating and trims pre-program coding on reused
+-- alias names.
+--
+-- Quality controls (audited 2026-06-14):
+--   * users.is_frozen is Carnival's ban flag — 0 of 570 users are frozen today,
+--     but the gate is kept as a future-proof fraud exclusion (hctg/midnight
+--     precedent).
+--   * identity-join coverage: 59 of 63 alias-claiming users (93.7%) match a
+--     Hackatime email after normalization (siege 94.3%, sleepover 94.6%).
+--   * scale cross-check: in-window Hackatime for the linked aliases is ~1,071 raw
+--     hours / 63 users pre-dedup, consistent with the app's own banked totals
+--     (project.hackatime_total_seconds 834h; devlogs 315h) given the claims path
+--     captures all in-window Hackatime, not just banked devlog snapshots.
+carnival_ht_claims AS (
+    SELECT 'carnival'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(php.name)) AS hackatime_alias,
+        proj.name AS project_name,
+        NULLIF(BTRIM(proj.code_url), '') AS code_url,
+        TIMESTAMP WITH TIME ZONE '2025-12-01 00:00:00+00' AS claim_start_ts
+    FROM {{ source('carnival', 'project_hackatime_project') }} php
+    JOIN {{ source('carnival', 'project') }} proj ON proj.id = php.project_id
+    JOIN {{ source('carnival', 'user') }} u ON u.id = proj.creator_id
+    WHERE php.name IS NOT NULL AND BTRIM(php.name) <> ''
+      AND u.email IS NOT NULL AND BTRIM(u.email) <> ''
+      AND NOT COALESCE(u.is_frozen, false)
+),
+
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
@@ -1218,6 +1272,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM athena_award_ht_claims
     UNION ALL SELECT * FROM milkyway_ht_claims
     UNION ALL SELECT * FROM neighborhood_ht_claims
+    UNION ALL SELECT * FROM carnival_ht_claims
 ),
 
 all_claims AS (

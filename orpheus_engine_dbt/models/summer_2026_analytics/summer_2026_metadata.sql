@@ -33,7 +33,8 @@ WITH source_info AS (
         ('beest', 'program db', DATE '2026-04-06'),
         ('stack', 'program db', DATE '2026-05-01'),
         ('offtrack', 'program db', DATE '2026-05-01'),
-        ('stardance', 'program db', DATE '2026-05-31')
+        ('stardance', 'program db', DATE '2026-05-31'),
+        ('carnival', 'program db', DATE '2025-12-01')
     ) AS t(program_name, source_type, program_start_date)
 ),
 
@@ -251,6 +252,17 @@ source_updates AS (
         SELECT MAX(updated_at)::timestamptz AS last_updated_at FROM {{ source('siege', 'users') }}
         UNION ALL
         SELECT MAX(updated_at)::timestamptz FROM {{ source('siege', 'projects') }}
+    ) s
+
+    -- Carnival is active; updated_at on the mirrored tables tracks real activity.
+    UNION ALL
+    SELECT 'carnival', MAX(last_updated_at)
+    FROM (
+        SELECT MAX(updated_at)::timestamptz AS last_updated_at FROM {{ source('carnival', 'user') }}
+        UNION ALL
+        SELECT MAX(updated_at)::timestamptz FROM {{ source('carnival', 'project') }}
+        UNION ALL
+        SELECT MAX(updated_at)::timestamptz FROM {{ source('carnival', 'project_hackatime_project') }}
     ) s
 )
 

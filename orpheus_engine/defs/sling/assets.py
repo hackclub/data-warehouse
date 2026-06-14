@@ -78,6 +78,7 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "BEEST_COOLIFY_URL",
     "SIEGE_COOLIFY_URL",
     "CONSTRUCT_COOLIFY_URL",
+    "CARNIVAL_COOLIFY_URL",
     "WAREHOUSE_COOLIFY_URL",
 ]
 
@@ -246,6 +247,12 @@ construct_db_connection = SlingConnectionResource(
     connection_string=EnvVar("CONSTRUCT_COOLIFY_URL"),
 )
 
+carnival_db_connection = SlingConnectionResource(
+    name="CARNIVAL_DB",
+    type="postgres",
+    connection_string=EnvVar("CARNIVAL_COOLIFY_URL"),
+)
+
 review_db_connection = SlingConnectionResource(
     name="REVIEW_DB",
     type="postgres",
@@ -331,6 +338,7 @@ sling_replication_resource = SlingResource(
         beest_db_connection,
         siege_db_connection,
         construct_db_connection,
+        carnival_db_connection,
         review_db_connection,
         joe_db_connection,
         auth_db_connection,
@@ -2113,6 +2121,62 @@ construct_replication_config = {
     },
 }
 
+# --- Carnival Database Replication Configuration ---
+# Carnival (carnival.hackclub.com) is an active coding YSWS that tracks time via
+# Hackatime: project_hackatime_project links each project to one or more
+# Hackatime project aliases, joined to global Hackatime in summer_unified_time_log.
+# Only the analytics-relevant tables/columns are mirrored. Identity (Slack OAuth)
+# and Hackatime tokens, the IDV identity_token/refresh_token, and participant PII
+# (home address, birthday) are excluded; the select lists pin today's columns so a
+# future app migration can't leak secrets. devlog/session/bounty/shop/review tables
+# are not mirrored — DAU comes from the Hackatime claims path, not app sessions.
+carnival_replication_config = {
+    "source": "CARNIVAL_DB",
+    "target": "WAREHOUSE_DB",
+
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "carnival.{stream_table}",
+    },
+
+    "streams": {
+        "public.user": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+            "select": [
+                "id", "name", "email", "slack_id", "role",
+                "verification_status", "hackatime_user_id",
+                "hackatime_connected_at", "is_frozen", "frozen_reason",
+                "frozen_at", "created_at", "updated_at",
+            ],
+        },
+        "public.project": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+            "select": [
+                "id", "creator_id", "name", "description", "category",
+                "status", "code_url", "video_url", "playable_demo_url",
+                "hackatime_project_name", "hackatime_started_at",
+                "hackatime_stopped_at", "hackatime_total_seconds",
+                "hours_spent_seconds", "approved_hours", "bounty_project_id",
+                "started_on_carnival_at", "submitted_at",
+                "created_at", "updated_at",
+            ],
+        },
+        "public.project_hackatime_project": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+            "select": [
+                "id", "project_id", "name", "is_default",
+                "first_devlog_id", "created_at", "updated_at",
+            ],
+        },
+    },
+}
+
 # --- HCB Database Replication Configuration ---
 # For calculating monthly actives and transaction ledger
 hcb_replication_config = {
@@ -2641,6 +2705,29 @@ def construct_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=construct_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+@dg.asset(
+    name="carnival_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def carnival_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the analytics-safe Carnival DB columns into the warehouse."""
+    context.log.info("Starting Carnival → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, carnival_replication_config)
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=carnival_replication_config,
     ):
         pass
 

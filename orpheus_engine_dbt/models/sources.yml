@@ -394,6 +394,21 @@ sources:
         description: "Construct T2 review actions, used for quality checks."
         meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
 
+  - name: carnival
+    schema: carnival
+    quoting:
+      identifier: true
+    tables:
+      - name: user
+        description: "Carnival users with email, slack_id, hackatime_user_id, and is_frozen ban flag; token/PII columns excluded from the Sling mirror."
+        meta: { dagster: { deps: ['carnival_warehouse_mirror'] } }
+      - name: project
+        description: "Carnival projects with creator_id, code_url, and hackatime_project_name; banked hackatime_total_seconds/hours_spent_seconds kept for cross-check only."
+        meta: { dagster: { deps: ['carnival_warehouse_mirror'] } }
+      - name: project_hackatime_project
+        description: "Carnival project↔Hackatime alias linkage (one row per alias), joined to global Hackatime in summer_unified_time_log."
+        meta: { dagster: { deps: ['carnival_warehouse_mirror'] } }
+
   - name: hack_club_the_game
     schema: hack_club_the_game
     tables:

@@ -19,7 +19,7 @@
 --   Coding/journal/work-session programs (stardance, flavortown, stack,
 --   offtrack, beest, stasis, horizons, blueprint, summer_of_making,
 --   hack_club_the_game, shipwrecked, siege, athena_award, milkyway,
---   sleepover, neighborhood, construct, shiba, midnight) come from
+--   sleepover, neighborhood, construct, shiba, midnight, carnival) come from
 --   {{ ref('summer_unified_time_log') }}, inheriting its cross-program
 --   equal-split dedup and run windows. Horizons switches to its app-native
 --   user_daily_activity table from 2026-04-22 onward.
@@ -42,6 +42,10 @@
 --                 2026-01-16, ported from spring_2026_analytics),
 --                 construct — Construct (active; app activity began 2025-12-02),
 --                 custom devlog minutes with trust filtering and duration caps.
+--                 carnival — Carnival (active; window opens 2025-12-01),
+--                 Hackatime-only via project_hackatime_project alias claims;
+--                 is_frozen ban gate (0 today), banked devlog/project seconds
+--                 not counted (see summer_unified_time_log).
 --   historical  : summer_of_making — SoM 2025 (2025-06-16 to 2025-10-02),
 --                 included for the year-over-year comparison. Hackatime-only
 --                 methodology; see summer_unified_time_log for why devlog
