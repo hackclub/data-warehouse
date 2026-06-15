@@ -5,18 +5,19 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
-    # Core Dagster packages on 1.11.x versioning
-    "dagster>=1.11.14,<1.12.0",
-    "dagster-cloud>=1.11.14,<1.12.0",
-    "dagster-webserver>=1.11.14,<1.12.0",
-    # Dagster extension packages on 0.27.x versioning
-    "dagster-postgres>=0.27.14,<0.28.0",
-    "dagster-aws>=0.27.14,<0.28.0",
-    "dagster-docker>=0.27.14,<0.28.0",
-    "dagster-dlt>=0.27.14,<0.28.0",
-    "dagster-sling>=0.27.14,<0.28.0",
-    "dagster-dbt>=0.27.14,<0.28.0",
-    "dagster-embedded-elt>=0.27.14,<0.28.0",
+    # Core Dagster packages on 1.13.x versioning
+    # (>=1.13.1 fixes GHSA-mjw2-v2hm-wj34 SQL injection in DB I/O managers)
+    "dagster>=1.13.1,<1.14.0",
+    "dagster-cloud>=1.13.1,<1.14.0",
+    "dagster-webserver>=1.13.1,<1.14.0",
+    # Dagster extension packages on 0.29.x versioning (matches core 1.13.x)
+    "dagster-postgres>=0.29.1,<0.30.0",
+    "dagster-aws>=0.29.1,<0.30.0",
+    "dagster-docker>=0.29.1,<0.30.0",
+    "dagster-dlt>=0.29.1,<0.30.0",
+    "dagster-sling>=0.29.1,<0.30.0",
+    "dagster-dbt>=0.29.1,<0.30.0",
+    "dagster-embedded-elt>=0.29.1,<0.30.0",
     # Non-dagster dependencies
     "psycopg2-binary",
     "python-dotenv",

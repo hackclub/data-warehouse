@@ -271,8 +271,20 @@ if DBT_PROFILES_DIR_PATH and dbt_project_valid and DBT_MANIFEST_PATH:
         manifest=DBT_MANIFEST_PATH,
         # Multiple sources (e.g. a dlt parent table and its child tables) may map to
         # the same warehouse asset key in sources.yml.
+        #
+        # enable_source_metadata=False is required alongside the duplicate-key
+        # setting: dagster-dbt >=0.29 defaults it to True, which stamps each
+        # source's distinct metadata onto the generated AssetDep. When two
+        # sources collapse to the same warehouse asset key, those per-source
+        # metadata payloads make the two dependency edges unequal, and Dagster
+        # rejects "more than once" duplicate deps that differ. Dropping the
+        # source metadata makes the edges identical so Dagster dedupes them
+        # automatically (the pre-0.29 behavior).
         dagster_dbt_translator=DagsterDbtTranslator(
-            settings=DagsterDbtTranslatorSettings(enable_duplicate_source_asset_keys=True)
+            settings=DagsterDbtTranslatorSettings(
+                enable_duplicate_source_asset_keys=True,
+                enable_source_metadata=False,
+            )
         ),
         # select="tag:my_tag", # Optional: Load only a subset of assets
         # exclude="config.materialized:ephemeral", # Optional: Exclude certain models
