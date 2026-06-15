@@ -2,8 +2,10 @@
 
 **Audience:** an AI agent (or human) working in this repo with warehouse access.
 **Goal:** every YSWS program that meaningfully matters (ranked by weighted projects over
-the past 12 months) has correct daily-active-user and hours-logged series in the
-`summer_2026_analytics` dbt models.
+the past 12 months) **and has a live leading-indicator activity system** (see ground
+rule 7) has correct daily-active-user and hours-logged series in the
+`summer_2026_analytics` dbt models. Programs whose only record is a submission form
+(repo URL + self-reported hours) are out of scope — `n/a`, not "unbuilt".
 **Cadence:** run whenever asked. Each run adds ONE program (chosen by the user) —
 incremental by design.
 **Sibling runbook:** `runbooks/ysws-dau-self-heal.md` checks that what already exists is
@@ -48,6 +50,20 @@ decision made so far, per program.
    to ≤24h. DAU is never affected by caps.
 6. **Audit before deciding, document after.** Every exclusion/cap must cite measured
    numbers in the model comments, the way the existing CTE comments do.
+7. **Leading indicators only — no post-hoc reconstruction.** DAU and hours must come
+   from a system Hack Club operated that recorded activity *live, while users were
+   building*: Hackatime heartbeats reached through a project↔alias link the program
+   captured during the build, or an app's own devlogs / journals / work-sessions /
+   daily rollups. A repo URL plus self-reported `hours_spent` collected on a
+   submission form is NOT an activity system — we only learn the repo exists at
+   submission, so anything derived from it after the fact (e.g. scraping the
+   submitted repo's commit history) is lagging and survivorship-biased: it credits
+   only people who finished and submitted, and assigns activity to dates no HC system
+   was actually watching. Do not use it. The lone grandfathered exception is Highway,
+   where the JOURNAL.md commits WERE the deliverable and the repos were the
+   submission's whole point; treat it as a one-off, never as a template, and do not
+   generalize commit-day reconstruction to any other program. A program with no live
+   leading-indicator system is `n/a` for DAU — not a coverage gap to be filled.
 
 ---
 
@@ -101,6 +117,16 @@ that had no DB last quarter may have one now).
 
 - One-day or weekend events (all approvals clustered on ~1 date in the 1a query) have no
   daily-activity system — mark `n/a`, don't count as missing.
+- **Submission-only programs** — those whose only trace is the unified-DB row (repo URL +
+  self-reported hours) with no live leading-indicator system (no app devlogs/sessions/
+  journals, no Hackatime project↔alias link captured during the build) — are `n/a` per
+  ground rule 7, not a coverage gap. Most low-ceremony Airtable-form YSWS land here, and
+  they can rank high by weighted projects, so check this BEFORE proposing them: a repo
+  URL in `code_url` and a `hours_spent` value are NOT a leading indicator. The discriminator
+  is whether the program captured a live Hackatime alias / app activity per user during
+  the build — if it only collected a repo at submission, stop, mark `n/a`. (In-person
+  event programs like Daydream/Campfire and certifications are `n/a` for the same reason
+  unless they separately captured live per-user build activity — attendance is not DAU.)
 - A program already covered but broken belongs to the self-heal runbook, not this one.
 
 ## Phase 2 — Triage the top 3 actionable gaps
@@ -151,6 +177,15 @@ Also verify SUBSTANCE: a found DB must contain activity tables (projects/journal
 activity lived in Hackatime + Airtable. And check the data actually spans the program's
 run (row counts, max timestamps) before classifying as class A/B.
 
+Those activity tables must be a LEADING indicator (ground rule 7): live per-user
+devlogs/sessions/journals, a program-native daily rollup, or a Hackatime project↔alias
+link the program captured during the build. A table that only holds final submissions
+(repo URL + self-reported hours, even one row per project) has no daily signal and is
+NOT reconstructable from the submitted repos — classify the program `n/a`, not class A.
+A useful triage shortcut for the whole form-YSWS tail: ask "did this program capture a
+Hackatime alias (or app activity) per user while they were building, or only a repo at
+submission?" — only the former is buildable.
+
 ## Phase 3 — User checkpoint (required, do not skip)
 
 Present a compact table: rank, program, weighted projects, class (A–D), what exactly is
@@ -176,7 +211,11 @@ descriptions. Then:
 3. **Program-native daily rollup** or **artifact-based activity** (timelapses, journal
    posts) when the app provides them — these go directly into `daily_active_users.sql` /
    `daily_hours_logged_by_program.sql` instead of the unified log (see the existing
-   daily-grained programs there).
+   daily-grained programs there). The artifact must be a LIVE leading indicator the
+   program tracked during the build (ground rule 7). Highway's GitHub-commit-day path is
+   the grandfathered exception, NOT a reusable pattern: do not reconstruct DAU from a
+   submitted repo's commit history for any other program — those repos were unknown until
+   submission, so the signal is lagging and survivorship-biased.
 4. Hours come from `{{ ref('hourly_project_activity') }}` for Hackatime paths
    (prod: `public_hackatime_analytics.hourly_project_activity`). Known quirks: hour
    buckets are ET-labeled (pre-existing, applies to every program — do not "fix" it
