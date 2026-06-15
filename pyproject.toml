@@ -49,6 +49,9 @@ dependencies = [
     "duckdb>=1.0.0",
     # Security: CVE fix for TOCTOU symlink vulnerability
     "filelock>=3.20.3",
+    # Security: GHSA-5rjg-fvgr-3xxf path traversal fix (>=78.1.1); capped <81
+    # because setuptools 81 removed pkg_resources, which dlt imports at runtime.
+    "setuptools>=78.1.1,<81",
 ]
 
 [project.optional-dependencies]
