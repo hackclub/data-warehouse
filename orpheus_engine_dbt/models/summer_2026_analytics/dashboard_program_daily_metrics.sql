@@ -43,7 +43,8 @@ program_labels AS (
     SELECT * FROM (VALUES
         ('summer_of_making', 'Summer of Making'),
         ('hack_club_the_game', 'Hack Club: The Game'),
-        ('athena_award', 'Athena Award')
+        ('athena_award', 'Athena Award'),
+        ('high_seas', 'High Seas')
     ) AS t(program_name, program_label)
 )
 

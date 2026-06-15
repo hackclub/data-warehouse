@@ -541,6 +541,35 @@ sources:
         description: "Raw Airtable records from all bases (base_id, table_id, record_id, fields JSONB)."
         meta: { dagster: { deps: ['airtable_raw_all_bases_sync'] } }
 
+  # High Seas, Arcade, and Juice are ended programs whose Airtable backends are
+  # replicated by Fivetran (note the _fivetran_synced column), NOT by a Dagster
+  # Sling/dlt mirror — so, like the fivetran_log source above, these have no
+  # Dagster `deps`. Only the columns the DAU models read are documented here;
+  # _fivetran_synced is the mirror-freshness signal used in summer_2026_metadata.
+  - name: airtable_high_seas
+    schema: airtable_high_seas___ysws_apptenfycuiyfgcr6
+    tables:
+      - name: people
+        description: "High Seas participants (record_id, normalized email, slack_id, disciplinary status)."
+      - name: ships
+        description: "High Seas ship submissions; wakatime_project_name is the per-ship Hackatime alias, entrant_record_id links to people, entrant_disciplinary_status/entrant_freeze_activity are the ban/fraud gate, repo_url/title for display. Banked hours/credited_hours/total_hours are snapshot totals (not daily activity)."
+
+  - name: airtable_arcade
+    schema: airtable_arcade__summer_24__app4kcwulfb02bv8q
+    tables:
+      - name: sessions
+        description: "Arcade live 'Hack Hour' coding sessions: created_at (start), minutes (Hackatime-tracked), status (Approved/Banked/Unreviewed/Rejected), fraud flag, code_url, user link. approved_minutes is the reviewer-haircut value (not used)."
+      - name: users
+        description: "Arcade users (record_id, normalized email, slack_id, open_fraud_case fraud flag)."
+
+  - name: airtable_juice
+    schema: airtable_juice_appfnfjafslg23jlt
+    tables:
+      - name: juice_stretches
+        description: "Juice live work 'stretches': start_time/end_time, time_worked_seconds (pauses excluded), email_from_signups_, slack_id, is_canceled."
+      - name: jungle_stretches
+        description: "Juice 'Jungle' mini-game work stretches: same shape as juice_stretches (start_time, time_worked_seconds, email_from_signups_, is_canceled)."
+
   - name: highway_github
     schema: highway_github
     description: >

@@ -19,7 +19,8 @@
 --   Coding/journal/work-session programs (stardance, flavortown, stack,
 --   offtrack, beest, stasis, horizons, blueprint, summer_of_making,
 --   hack_club_the_game, shipwrecked, siege, athena_award, milkyway,
---   sleepover, neighborhood, construct, shiba, midnight, carnival, moonshot)
+--   sleepover, neighborhood, construct, shiba, midnight, carnival, moonshot,
+--   high_seas, arcade, juice)
 --   come from {{ ref('summer_unified_time_log') }}, inheriting its cross-program
 --   equal-split dedup and run windows. Horizons switches to its app-native
 --   user_daily_activity table from 2026-04-22 onward.

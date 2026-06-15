@@ -35,6 +35,13 @@
 --                with coding/work-session activity in their own app mirrors.
 --   sleepover  — Airtable-backed program (ongoing, launched ~2026-01-16);
 --                Hackatime-only, ported from spring_2026_analytics.
+--   high_seas  — High Seas (winter 2024, ran ~2024-10 to 2025-01-31),
+--                Airtable-backed; Hackatime claims via ships.wakatime_project_name.
+--                Kept for the year-over-year historical comparison.
+--   arcade     — Arcade (Summer 2024, ran ~2024-06 to 2024-09), Airtable-backed;
+--                custom time from live "Hack Hour" session minutes.
+--   juice      — Juice (Jan-May 2025, juice.hackclub.com), Airtable-backed;
+--                custom time from live work "stretches".
 --
 -- Sources per program:
 --   Hackatime coding — global hackatime heartbeats, attributed to a program by
@@ -181,7 +188,31 @@ WITH program_windows AS (
         -- aliases never unclaim, so in-window Hackatime keeps a dead-claim tail of
         -- ~250-330 hrs/mo through spring 2026 that must not split live programs.
         ('moonshot',   TIMESTAMP WITH TIME ZONE '2025-10-25 00:00:00+00',
-                       TIMESTAMP WITH TIME ZONE '2026-01-01 00:00:00+00')
+                       TIMESTAMP WITH TIME ZONE '2026-01-01 00:00:00+00'),
+        -- High Seas (winter 2024, ended ~2025-01-31), Airtable-backed. First
+        -- ships 2024-10-02 and the in-window Hackatime ramps from October (116
+        -- users) to a Nov-Jan peak (~730 users / ~16k hrs/mo), then cliffs 6x
+        -- from 2025-01-31 (686 hrs) to 2025-02-01 (113 hrs) at program end.
+        -- CLOSED window 2025-02-01 required: aliases never unclaim, so the Feb+
+        -- tail (~60-140 users/day) is dead-claim coding that must not split live
+        -- programs. Opens 2024-10-01 (the Sep trickle is 7 users/41 hrs).
+        ('high_seas',  TIMESTAMP WITH TIME ZONE '2024-10-01 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2025-02-01 00:00:00+00'),
+        -- Arcade (Summer 2024, ended ~2024-09). sessions (live ~1-hour Hack
+        -- Hour coding sessions) run 2024-06-17..2024-09-25; window opens
+        -- 2024-06-16 to capture the pre-launch beta sessions and closes
+        -- 2024-09-30 after the last session. No covered program overlaps this
+        -- window, so Arcade adds with no dedup impact on existing programs.
+        ('arcade',     TIMESTAMP WITH TIME ZONE '2024-06-16 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2024-09-30 00:00:00+00'),
+        -- Juice (Jan-May 2025, juice.hackclub.com). Work "stretches" run
+        -- 2025-01-24..2025-05-11; window opens 2025-01-24 and closes 2025-05-12
+        -- after the last stretch. Overlaps only High Seas (Jan-Feb 2025, which
+        -- is Hackatime-aliased) and the very start of neighborhood (May 2025);
+        -- Juice has no Hackatime alias so it shares only same-repo-same-day URL
+        -- dedup, which is negligible across these distinct programs.
+        ('juice',      TIMESTAMP WITH TIME ZONE '2025-01-24 00:00:00+00',
+                       TIMESTAMP WITH TIME ZONE '2025-05-12 00:00:00+00')
         -- This model is the CREDITED-HOURS log (Hackatime + devlog/journal) for
         -- coding programs. Separate, daily-grained programs live in
         -- daily_active_users: fallout (ship-based) and macondo (its own
@@ -723,6 +754,108 @@ shiba_custom_hourly AS (
             ) AS day_total_hours
         FROM shiba_activity_hourly
     ) x
+),
+
+-- Arcade (Summer 2024) is Airtable-backed: the arcade__summer_24 mirror IS the
+-- program db. sessions is Arcade's live activity log — one ~1-hour "Hack Hour"
+-- coding session per row, with Hackatime-tracked minutes, created_at (session
+-- start) and a reviewer status. Sessions were logged live as users coded, so
+-- they are the daily leading indicator and session minutes are the time source.
+-- Identity is the participant's normalized email (users.email; sessions link to
+-- users by the user record link, which joins 100% of sessions).
+--
+-- Quality controls (audited 2026-06-14):
+--   * 'Rejected'/'Rejected Locked' sessions, session-level fraud = [true], and
+--     users carrying any open_fraud_case (Arcade's fraud flags) are excluded —
+--     together 16.8% of raw session hours and 107 fully-excluded users.
+--   * 'Unreviewed' sessions (the program ended before review finished; ~5.4k
+--     users, the largest status by user count) are KEPT as claimed live
+--     activity, consistent with crediting claimed time where review lags
+--     (stasis/stack/milkyway precedent). Raw minutes are credited, NOT the
+--     reviewer-haircut approved_minutes (which is 0 for unreviewed and would
+--     erase those users).
+--   * no session-day exceeds the shared 24h/user-day cap (a no-op guard here).
+--     Kept: 5,476 users / 103.4k raw hours / peak DAU 645.
+arcade_custom_hourly AS (
+    SELECT
+        DATE_TRUNC('hour', s.created_at) AS activity_hour,
+        'arcade'::text AS program_name,
+        u.user_email,
+        NULL::text AS project_name,
+        NULLIF(BTRIM(s.code_url), '') AS code_url,
+        ROUND(SUM(s.minutes)::numeric / 60.0, 4) AS raw_hours_logged,
+        'custom'::text AS logging_method,
+        ('arcade.sessions.minutes; sessions=' || COUNT(*)::text) AS source_detail
+    FROM {{ source('airtable_arcade', 'sessions') }} s
+    JOIN (
+        SELECT record_id,
+            CASE WHEN POSITION('@' IN LOWER(BTRIM(email))) > 0
+                 THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(email)), '@', 1), '+', 1)
+                      || '@' || SPLIT_PART(LOWER(BTRIM(email)), '@', 2)
+                 ELSE SPLIT_PART(LOWER(BTRIM(email)), '+', 1)
+            END AS user_email,
+            open_fraud_case
+        FROM {{ source('airtable_arcade', 'users') }}
+        WHERE email IS NOT NULL AND BTRIM(email) <> ''
+    ) u ON u.record_id = (CASE WHEN jsonb_typeof(s."user") = 'array'
+                               THEN s."user"->>0 ELSE s."user"#>>'{}' END)
+    WHERE s.minutes > 0
+      AND s.status NOT IN ('Rejected', 'Rejected Locked')
+      AND NOT COALESCE(s.fraud @> '[true]'::jsonb, false)
+      AND u.open_fraud_case IS NULL
+    GROUP BY 1, 2, 3, 4, 5
+),
+
+-- Juice (Jan-May 2025, juice.hackclub.com) is Airtable-backed: the juice mirror
+-- IS the program db. juice_stretches and jungle_stretches are Juice's live work
+-- sessions ("stretches") — start_time/end_time and time_worked_seconds tracked
+-- live as the user worked (pauses excluded; total_pause_time_seconds is a
+-- separate field). These are the daily leading indicator, so stretch seconds are
+-- the time source, bucketed by start_time. Identity is the participant's
+-- normalized email (email_from_signups_, present on 99.9% of stretches).
+--
+-- Quality controls (audited 2026-06-14):
+--   * is_canceled stretches (canceled / abandoned sessions) are excluded.
+--   * Juice has NO ban/fraud flag anywhere in its base, so no fraud exclusion is
+--     applied; is_canceled plus the shared 24h/user-day cap (27 user-days
+--     exceeded it, shaving 331 of 20,640 raw hours) are the only controls.
+--   * jungle_stretches (the in-app "Jungle" mini-game's work sessions) is unioned
+--     in — both are real Juice work time and never share a stretch row.
+--     Kept: 471 users / ~20.3k hours / peak DAU 114.
+juice_custom_hourly AS (
+    SELECT
+        DATE_TRUNC('hour', st.start_time) AS activity_hour,
+        'juice'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(st.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(st.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(st.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(st.email)), '+', 1)
+        END AS user_email,
+        st.project_name,
+        NULL::text AS code_url,
+        ROUND(SUM(st.secs)::numeric / 3600.0, 4) AS raw_hours_logged,
+        'custom'::text AS logging_method,
+        ('juice.' || MIN(st.src) || '.time_worked_seconds; stretches=' || COUNT(*)::text) AS source_detail
+    FROM (
+        SELECT
+            (CASE WHEN jsonb_typeof(email_from_signups_) = 'array'
+                  THEN email_from_signups_->>0 ELSE email_from_signups_#>>'{}' END) AS email,
+            start_time, time_worked_seconds AS secs, is_canceled,
+            'Juice stretch'::text AS project_name, 'juice_stretches'::text AS src
+        FROM {{ source('airtable_juice', 'juice_stretches') }}
+        UNION ALL
+        SELECT
+            (CASE WHEN jsonb_typeof(email_from_signups_) = 'array'
+                  THEN email_from_signups_->>0 ELSE email_from_signups_#>>'{}' END),
+            start_time, time_worked_seconds, is_canceled,
+            'Juice jungle stretch'::text, 'jungle_stretches'::text
+        FROM {{ source('airtable_juice', 'jungle_stretches') }}
+    ) st
+    WHERE st.secs > 0
+      AND NOT COALESCE(st.is_canceled, false)
+      AND NULLIF(BTRIM(st.email), '') IS NOT NULL
+      AND st.start_time IS NOT NULL
+    GROUP BY 1, 2, 3, 4
 ),
 
 -- ============================================================
@@ -1304,6 +1437,61 @@ moonshot_ht_claims AS (
       AND u.status <> 'FraudSuspect'
 ),
 
+-- High Seas (winter 2024, ended ~2025-01-31) is Airtable-backed: the high_seas
+-- mirror IS the program db. ships.wakatime_project_name is the Hackatime alias
+-- the participant tied to each ship (12,358 of 12,754 ships carry one; 8,075
+-- distinct aliases), and ships link to people via entrant_record_id. Hackatime
+-- is the only daily time source — ships.hours/credited_hours/total_hours and
+-- people.waka_*_hours_logged are banked snapshot/rollup totals, not daily
+-- activity (SoM double-count rationale). Identity is the participant's
+-- normalized email (people.email).
+--
+-- claim_start_ts is the program launch (2024-10-01), NOT ship.created_time: a
+-- ship is created when the user SHIPS (after the coding), so gating on it would
+-- drop the in-window coding that earned the ship. The CLOSED program window
+-- (see program_windows) does the real gating.
+--
+-- Quality controls (audited 2026-06-14):
+--   * entrant_disciplinary_status IN ('banned','frozen','suspected') or
+--     entrant_freeze_activity = true is High Seas's fraud/ban gate (a per-person
+--     status denormalized onto ships) — 131 of 1,839 alias-claiming participants
+--     are fully banned and held 6.8% of in-window attributed hours; excluded.
+--   * in-window Hackatime for the kept claims: ~900 users / ~40.3k raw hours /
+--     peak DAU ~285, with no user-day over 24h.
+high_seas_people AS (
+    SELECT record_id,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(email)), '+', 1)
+        END AS user_email
+    FROM {{ source('airtable_high_seas', 'people') }}
+    WHERE email IS NOT NULL AND BTRIM(email) <> ''
+),
+
+high_seas_ht_claims AS (
+    SELECT 'high_seas'::text AS program_name,
+        p.user_email,
+        LOWER(BTRIM(s.wakatime_project_name)) AS hackatime_alias,
+        NULLIF(BTRIM(s.title), '') AS project_name,
+        NULLIF(BTRIM(s.repo_url), '') AS code_url,
+        TIMESTAMP WITH TIME ZONE '2024-10-01 00:00:00+00' AS claim_start_ts
+    FROM {{ source('airtable_high_seas', 'ships') }} s
+    JOIN high_seas_people p
+        ON p.record_id = (CASE WHEN jsonb_typeof(s.entrant_record_id) = 'array'
+                               THEN s.entrant_record_id->>0
+                               ELSE s.entrant_record_id#>>'{}' END)
+    WHERE s.wakatime_project_name IS NOT NULL AND BTRIM(s.wakatime_project_name) <> ''
+      AND NOT COALESCE(
+          (CASE WHEN jsonb_typeof(s.entrant_disciplinary_status) = 'array'
+                THEN s.entrant_disciplinary_status->>0
+                ELSE s.entrant_disciplinary_status#>>'{}' END) IN ('banned', 'frozen', 'suspected')
+          OR (CASE WHEN jsonb_typeof(s.entrant_freeze_activity) = 'array'
+                   THEN s.entrant_freeze_activity->>0
+                   ELSE s.entrant_freeze_activity#>>'{}' END) = 'true',
+          false)
+),
+
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
@@ -1324,6 +1512,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM neighborhood_ht_claims
     UNION ALL SELECT * FROM carnival_ht_claims
     UNION ALL SELECT * FROM moonshot_ht_claims
+    UNION ALL SELECT * FROM high_seas_ht_claims
 ),
 
 all_claims AS (
@@ -1420,6 +1609,8 @@ custom_in_window AS (
             UNION ALL SELECT * FROM milkyway_custom_hourly
             UNION ALL SELECT * FROM construct_custom_hourly
             UNION ALL SELECT * FROM shiba_custom_hourly
+            UNION ALL SELECT * FROM arcade_custom_hourly
+            UNION ALL SELECT * FROM juice_custom_hourly
         ) c
         JOIN program_windows w
             ON w.program_name = c.program_name

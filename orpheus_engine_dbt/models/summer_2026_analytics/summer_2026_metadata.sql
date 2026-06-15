@@ -35,7 +35,10 @@ WITH source_info AS (
         ('offtrack', 'program db', DATE '2026-05-01'),
         ('stardance', 'program db', DATE '2026-05-31'),
         ('carnival', 'program db', DATE '2025-12-01'),
-        ('moonshot', 'program db', DATE '2025-10-25')
+        ('moonshot', 'program db', DATE '2025-10-25'),
+        ('high_seas', 'program db', DATE '2024-10-01'),
+        ('arcade', 'program db', DATE '2024-06-16'),
+        ('juice', 'program db', DATE '2025-01-24')
     ) AS t(program_name, source_type, program_start_date)
 ),
 
@@ -276,6 +279,35 @@ source_updates AS (
         UNION ALL
         SELECT MAX("createdAt")::timestamptz FROM {{ source('moonshot', 'HackatimeProjectLink') }}
     ) s
+
+    -- High Seas (ended ~2025-01-31), Arcade (ended ~2024-09), and Juice (ended
+    -- ~2025-05) are replicated by Fivetran, so _fivetran_synced is the
+    -- mirror-freshness signal (the program data is complete, not changing). The
+    -- status CASE pins them 'fresh' like highway/moonshot so they never age into
+    -- a stale alert.
+    UNION ALL
+    SELECT 'high_seas', MAX(last_updated_at)
+    FROM (
+        SELECT MAX(_fivetran_synced)::timestamptz AS last_updated_at FROM {{ source('airtable_high_seas', 'ships') }}
+        UNION ALL
+        SELECT MAX(_fivetran_synced)::timestamptz FROM {{ source('airtable_high_seas', 'people') }}
+    ) s
+
+    UNION ALL
+    SELECT 'arcade', MAX(last_updated_at)
+    FROM (
+        SELECT MAX(_fivetran_synced)::timestamptz AS last_updated_at FROM {{ source('airtable_arcade', 'sessions') }}
+        UNION ALL
+        SELECT MAX(_fivetran_synced)::timestamptz FROM {{ source('airtable_arcade', 'users') }}
+    ) s
+
+    UNION ALL
+    SELECT 'juice', MAX(last_updated_at)
+    FROM (
+        SELECT MAX(_fivetran_synced)::timestamptz AS last_updated_at FROM {{ source('airtable_juice', 'juice_stretches') }}
+        UNION ALL
+        SELECT MAX(_fivetran_synced)::timestamptz FROM {{ source('airtable_juice', 'jungle_stretches') }}
+    ) s
 )
 
 SELECT
@@ -293,6 +325,9 @@ SELECT
         -- Moonshot ended Dec 2025; one-time manual backfill from a stopped DB, so
         -- its frozen timestamps should not age into a stale alert (data complete).
         WHEN si.program_name = 'moonshot' THEN 'fresh'
+        -- High Seas, Arcade, Juice ended; Fivetran-replicated complete backfills
+        -- whose freshness timestamps should not age into a stale alert.
+        WHEN si.program_name IN ('high_seas', 'arcade', 'juice') THEN 'fresh'
         WHEN si.program_name = 'hackatime' AND su.last_source_updated_at < NOW() - INTERVAL '6 hours' THEN 'stale'
         WHEN si.program_name = 'hackatime' AND su.last_source_updated_at < NOW() - INTERVAL '2 hours' THEN 'lagging'
         WHEN su.last_source_updated_at < NOW() - INTERVAL '24 hours' THEN 'stale'
