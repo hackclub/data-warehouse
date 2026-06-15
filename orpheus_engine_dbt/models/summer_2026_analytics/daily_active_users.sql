@@ -95,163 +95,40 @@
 -- Identity = normalized email where the source provides or can bridge to one;
 -- otherwise a stable source-specific user key. A person counts once per program
 -- per day.
+--
+-- All programs — including the formerly daily-grain/activity-only ones (macondo,
+-- fallout, highway, and Horizons app-native activity from 2026-04-22) — now flow
+-- through summer_unified_time_log, so this model reads from it alone. Each
+-- program's DAU methodology is recovered from the row's logging_method token:
+--   github_commit_days        -> 'github_commit_days'        (highway)
+--   daily_project_activity    -> 'daily_project_activity_time' (macondo)
+--   daily_user_activity       -> 'daily_user_activity_time'  (horizons, post-handoff)
+--   hardware_build            -> 'hardware_build_time_and_journals' (fallout)
+--   hackatime / custom        -> hackatime_time / custom_time / both
+-- Macondo and Horizons app-native DAU are now email-keyed (the time log's single
+-- identity), where the prior program-native models keyed on user_id.
 -- ============================================================================
 
-WITH coding_dau AS (
+WITH program_dau AS (
     SELECT
         program_name,
         (activity_hour AT TIME ZONE 'UTC')::date AS activity_date,
         COUNT(DISTINCT user_email) AS dau,
         CASE
-            WHEN BOOL_OR(logging_method = 'hackatime') AND BOOL_OR(logging_method <> 'hackatime')
+            WHEN BOOL_OR(logging_method = 'github_commit_days') THEN 'github_commit_days'
+            WHEN BOOL_OR(logging_method = 'daily_project_activity') THEN 'daily_project_activity_time'
+            WHEN BOOL_OR(logging_method = 'daily_user_activity') THEN 'daily_user_activity_time'
+            WHEN BOOL_OR(logging_method = 'hardware_build') THEN 'hardware_build_time_and_journals'
+            WHEN BOOL_OR(logging_method = 'hackatime') AND BOOL_OR(logging_method = 'custom')
                 THEN 'hackatime_and_custom_time'
-            WHEN BOOL_OR(logging_method = 'hackatime')
-                THEN 'hackatime_time'
+            WHEN BOOL_OR(logging_method = 'hackatime') THEN 'hackatime_time'
             ELSE 'custom_time'
         END AS dau_methodology
     FROM {{ ref('summer_unified_time_log') }}
-    WHERE program_name <> 'horizons'
-       OR (activity_hour AT TIME ZONE 'UTC')::date < DATE '2026-04-22'
     GROUP BY program_name, (activity_hour AT TIME ZONE 'UTC')::date
-),
-
--- Macondo's own per-day rollup: hackatime_seconds + journal_seconds
-macondo_dau AS (
-    SELECT
-        'macondo'::text AS program_name,
-        dpa.day::date AS activity_date,
-        COUNT(DISTINCT dpa.user_id) FILTER (WHERE dpa.hackatime_seconds > 0
-                                              OR dpa.journal_seconds > 0) AS dau,
-        'daily_project_activity_time'::text AS dau_methodology
-    FROM {{ source('macondo', 'daily_project_activity') }} dpa
-    WHERE dpa.day::text ~ '^\d{4}-\d{2}-\d{2}$'
-      AND dpa.day::date >= DATE '2026-03-23'
-      AND dpa.day::date < CURRENT_DATE
-    GROUP BY 1, dpa.day::date
-),
-
-horizons_dau AS (
-    SELECT
-        'horizons'::text AS program_name,
-        uda.local_date::date AS activity_date,
-        COUNT(DISTINCT uda.user_id) AS dau,
-        'daily_user_activity_time'::text AS dau_methodology
-    FROM {{ source('horizons', 'user_daily_activity') }} uda
-    WHERE uda.local_date::date >= DATE '2026-04-22'
-      AND uda.local_date::date < CURRENT_DATE
-      AND uda.qualified
-      AND uda.seconds > 0
-    GROUP BY 1, uda.local_date::date
-),
-
--- Fallout (hardware): logged time = build-time timelapses (lookout/lapse,
--- duration>0) or a devlog journal entry.
-fallout_norm AS (
-    SELECT id,
-        CASE WHEN POSITION('@' IN LOWER(BTRIM(email))) > 0
-             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(email)), '@', 1), '+', 1)
-                  || '@' || SPLIT_PART(LOWER(BTRIM(email)), '@', 2)
-             ELSE SPLIT_PART(LOWER(BTRIM(email)), '+', 1)
-        END AS user_email
-    FROM {{ source('fallout', 'users') }}
-),
-
-fallout_activity AS (
-    SELECT u.user_email, (l.created_at AT TIME ZONE 'UTC')::date AS activity_date
-    FROM {{ source('fallout', 'lookout_timelapses') }} l
-    JOIN fallout_norm u ON u.id = l.user_id
-    WHERE l.duration > 0 AND (l.created_at AT TIME ZONE 'UTC') <= NOW()
-    UNION ALL
-    SELECT u.user_email, (l.created_at AT TIME ZONE 'UTC')::date
-    FROM {{ source('fallout', 'lapse_timelapses') }} l
-    JOIN fallout_norm u ON u.id = l.user_id
-    WHERE l.duration > 0 AND (l.created_at AT TIME ZONE 'UTC') <= NOW()
-    UNION ALL
-    SELECT u.user_email, (j.created_at AT TIME ZONE 'UTC')::date
-    FROM {{ source('fallout', 'journal_entries') }} j
-    JOIN fallout_norm u ON u.id = j.user_id
-    WHERE j.discarded_at IS NULL AND (j.created_at AT TIME ZONE 'UTC') <= NOW()
-),
-
-fallout_dau AS (
-    SELECT
-        'fallout'::text AS program_name,
-        activity_date,
-        COUNT(DISTINCT user_email) AS dau,
-        'hardware_build_time_and_journals'::text AS dau_methodology
-    FROM fallout_activity
-    WHERE activity_date >= DATE '2026-03-01'
-    GROUP BY 1, activity_date
-),
-
--- Highway (hardware, Summer 2025): journals were JOURNAL.md files committed to
--- each submitted GitHub repo, so a participant's daily activity trace is the
--- commit history of their submitted repos (highway_github backfill scrape).
--- QUALITY CONTROLS (audited 2026-06-12):
---   * 'Purged' submissions excluded — the program's purge bin holds duplicates,
---     all-AI journals, and fraud (123 of 1,692 submissions, 88 emails; 51 of
---     those emails also have legit Fulfilled projects, which still count).
---     Rejected submissions are kept: rejection was quality review (bad README,
---     BOM issues), not a fraud signal, and the build activity was real.
---   * A commit day credits the SUBMITTER(S) of the repo, not the commit author:
---     commit author emails/logins are unreliable (noreply addresses) and team
---     projects were submitted per-member. Identity = normalized email.
---   * Window 2025-05-01 .. 2025-11-01 (exclusive): submissions span 2025-05 to
---     2025-11 (peak Jul, Undercity 2025-07-11..14); later unified-db approvals
---     are review lag, not activity. Commits outside the window (repos predating
---     or outliving the program) are not Highway activity.
-highway_norm AS (
-    SELECT
-        CASE WHEN POSITION('@' IN LOWER(BTRIM(r.fields->>'Email'))) > 0
-             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '@', 1), '+', 1)
-                  || '@' || SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '@', 2)
-             ELSE NULLIF(SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '+', 1), '')
-        END AS user_email,
-        LOWER((REGEXP_MATCH(r.fields->>'Github_Url',
-                            'github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)'))[1])
-        || '/' ||
-        REGEXP_REPLACE(
-            LOWER((REGEXP_MATCH(r.fields->>'Github_Url',
-                                'github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)'))[2]),
-            '\.git$', '') AS repo_key
-    FROM {{ source('airtable_raw_all_bases', 'records') }} r
-    WHERE r.base_id = 'appuDQSHCdCHyOrxw'
-      AND r.table_id = 'tbl9QnZ320NTGJHJj'          -- Highway Projects table
-      AND COALESCE(r.fields->>'Status', '') <> 'Purged'
-      AND r.fields->>'Github_Url' ~* 'github\.com/'
-),
-
-highway_dau AS (
-    SELECT
-        'highway'::text AS program_name,
-        (c.authored_at AT TIME ZONE 'UTC')::date AS activity_date,
-        COUNT(DISTINCT h.user_email) AS dau,
-        'github_commit_days'::text AS dau_methodology
-    FROM highway_norm h
-    JOIN {{ source('highway_github', 'repos') }} gr
-        ON gr.repo_key = h.repo_key
-        AND gr.scrape_status = 'ok'
-    JOIN {{ source('highway_github', 'commits') }} c ON c.repo_key = h.repo_key
-    WHERE h.user_email IS NOT NULL
-      AND (c.authored_at AT TIME ZONE 'UTC') <= NOW()
-      AND (c.authored_at AT TIME ZONE 'UTC')::date >= DATE '2025-05-01'
-      AND (c.authored_at AT TIME ZONE 'UTC')::date < DATE '2025-11-01'
-    GROUP BY 1, 2
-),
-
-combined AS (
-    SELECT program_name, activity_date, dau, dau_methodology FROM coding_dau
-    UNION ALL
-    SELECT program_name, activity_date, dau, dau_methodology FROM macondo_dau
-    UNION ALL
-    SELECT program_name, activity_date, dau, dau_methodology FROM horizons_dau
-    UNION ALL
-    SELECT program_name, activity_date, dau, dau_methodology FROM fallout_dau
-    UNION ALL
-    SELECT program_name, activity_date, dau, dau_methodology FROM highway_dau
 )
 
 SELECT program_name, activity_date, dau, dau_methodology
-FROM combined
+FROM program_dau
 WHERE activity_date < CURRENT_DATE
 ORDER BY activity_date DESC, program_name

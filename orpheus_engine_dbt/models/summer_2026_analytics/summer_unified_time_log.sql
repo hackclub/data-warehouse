@@ -48,6 +48,14 @@
 --                      the user's claimed project alias (user_hackatime_projects).
 --   Custom logging   — program-native devlogs, journals, creator posts, and
 --                      activity telemetry where those are the daily source.
+--   Daily-grain /    — programs whose native source is not hourly Hackatime or
+--   activity-only      custom time: macondo (daily_project_activity rollup),
+--                      horizons app-native daily activity (from 2026-04-22),
+--                      fallout (hardware build timelapses + journals), and
+--                      highway (GitHub commit days, no durations). Added in
+--                      section 6b; see there for grain/identity/dedup handling.
+--                      This makes the model the single activity log for every
+--                      Summer 2026 program.
 --
 -- DEDUP (equal split), inspired by spring:
 --   If the same coding hour is claimed by multiple programs — either because the
@@ -213,13 +221,18 @@ WITH program_windows AS (
         -- dedup, which is negligible across these distinct programs.
         ('juice',      TIMESTAMP WITH TIME ZONE '2025-01-24 00:00:00+00',
                        TIMESTAMP WITH TIME ZONE '2025-05-12 00:00:00+00')
-        -- This model is the CREDITED-HOURS log (Hackatime + devlog/journal) for
-        -- coding programs. Separate, daily-grained programs live in
-        -- daily_active_users: fallout (ship-based) and macondo (its own
-        -- daily_project_activity rollup).
-        -- Horizons keeps Hackatime claims here for pre-2026-04-22 history;
-        -- daily_active_users/daily_hours switch to app-native
-        -- user_daily_activity from 2026-04-22 onward.
+        -- Hackatime + custom devlog/journal time for coding programs is the
+        -- credited-hours core of this model, but it is now the SINGLE activity
+        -- log for ALL Summer 2026 programs: the daily-grain and activity-only
+        -- sources (macondo, fallout, highway, and Horizons app-native activity
+        -- from 2026-04-22 on) are unioned in below via section 6b, so
+        -- daily_active_users / daily_hours_logged_by_program / the deduped DAU
+        -- all read from here alone. Highway and fallout journal-only days carry
+        -- zero credited hours (they are activity-only — see the final filter).
+        -- Horizons keeps Hackatime claims here for pre-2026-04-22 history and
+        -- switches to app-native user_daily_activity (section 6b) from
+        -- 2026-04-22 onward; the run window below closes the Hackatime path at
+        -- the handoff so the two never overlap.
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -1725,12 +1738,228 @@ custom_with_url_split AS (
 ),
 
 -- ============================================================
+-- 6b. DAILY-GRAIN & ACTIVITY-ONLY SOURCES
+--     Programs whose native activity source is not hourly Hackatime/custom
+--     time. These bypass the hourly alias/URL dedup (they expose no shared
+--     alias or repo URL) and the 24h/user-day cap (their upstreams already
+--     cap or aggregate), so each row is added pre-split: split_factor=1,
+--     overlap_type='none'. Each carries a distinct logging_method token so
+--     daily_active_users can recover its DAU methodology label.
+--
+--     Identity is the normalized participant email wherever the source can
+--     bridge to one, so these users dedup against the coding programs in
+--     daily_active_users_deduped. macondo/horizons fall back to a stable
+--     program:user_id key when no email exists (cannot cross-program dedup,
+--     but DAU/hours are preserved); fallout/highway keep NULL for unmatched
+--     users (dropped from DAU by COUNT(DISTINCT), matching their prior
+--     program-native models).
+-- ============================================================
+
+-- Macondo's own per-day rollup (day-grain, bucketed to 00:00 UTC). DAU is now
+-- email-keyed (was user_id-keyed in the old program-native model) so a person
+-- counts once across programs; hours are unchanged (hackatime+journal seconds).
+macondo_activity AS (
+    SELECT
+        (dpa.day::date)::timestamp AS activity_hour,
+        'macondo'::text AS program_name,
+        COALESCE(
+            CASE
+                WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+                    THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                         || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+                ELSE NULLIF(SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1), '')
+            END,
+            'macondo:' || dpa.user_id
+        ) AS user_email,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        'daily_project_activity'::text AS logging_method,
+        ROUND(SUM(COALESCE(dpa.hackatime_seconds, 0) + COALESCE(dpa.journal_seconds, 0))::numeric / 3600.0, 4) AS raw_hours_logged,
+        ROUND(SUM(COALESCE(dpa.hackatime_seconds, 0) + COALESCE(dpa.journal_seconds, 0))::numeric / 3600.0, 4) AS credited_hours_logged,
+        1::smallint AS split_factor,
+        'none'::text AS overlap_type,
+        NULL::text[] AS overlapping_programs,
+        NULL::text AS hackatime_alias,
+        'macondo.daily_project_activity; hackatime+journal seconds'::text AS source_detail,
+        NULL::timestamptz AS claim_started_at
+    FROM {{ source('macondo', 'daily_project_activity') }} dpa
+    LEFT JOIN {{ source('macondo', 'users') }} u ON u.id = dpa.user_id
+    WHERE dpa.day::text ~ '^\d{4}-\d{2}-\d{2}$'
+      AND dpa.day::date >= DATE '2026-03-23'
+      AND (dpa.hackatime_seconds > 0 OR dpa.journal_seconds > 0)
+    GROUP BY 1, 3
+),
+
+-- Horizons app-native daily activity, from the 2026-04-22 handoff onward
+-- (earlier history flows through horizons_ht_claims / the run window above).
+-- Day-grain, bucketed to 00:00 UTC; DAU is now email-keyed. Folding this in
+-- also restores Horizons app-native users to the deduped DAU total, which the
+-- old daily-grain models omitted.
+horizons_post_activity AS (
+    SELECT
+        (uda.local_date::date)::timestamp AS activity_hour,
+        'horizons'::text AS program_name,
+        COALESCE(
+            CASE
+                WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+                    THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                         || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+                ELSE NULLIF(SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1), '')
+            END,
+            'horizons:' || uda.user_id::text
+        ) AS user_email,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        'daily_user_activity'::text AS logging_method,
+        ROUND(SUM(uda.seconds)::numeric / 3600.0, 4) AS raw_hours_logged,
+        ROUND(SUM(uda.seconds)::numeric / 3600.0, 4) AS credited_hours_logged,
+        1::smallint AS split_factor,
+        'none'::text AS overlap_type,
+        NULL::text[] AS overlapping_programs,
+        NULL::text AS hackatime_alias,
+        'horizons.user_daily_activity; qualified seconds'::text AS source_detail,
+        NULL::timestamptz AS claim_started_at
+    FROM {{ source('horizons', 'user_daily_activity') }} uda
+    LEFT JOIN {{ source('horizons', 'users') }} u ON u.user_id = uda.user_id
+    WHERE uda.local_date::date >= DATE '2026-04-22'
+      AND uda.qualified
+      AND uda.seconds > 0
+    GROUP BY 1, 3
+),
+
+-- Fallout (hardware): real created_at timestamps, so this is genuinely hourly.
+-- DAU = a build timelapse (lookout/lapse, duration>0) OR a non-discarded
+-- journal entry (regardless of duration). Hours = timelapse durations +
+-- journal burnout_duration_seconds. Journal entries with no burnout duration
+-- yield 0-hour rows that exist purely to mark the user active that day (kept
+-- by the activity-only branch of the final filter). users join is LEFT so
+-- unmatched authors keep their hours (NULL email, dropped from DAU) — matching
+-- the prior model, which summed hours without a user join.
+fallout_users_norm AS (
+    SELECT
+        id,
+        CASE
+            WHEN POSITION('@' IN LOWER(BTRIM(email))) > 0
+                THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(email)), '@', 1), '+', 1)
+                     || '@' || SPLIT_PART(LOWER(BTRIM(email)), '@', 2)
+            ELSE NULLIF(SPLIT_PART(LOWER(BTRIM(email)), '+', 1), '')
+        END AS user_email
+    FROM {{ source('fallout', 'users') }}
+),
+
+fallout_events AS (
+    SELECT DATE_TRUNC('hour', l.created_at AT TIME ZONE 'UTC') AS activity_hour,
+           u.user_email,
+           l.duration::numeric / 3600.0 AS hours
+    FROM {{ source('fallout', 'lookout_timelapses') }} l
+    LEFT JOIN fallout_users_norm u ON u.id = l.user_id
+    WHERE l.duration > 0 AND (l.created_at AT TIME ZONE 'UTC') <= NOW()
+    UNION ALL
+    SELECT DATE_TRUNC('hour', l.created_at AT TIME ZONE 'UTC'),
+           u.user_email,
+           l.duration::numeric / 3600.0
+    FROM {{ source('fallout', 'lapse_timelapses') }} l
+    LEFT JOIN fallout_users_norm u ON u.id = l.user_id
+    WHERE l.duration > 0 AND (l.created_at AT TIME ZONE 'UTC') <= NOW()
+    UNION ALL
+    SELECT DATE_TRUNC('hour', j.created_at AT TIME ZONE 'UTC'),
+           u.user_email,
+           COALESCE(j.burnout_duration_seconds, 0)::numeric / 3600.0
+    FROM {{ source('fallout', 'journal_entries') }} j
+    LEFT JOIN fallout_users_norm u ON u.id = j.user_id
+    WHERE j.discarded_at IS NULL AND (j.created_at AT TIME ZONE 'UTC') <= NOW()
+),
+
+fallout_activity_log AS (
+    SELECT
+        activity_hour,
+        'fallout'::text AS program_name,
+        user_email,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        'hardware_build'::text AS logging_method,
+        ROUND(SUM(hours)::numeric, 4) AS raw_hours_logged,
+        ROUND(SUM(hours)::numeric, 4) AS credited_hours_logged,
+        1::smallint AS split_factor,
+        'none'::text AS overlap_type,
+        NULL::text[] AS overlapping_programs,
+        NULL::text AS hackatime_alias,
+        'fallout.build_timelapses+journals'::text AS source_detail,
+        NULL::timestamptz AS claim_started_at
+    FROM fallout_events
+    WHERE (activity_hour AT TIME ZONE 'UTC')::date >= DATE '2026-03-01'
+    GROUP BY 1, 3
+),
+
+-- Highway (hardware, Summer 2025): GitHub commit days on submitted repos.
+-- No durations exist, so every row carries 0 hours and serves DAU only (kept
+-- by the activity-only branch of the final filter; excluded from the hours
+-- mart by its HAVING SUM > 0). Commits bucket to their UTC commit-day at
+-- 00:00. Quality controls and window match the prior program-native model.
+highway_norm AS (
+    SELECT
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(r.fields->>'Email'))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '@', 2)
+             ELSE NULLIF(SPLIT_PART(LOWER(BTRIM(r.fields->>'Email')), '+', 1), '')
+        END AS user_email,
+        LOWER((REGEXP_MATCH(r.fields->>'Github_Url',
+                            'github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)'))[1])
+        || '/' ||
+        REGEXP_REPLACE(
+            LOWER((REGEXP_MATCH(r.fields->>'Github_Url',
+                                'github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)'))[2]),
+            '\.git$', '') AS repo_key
+    FROM {{ source('airtable_raw_all_bases', 'records') }} r
+    WHERE r.base_id = 'appuDQSHCdCHyOrxw'
+      AND r.table_id = 'tbl9QnZ320NTGJHJj'          -- Highway Projects table
+      AND COALESCE(r.fields->>'Status', '') <> 'Purged'
+      AND r.fields->>'Github_Url' ~* 'github\.com/'
+),
+
+highway_activity AS (
+    SELECT
+        ((c.authored_at AT TIME ZONE 'UTC')::date)::timestamp AS activity_hour,
+        'highway'::text AS program_name,
+        h.user_email,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        'github_commit_days'::text AS logging_method,
+        0::numeric AS raw_hours_logged,
+        0::numeric AS credited_hours_logged,
+        1::smallint AS split_factor,
+        'none'::text AS overlap_type,
+        NULL::text[] AS overlapping_programs,
+        NULL::text AS hackatime_alias,
+        'highway.github_commit_days (no durations; DAU only)'::text AS source_detail,
+        NULL::timestamptz AS claim_started_at
+    FROM highway_norm h
+    JOIN {{ source('highway_github', 'repos') }} gr
+        ON gr.repo_key = h.repo_key
+        AND gr.scrape_status = 'ok'
+    JOIN {{ source('highway_github', 'commits') }} c ON c.repo_key = h.repo_key
+    WHERE h.user_email IS NOT NULL
+      AND (c.authored_at AT TIME ZONE 'UTC') <= NOW()
+      AND (c.authored_at AT TIME ZONE 'UTC')::date >= DATE '2025-05-01'
+      AND (c.authored_at AT TIME ZONE 'UTC')::date < DATE '2025-11-01'
+    GROUP BY 1, 3
+),
+
+-- ============================================================
 -- 7. FINAL UNION (already bounded to each program's run window upstream)
 -- ============================================================
 combined AS (
     SELECT * FROM hackatime_split_hourly
     UNION ALL
     SELECT * FROM custom_with_url_split
+    UNION ALL
+    SELECT * FROM macondo_activity
+    UNION ALL
+    SELECT * FROM horizons_post_activity
+    UNION ALL
+    SELECT * FROM fallout_activity_log
+    UNION ALL
+    SELECT * FROM highway_activity
 )
 
 SELECT
@@ -1749,5 +1978,9 @@ SELECT
     c.source_detail,
     c.claim_started_at
 FROM combined c
+-- Keep all time-bearing rows, plus the activity-only rows (highway commit days
+-- and fallout journal entries with no logged duration) that exist to mark a
+-- user active that day with zero credited hours.
 WHERE c.credited_hours_logged > 0
+   OR c.logging_method IN ('github_commit_days', 'hardware_build')
 ORDER BY c.activity_hour DESC, c.program_name, c.user_email, c.project_name
