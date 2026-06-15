@@ -395,11 +395,11 @@ sources:
         meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
 
   # Moonshot ended Dec 2025 and its Coolify DB is normally stopped, so this is a
-  # one-time manual backfill (not a scheduled Sling mirror). To refresh: start the
-  # DB (cd /data/coolify/databases/bkosggg48o4oosk8gs80cs40 && docker compose up -d
-  # on coolify-app-server-a) and re-run the one-off pg_dump|psql mirror, then stop
-  # it again. Credential tables (VerificationToken/Authenticator/Session) and token
-  # columns (User.identityToken, Account OAuth tokens) are excluded from the mirror.
+  # one-time manual backfill (not a scheduled Sling mirror). To refresh: locate
+  # and start the Moonshot Postgres service in Coolify, re-run the one-off
+  # pg_dump|psql mirror, then stop it again. Credential tables
+  # (VerificationToken/Authenticator/Session) and token columns
+  # (User.identityToken, Account OAuth tokens) are excluded from the mirror.
   - name: moonshot
     schema: moonshot
     quoting:
