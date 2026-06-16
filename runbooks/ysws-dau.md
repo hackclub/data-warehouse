@@ -224,10 +224,35 @@ descriptions. Then:
 ### 4b. Files to touch (mirror commit 401e325)
 
 - `summer_unified_time_log.sql`: `program_windows` entry (+ window rationale comment),
-  claims and/or custom CTE (+ audited quality-control comment), union wiring.
+  claims and/or custom CTE (+ audited quality-control comment), union wiring. The
+  row-level DAU weights (`dau`, `dau_deduped` — section 8) are computed generically over
+  the final row set, so a new program gets them for free; no per-program wiring. Two
+  prerequisites for them to be correct:
+  - **Identity.** `dau_deduped` (and `daily_active_users_deduped`) merge a person across
+    programs by `user_email`, so emit the SAME normalized email (copy the exact CASE
+    expression). A program-specific fallback key (`newprog_user_<id>`) does NOT dedup
+    against that person's email elsewhere — it overcounts the unique total in BOTH the
+    stacked `dau_deduped` and the deduped mart, so they still reconcile and the test
+    won't catch it. Bridge to a real email wherever the source can; fall back only when
+    it genuinely can't.
+  - **Hours.** `dau_deduped` weights each person by their share of their own day's
+    `credited_hours_logged`. An activity-only / zero-hour program (no durations, like
+    Highway) only contributes a person via the equal-split fallback and gets 0 of any
+    person who logged real time elsewhere. Fine for historical hour-less programs; **flag
+    it if a LIVE program would be hour-less**, since it will read low on the stacked chart.
+  - **Daily-grain sources spread across 24h.** If the source only knows the calendar day
+    (a per-day rollup, not real hourly timestamps), aggregate to (day, user) then
+    `CROSS JOIN hours_of_day` and divide the hours by 24 — one row per hour, attribution
+    split evenly — rather than spiking the whole day at 00:00 UTC (see macondo/horizons).
+    Round hours to ~6dp so 24×(hours/24) recovers the day total. Hour-bearing sources with
+    real timestamps (e.g. fallout) and zero-hour activity-only markers (highway) are left
+    at their native grain.
 - `summer_2026_metadata.sql`: program row + freshness UNION (note mirror-freshness
   semantics for ended programs).
-- `daily_active_users.sql`: header comment (sources, PROGRAM STATUS).
+- `daily_active_users.sql`: header comment (sources, PROGRAM STATUS) only — `dau`
+  (distinct users per program/date) is computed generically from the time log. The
+  stackable cross-program headcount lives on `summer_unified_time_log.dau_deduped`
+  (see that file's bullet above), not here.
 - `sources.yml`: source block with `meta: { dagster: { deps: ['<x>_warehouse_mirror'] } }`,
   only the tables actually used.
 - Multi-word codenames: extend `program_labels` in `dashboard_program_daily_metrics.sql`
@@ -260,7 +285,10 @@ descriptions. Then:
 DBT_PROFILES_DIR=~/.dbt_stardance_tmp uv run dbt run  -s "summer_unified_time_log+" "summer_2026_metadata+"
 DBT_PROFILES_DIR=~/.dbt_stardance_tmp uv run dbt test -s "summer_unified_time_log+" "summer_2026_metadata+"
 ```
-All `summer_2026_dashboard_*` tests must pass. Spot-check
+All `summer_2026_dashboard_*` tests must pass, plus `summer_2026_dau_deduped_reconciles`
+(asserts `SUM(summer_unified_time_log.dau_deduped)` per day == `daily_active_users_deduped.dau`
+— it guards the split arithmetic and that both models filter identity/NULL the same way;
+it does NOT vouch for identity quality, see 4b). Spot-check
 `dashboard_program_daily_metrics` (label renders correctly, `in_45_day_chart_window`
 sane). Rebuild takes ~1min and swaps tables atomically.
 

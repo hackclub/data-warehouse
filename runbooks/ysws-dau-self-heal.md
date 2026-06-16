@@ -84,6 +84,13 @@ Fresh data can still be wrong. Sample and verify:
 3. **Cross-model invariants**, each as a SQL check:
    - `daily_active_users_deduped.dau ≤ SUM(daily_active_users.dau)` per date, and ≥ MAX
      of any single program that date.
+   - Row-level DAU weights on `summer_unified_time_log` aggregate back to the marts
+     (within ~0.01): `SUM(dau_deduped)` per date == `daily_active_users_deduped.dau`, and
+     `SUM(dau)` per (program, date) == `daily_active_users.dau`. The weights spread each
+     person's "1" across their rows (dau within-program, dau_deduped across all programs),
+     so the sums must equal the headcounts. A drift means the weighting math broke or
+     identity/NULL handling drifted between the time log and the marts (this is what
+     `summer_2026_dau_deduped_reconciles` tests).
    - hours per (program, user, day) ≤ 24; credited ≤ ~1.0 per (user, hour) on Hackatime
      paths.
    - `latest_complete_date` = yesterday (UTC-ish; hackatime buckets are ET-labeled —

@@ -44,6 +44,14 @@
 --                custom time from live work "stretches".
 --
 -- Sources per program:
+-- OUTPUT DAU COLUMNS (see section 8): every row carries dau and dau_deduped,
+--   fractional weights that spread each person's "1" across their many rows so a
+--   SUM() aggregates back to a headcount. dau is the within-program share
+--   (SUM over a program-day = that program's distinct users); dau_deduped is the
+--   across-all-programs share (SUM over a day = the unique overall DAU, SUM over
+--   a program-day = the hours-weighted cross-program split). Stack dau_deduped
+--   for a "unique overall DAU by program" chart.
+--
 --   Hackatime coding — global hackatime heartbeats, attributed to a program by
 --                      the user's claimed project alias (user_hackatime_projects).
 --   Custom logging   — program-native devlogs, journals, creator posts, and
@@ -1755,13 +1763,22 @@ custom_with_url_split AS (
 --     program-native models).
 -- ============================================================
 
--- Macondo's own per-day rollup (day-grain, bucketed to 00:00 UTC). DAU is now
--- email-keyed (was user_id-keyed in the old program-native model) so a person
--- counts once across programs; hours are unchanged (hackatime+journal seconds).
-macondo_activity AS (
+-- Hour spine for daily-grain sources. They only know the calendar day, so rather
+-- than spike a person's whole day at 00:00 UTC we spread the attribution evenly
+-- across all 24 hours (1/24 of the hours per hourly row). The downstream DAU
+-- weights still reconcile — a person-day's rows sum to their hours/day-total no
+-- matter how many rows it is split into. raw/credited hours are rounded to 6dp so
+-- 24 × (hours/24) recovers the day total to well within the test tolerances.
+hours_of_day AS (
+    SELECT generate_series(0, 23) AS hr
+),
+
+-- Macondo's own per-day rollup (day-grain). DAU is email-keyed (was user_id-keyed
+-- in the old program-native model) so a person counts once across programs; hours
+-- are unchanged (hackatime+journal seconds), just spread across the 24 hours.
+macondo_daily AS (
     SELECT
-        (dpa.day::date)::timestamp AS activity_hour,
-        'macondo'::text AS program_name,
+        dpa.day::date AS activity_day,
         COALESCE(
             CASE
                 WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
@@ -1771,34 +1788,44 @@ macondo_activity AS (
             END,
             'macondo:' || dpa.user_id
         ) AS user_email,
-        NULL::text AS project_name,
-        NULL::text AS code_url,
-        'daily_project_activity'::text AS logging_method,
-        ROUND(SUM(COALESCE(dpa.hackatime_seconds, 0) + COALESCE(dpa.journal_seconds, 0))::numeric / 3600.0, 4) AS raw_hours_logged,
-        ROUND(SUM(COALESCE(dpa.hackatime_seconds, 0) + COALESCE(dpa.journal_seconds, 0))::numeric / 3600.0, 4) AS credited_hours_logged,
-        1::smallint AS split_factor,
-        'none'::text AS overlap_type,
-        NULL::text[] AS overlapping_programs,
-        NULL::text AS hackatime_alias,
-        'macondo.daily_project_activity; hackatime+journal seconds'::text AS source_detail,
-        NULL::timestamptz AS claim_started_at
+        SUM(COALESCE(dpa.hackatime_seconds, 0) + COALESCE(dpa.journal_seconds, 0))::numeric / 3600.0 AS day_hours
     FROM {{ source('macondo', 'daily_project_activity') }} dpa
     LEFT JOIN {{ source('macondo', 'users') }} u ON u.id = dpa.user_id
     WHERE dpa.day::text ~ '^\d{4}-\d{2}-\d{2}$'
       AND dpa.day::date >= DATE '2026-03-23'
       AND (dpa.hackatime_seconds > 0 OR dpa.journal_seconds > 0)
-    GROUP BY 1, 3
+    GROUP BY 1, 2
+),
+
+macondo_activity AS (
+    SELECT
+        (md.activity_day::timestamp + (h.hr * INTERVAL '1 hour')) AS activity_hour,
+        'macondo'::text AS program_name,
+        md.user_email,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        'daily_project_activity'::text AS logging_method,
+        ROUND((md.day_hours / 24.0)::numeric, 6) AS raw_hours_logged,
+        ROUND((md.day_hours / 24.0)::numeric, 6) AS credited_hours_logged,
+        1::smallint AS split_factor,
+        'none'::text AS overlap_type,
+        NULL::text[] AS overlapping_programs,
+        NULL::text AS hackatime_alias,
+        'macondo.daily_project_activity; hackatime+journal seconds spread across 24h'::text AS source_detail,
+        NULL::timestamptz AS claim_started_at
+    FROM macondo_daily md
+    CROSS JOIN hours_of_day h
 ),
 
 -- Horizons app-native daily activity, from the 2026-04-22 handoff onward
 -- (earlier history flows through horizons_ht_claims / the run window above).
--- Day-grain, bucketed to 00:00 UTC; DAU is now email-keyed. Folding this in
--- also restores Horizons app-native users to the deduped DAU total, which the
--- old daily-grain models omitted.
-horizons_post_activity AS (
+-- Day-grain; DAU is now email-keyed and the day's seconds are spread evenly
+-- across 24 hourly rows (see hours_of_day). Folding this in also restores
+-- Horizons app-native users to the deduped DAU total, which the old daily-grain
+-- models omitted.
+horizons_daily AS (
     SELECT
-        (uda.local_date::date)::timestamp AS activity_hour,
-        'horizons'::text AS program_name,
+        uda.local_date::date AS activity_day,
         COALESCE(
             CASE
                 WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
@@ -1808,23 +1835,33 @@ horizons_post_activity AS (
             END,
             'horizons:' || uda.user_id::text
         ) AS user_email,
-        NULL::text AS project_name,
-        NULL::text AS code_url,
-        'daily_user_activity'::text AS logging_method,
-        ROUND(SUM(uda.seconds)::numeric / 3600.0, 4) AS raw_hours_logged,
-        ROUND(SUM(uda.seconds)::numeric / 3600.0, 4) AS credited_hours_logged,
-        1::smallint AS split_factor,
-        'none'::text AS overlap_type,
-        NULL::text[] AS overlapping_programs,
-        NULL::text AS hackatime_alias,
-        'horizons.user_daily_activity; qualified seconds'::text AS source_detail,
-        NULL::timestamptz AS claim_started_at
+        SUM(uda.seconds)::numeric / 3600.0 AS day_hours
     FROM {{ source('horizons', 'user_daily_activity') }} uda
     LEFT JOIN {{ source('horizons', 'users') }} u ON u.user_id = uda.user_id
     WHERE uda.local_date::date >= DATE '2026-04-22'
       AND uda.qualified
       AND uda.seconds > 0
-    GROUP BY 1, 3
+    GROUP BY 1, 2
+),
+
+horizons_post_activity AS (
+    SELECT
+        (hd.activity_day::timestamp + (h.hr * INTERVAL '1 hour')) AS activity_hour,
+        'horizons'::text AS program_name,
+        hd.user_email,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        'daily_user_activity'::text AS logging_method,
+        ROUND((hd.day_hours / 24.0)::numeric, 6) AS raw_hours_logged,
+        ROUND((hd.day_hours / 24.0)::numeric, 6) AS credited_hours_logged,
+        1::smallint AS split_factor,
+        'none'::text AS overlap_type,
+        NULL::text[] AS overlapping_programs,
+        NULL::text AS hackatime_alias,
+        'horizons.user_daily_activity; qualified seconds spread across 24h'::text AS source_detail,
+        NULL::timestamptz AS claim_started_at
+    FROM horizons_daily hd
+    CROSS JOIN hours_of_day h
 ),
 
 -- Fallout (hardware): real created_at timestamps, so this is genuinely hourly.
@@ -1960,6 +1997,62 @@ combined AS (
     SELECT * FROM fallout_activity_log
     UNION ALL
     SELECT * FROM highway_activity
+),
+
+-- The rows that actually land in the table: every time-bearing row plus the
+-- activity-only rows (highway commit days, fallout duration-less journals) that
+-- mark a user active that day with zero credited hours. The DAU weights below
+-- are computed over THIS set so they sum exactly.
+final_rows AS (
+    SELECT *,
+        (activity_hour AT TIME ZONE 'UTC')::date AS activity_date
+    FROM combined
+    WHERE credited_hours_logged > 0
+       OR logging_method IN ('github_commit_days', 'hardware_build')
+),
+
+-- ============================================================
+-- 8. ROW-LEVEL DAU WEIGHTS (so a stacked chart sums to a headcount)
+--
+-- A person has many rows per day (multiple hours/projects/programs), so a flat
+-- 1-per-row would overcount. These two columns each spread a person's "1" across
+-- their rows so SUM() aggregates back to a headcount:
+--
+--   dau          — the row's share of the person's presence in THIS program that
+--                  day: credited_hours / SUM(credited_hours) over
+--                  (program, user, day). A person's rows in a program-day sum to
+--                  1, so SUM(dau) over (program, day) = that program's distinct
+--                  users (== daily_active_users.dau). NOT split across programs.
+--   dau_deduped  — the row's share of the person's WHOLE day across all programs:
+--                  credited_hours / SUM(credited_hours) over (user, day). A
+--                  person's rows across all programs sum to 1, so SUM(dau_deduped)
+--                  over (program, day) = the hours-weighted cross-program split,
+--                  and over (day) = the unique overall DAU
+--                  (== daily_active_users_deduped.dau). STACK THIS for "unique
+--                  overall DAU by program".
+--
+-- Both fall back to an equal split across the person's rows when the relevant
+-- denominator is zero (a program-day, or a whole day, that is entirely
+-- activity-only / hour-less — e.g. highway commit days). NULL-email rows can't
+-- form a person, so both weights are NULL there (and excluded from DAU, matching
+-- daily_active_users*). Stored unrounded so the stacks reconcile exactly.
+-- ============================================================
+prog_user_day AS (
+    SELECT program_name, user_email, activity_date,
+        SUM(credited_hours_logged) AS prog_hours,
+        COUNT(*) AS prog_rows
+    FROM final_rows
+    WHERE user_email IS NOT NULL
+    GROUP BY 1, 2, 3
+),
+
+user_day AS (
+    SELECT user_email, activity_date,
+        SUM(credited_hours_logged) AS day_hours,
+        COUNT(DISTINCT program_name) AS day_program_count
+    FROM final_rows
+    WHERE user_email IS NOT NULL
+    GROUP BY 1, 2
 )
 
 SELECT
@@ -1976,11 +2069,23 @@ SELECT
     c.overlapping_programs,
     c.hackatime_alias,
     c.source_detail,
-    c.claim_started_at
-FROM combined c
--- Keep all time-bearing rows, plus the activity-only rows (highway commit days
--- and fallout journal entries with no logged duration) that exist to mark a
--- user active that day with zero credited hours.
-WHERE c.credited_hours_logged > 0
-   OR c.logging_method IN ('github_commit_days', 'hardware_build')
+    c.claim_started_at,
+    CASE
+        WHEN c.user_email IS NULL THEN NULL
+        WHEN pud.prog_hours > 0 THEN c.credited_hours_logged / pud.prog_hours
+        ELSE 1.0 / pud.prog_rows
+    END AS dau,
+    CASE
+        WHEN c.user_email IS NULL THEN NULL
+        WHEN ud.day_hours > 0 THEN c.credited_hours_logged / ud.day_hours
+        ELSE (1.0 / ud.day_program_count) / pud.prog_rows
+    END AS dau_deduped
+FROM final_rows c
+LEFT JOIN prog_user_day pud
+    ON pud.program_name = c.program_name
+   AND pud.user_email = c.user_email
+   AND pud.activity_date = c.activity_date
+LEFT JOIN user_day ud
+    ON ud.user_email = c.user_email
+   AND ud.activity_date = c.activity_date
 ORDER BY c.activity_hour DESC, c.program_name, c.user_email, c.project_name

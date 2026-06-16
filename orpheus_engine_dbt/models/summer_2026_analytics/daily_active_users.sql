@@ -12,7 +12,12 @@
 -- DAU = distinct users who logged qualifying time/activity that day, using the
 -- program's own activity system. It is not a shipping/submission count.
 --
---   dau             — distinct active users for that program/date.
+--   dau             — distinct active users for that program/date. A person who
+--                     is active in N programs on a day counts 1 toward EACH of
+--                     those programs, so SUM(dau) across programs OVERCOUNTS the
+--                     unique overall headcount — use summer_unified_time_log's
+--                     row-level dau_deduped (summed) for a reconciling stacked
+--                     "unique overall DAU by program" chart.
 --   dau_methodology — short label explaining which activity source(s) define DAU.
 --
 -- Sources:
