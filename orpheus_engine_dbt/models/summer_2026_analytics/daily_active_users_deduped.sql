@@ -21,6 +21,8 @@ SELECT
     COUNT(DISTINCT user_email) AS dau
 FROM {{ ref('summer_unified_time_log') }}
 WHERE user_email IS NOT NULL
-  AND (activity_hour AT TIME ZONE 'UTC')::date < CURRENT_DATE
+  -- UTC cutoff to match the UTC activity_date (bare CURRENT_DATE would follow the
+  -- session timezone and could let the in-progress day leak in east of UTC).
+  AND (activity_hour AT TIME ZONE 'UTC')::date < (NOW() AT TIME ZONE 'UTC')::date
 GROUP BY 1
 ORDER BY activity_date DESC

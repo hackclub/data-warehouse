@@ -22,7 +22,9 @@ SELECT
     (activity_hour AT TIME ZONE 'UTC')::date AS activity_date,
     ROUND(SUM(credited_hours_logged), 2) AS hours_logged
 FROM {{ ref('summer_unified_time_log') }}
-WHERE (activity_hour AT TIME ZONE 'UTC')::date < CURRENT_DATE
+-- UTC cutoff to match the UTC activity_date (bare CURRENT_DATE would follow the
+-- session timezone and could let the in-progress day leak in east of UTC).
+WHERE (activity_hour AT TIME ZONE 'UTC')::date < (NOW() AT TIME ZONE 'UTC')::date
 GROUP BY 1, 2
 HAVING SUM(credited_hours_logged) > 0
 ORDER BY activity_date DESC, program_name

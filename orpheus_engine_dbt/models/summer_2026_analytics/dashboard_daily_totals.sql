@@ -40,9 +40,12 @@ combined AS (
 ),
 
 bounds AS (
+    -- activity_date is a UTC date, so the "complete day" cutoff must be the UTC
+    -- date too. Bare CURRENT_DATE follows the session timezone and, east of UTC,
+    -- can already be tomorrow-UTC, making the in-progress day the latest "complete".
     SELECT MAX(activity_date) AS latest_complete_date
     FROM combined
-    WHERE activity_date < CURRENT_DATE
+    WHERE activity_date < (NOW() AT TIME ZONE 'UTC')::date
 )
 
 SELECT
@@ -58,5 +61,5 @@ SELECT
     (b.latest_complete_date - c.activity_date)::integer AS days_before_latest
 FROM combined c
 CROSS JOIN bounds b
-WHERE c.activity_date < CURRENT_DATE
+WHERE c.activity_date < (NOW() AT TIME ZONE 'UTC')::date
 ORDER BY c.activity_date DESC

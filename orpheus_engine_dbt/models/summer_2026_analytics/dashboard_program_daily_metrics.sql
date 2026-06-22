@@ -21,9 +21,12 @@ WITH combined AS (
 ),
 
 bounds AS (
+    -- activity_date is a UTC date, so the "complete day" cutoff must be the UTC
+    -- date too. Bare CURRENT_DATE follows the session timezone and, east of UTC,
+    -- can already be tomorrow-UTC, making the in-progress day the latest "complete".
     SELECT MAX(activity_date) AS latest_complete_date
     FROM combined
-    WHERE activity_date < CURRENT_DATE
+    WHERE activity_date < (NOW() AT TIME ZONE 'UTC')::date
 ),
 
 methodology_labels AS (
@@ -70,5 +73,5 @@ LEFT JOIN program_labels pl ON pl.program_name = c.program_name
 LEFT JOIN {{ ref('summer_2026_metadata') }} m
     ON m.program_name = c.program_name
     AND m.source_type = 'program db'
-WHERE c.activity_date < CURRENT_DATE
+WHERE c.activity_date < (NOW() AT TIME ZONE 'UTC')::date
 ORDER BY c.activity_date DESC, c.program_name

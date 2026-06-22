@@ -135,5 +135,8 @@ WITH program_dau AS (
 
 SELECT program_name, activity_date, dau, dau_methodology
 FROM program_dau
-WHERE activity_date < CURRENT_DATE
+-- Exclude the in-progress day. activity_date is a UTC date, so the cutoff must
+-- also be the UTC date — bare CURRENT_DATE follows the session timezone and, in
+-- a session east of UTC, can already be tomorrow-UTC, letting today leak in.
+WHERE activity_date < (NOW() AT TIME ZONE 'UTC')::date
 ORDER BY activity_date DESC, program_name
