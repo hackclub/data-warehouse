@@ -49,10 +49,10 @@
 --    3  3    Complete Stardance onboarding                onboarded
 --    4  4    Create a Stardance project                   + created a project
 --    5  5B   Create account on auth.hackclub.com (new)    project AND new email AND auth
---    6  6    Send >=1 Hackatime heartbeat                 + >=1 heartbeat since signup
---    7  7    Link Hackatime to Stardance                  + linked Hackatime identity
---    8  8    Log >=15 min on Stardance project            + a project with >=900s
---    9  9    Link Hackatime project to Stardance project  + HT project -> SD project
+--    6  6    Link Hackatime to Stardance                  + linked Hackatime identity
+--    7  7    Send >=1 Hackatime heartbeat                 + >=1 heartbeat since signup
+--    8  8    Link Hackatime project to Stardance project  + HT project -> SD project
+--    9  9    Log >=15 min on Stardance project            + a project with >=900s
 --   10  10   Post >=1 devlog                              + a non-deleted devlog
 --   11  11C  Verify identity on auth.hackclub.com         devlog AND verified_during
 --   12  12   Place a free sticker order                   + a non-rejected free sticker order
@@ -206,18 +206,18 @@ cum AS (
     SELECT *,
         onboarded                                                                                  AS m3,
         onboarded AND has_project                                                                  AS m4,
-        onboarded AND has_project AND heartbeat                                                    AS m6,
-        onboarded AND has_project AND heartbeat AND ht_linked                                      AS m7,
-        onboarded AND has_project AND heartbeat AND ht_linked AND min15                            AS m8,
-        onboarded AND has_project AND heartbeat AND ht_linked AND min15 AND proj_linked            AS m9,
-        onboarded AND has_project AND heartbeat AND ht_linked AND min15 AND proj_linked AND devlog AS m10,
-        onboarded AND has_project AND heartbeat AND ht_linked AND min15 AND proj_linked AND devlog
+        onboarded AND has_project AND ht_linked                                                    AS m6,
+        onboarded AND has_project AND ht_linked AND heartbeat                                      AS m7,
+        onboarded AND has_project AND ht_linked AND heartbeat AND proj_linked                      AS m8,
+        onboarded AND has_project AND ht_linked AND heartbeat AND proj_linked AND min15            AS m9,
+        onboarded AND has_project AND ht_linked AND heartbeat AND proj_linked AND min15 AND devlog AS m10,
+        onboarded AND has_project AND ht_linked AND heartbeat AND proj_linked AND min15 AND devlog
             AND sticker                                                                            AS m12,
-        onboarded AND has_project AND heartbeat AND ht_linked AND min15 AND proj_linked AND devlog
+        onboarded AND has_project AND ht_linked AND heartbeat AND proj_linked AND min15 AND devlog
             AND sticker AND shipped                                                                AS m13,
-        onboarded AND has_project AND heartbeat AND ht_linked AND min15 AND proj_linked AND devlog
+        onboarded AND has_project AND ht_linked AND heartbeat AND proj_linked AND min15 AND devlog
             AND sticker AND shipped AND ship_certified                                             AS m14,
-        onboarded AND has_project AND heartbeat AND ht_linked AND min15 AND proj_linked AND devlog
+        onboarded AND has_project AND ht_linked AND heartbeat AND proj_linked AND min15 AND devlog
             AND sticker AND shipped AND ship_certified AND in_ysws_db                              AS m16
     FROM flags
 )
@@ -246,10 +246,10 @@ CROSS JOIN LATERAL (
         (3,  '3',   '3. Complete Stardance onboarding',                 f.m3),
         (4,  '4',   '4. Create a Stardance project',                    f.m4),
         (5,  '5B',  '5B. Create account on auth.hackclub.com (new)',    f.m4 AND NOT f.known_email AND f.auth_done),
-        (6,  '6',   '6. Send >=1 Hackatime heartbeat',                  f.m6),
-        (7,  '7',   '7. Link Hackatime to Stardance',                   f.m7),
-        (8,  '8',   '8. Log >=15 min on Stardance project',             f.m8),
-        (9,  '9',   '9. Link Hackatime project to Stardance project',   f.m9),
+        (6,  '6',   '6. Link Hackatime to Stardance',                   f.m6),
+        (7,  '7',   '7. Send >=1 Hackatime heartbeat',                  f.m7),
+        (8,  '8',   '8. Link Hackatime project to Stardance project',   f.m8),
+        (9,  '9',   '9. Log >=15 min on Stardance project',             f.m9),
         (10, '10',  '10. Post >=1 devlog',                              f.m10),
         (11, '11C', '11C. Verify identity on auth.hackclub.com',        f.m10 AND f.verified_during),
         (12, '12',  '12. Place a free sticker order',                   f.m12),
