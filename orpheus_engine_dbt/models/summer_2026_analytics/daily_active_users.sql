@@ -7,7 +7,9 @@
 -- ============================================================================
 -- Summer 2026 — Daily Active Users (per program)
 --
--- Grain: one row per (program_name, activity_date) in UTC.
+-- Grain: one row per (program_name, activity_date) in US Eastern
+-- (America/New_York, DST-aware). Summer 2026 is a US program, so the daily
+-- buckets and the "complete day" gate operate on the Eastern calendar day.
 --
 -- DAU = distinct users who logged qualifying time/activity that day, using the
 -- program's own activity system. It is not a shipping/submission count.
@@ -117,7 +119,7 @@
 WITH program_dau AS (
     SELECT
         program_name,
-        (activity_hour AT TIME ZONE 'UTC')::date AS activity_date,
+        (activity_hour AT TIME ZONE 'America/New_York')::date AS activity_date,
         COUNT(DISTINCT user_email) AS dau,
         CASE
             WHEN BOOL_OR(logging_method = 'github_commit_days') THEN 'github_commit_days'
@@ -130,13 +132,12 @@ WITH program_dau AS (
             ELSE 'custom_time'
         END AS dau_methodology
     FROM {{ ref('summer_unified_time_log') }}
-    GROUP BY program_name, (activity_hour AT TIME ZONE 'UTC')::date
+    GROUP BY program_name, (activity_hour AT TIME ZONE 'America/New_York')::date
 )
 
 SELECT program_name, activity_date, dau, dau_methodology
 FROM program_dau
--- Exclude the in-progress day. activity_date is a UTC date, so the cutoff must
--- also be the UTC date — bare CURRENT_DATE follows the session timezone and, in
--- a session east of UTC, can already be tomorrow-UTC, letting today leak in.
-WHERE activity_date < (NOW() AT TIME ZONE 'UTC')::date
+-- Exclude the in-progress Eastern day (and any future-dated rows) so the most
+-- recent bucket is always the last fully-elapsed Eastern day — yesterday.
+WHERE activity_date < (NOW() AT TIME ZONE 'America/New_York')::date
 ORDER BY activity_date DESC, program_name

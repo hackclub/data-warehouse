@@ -5,7 +5,7 @@
 ) }}
 
 -- Chart-ready daily dashboard totals for Summer 2026.
--- Grain: one row per complete UTC activity date.
+-- Grain: one row per complete US Eastern (America/New_York) activity date.
 --
 -- This model centralizes the rolling-window and latest-date flags that the
 -- Metabase dashboard needs, so chart SQL can stay as simple SELECTs.
@@ -40,12 +40,12 @@ combined AS (
 ),
 
 bounds AS (
-    -- activity_date is a UTC date, so the "complete day" cutoff must be the UTC
-    -- date too. Bare CURRENT_DATE follows the session timezone and, east of UTC,
-    -- can already be tomorrow-UTC, making the in-progress day the latest "complete".
+    -- activity_date is a US Eastern date, so the "complete day" cutoff is the
+    -- Eastern current date. Excludes the in-progress Eastern day (and any
+    -- future-dated rows), so latest_complete_date is always the last full day.
     SELECT MAX(activity_date) AS latest_complete_date
     FROM combined
-    WHERE activity_date < (NOW() AT TIME ZONE 'UTC')::date
+    WHERE activity_date < (NOW() AT TIME ZONE 'America/New_York')::date
 )
 
 SELECT
@@ -61,5 +61,5 @@ SELECT
     (b.latest_complete_date - c.activity_date)::integer AS days_before_latest
 FROM combined c
 CROSS JOIN bounds b
-WHERE c.activity_date < (NOW() AT TIME ZONE 'UTC')::date
+WHERE c.activity_date < (NOW() AT TIME ZONE 'America/New_York')::date
 ORDER BY c.activity_date DESC

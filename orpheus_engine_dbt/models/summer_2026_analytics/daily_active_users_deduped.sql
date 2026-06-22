@@ -5,8 +5,8 @@
 ) }}
 
 -- Summer 2026 daily active users, deduped across programs by normalized email.
--- Grain: one row per complete UTC activity date. Current date is excluded because
--- same-day data is incomplete.
+-- Grain: one row per complete US Eastern (America/New_York) activity date. The
+-- in-progress Eastern day is excluded because same-day data is incomplete.
 --
 -- Every program now flows through summer_unified_time_log (macondo, fallout,
 -- highway, and Horizons app-native activity included), so the deduped count is a
@@ -17,12 +17,12 @@
 -- program-native models left out.
 
 SELECT
-    (activity_hour AT TIME ZONE 'UTC')::date AS activity_date,
+    (activity_hour AT TIME ZONE 'America/New_York')::date AS activity_date,
     COUNT(DISTINCT user_email) AS dau
 FROM {{ ref('summer_unified_time_log') }}
 WHERE user_email IS NOT NULL
-  -- UTC cutoff to match the UTC activity_date (bare CURRENT_DATE would follow the
-  -- session timezone and could let the in-progress day leak in east of UTC).
-  AND (activity_hour AT TIME ZONE 'UTC')::date < (NOW() AT TIME ZONE 'UTC')::date
+  -- Bucket and gate on the US Eastern day; exclude the in-progress Eastern day
+  -- (and any future-dated rows) so the latest row is the last complete day.
+  AND (activity_hour AT TIME ZONE 'America/New_York')::date < (NOW() AT TIME ZONE 'America/New_York')::date
 GROUP BY 1
 ORDER BY activity_date DESC

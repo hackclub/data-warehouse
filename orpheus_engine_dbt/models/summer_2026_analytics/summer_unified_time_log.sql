@@ -2005,7 +2005,11 @@ combined AS (
 -- are computed over THIS set so they sum exactly.
 final_rows AS (
     SELECT *,
-        (activity_hour AT TIME ZONE 'UTC')::date AS activity_date
+        -- US Eastern (America/New_York) calendar day. The DAU weights below group
+        -- on this, so a person's rows reconcile to 1 within an Eastern day and a
+        -- complete-day SUM(dau_deduped) is a stable headcount (no leakage from the
+        -- adjacent UTC day's still-in-progress activity).
+        (activity_hour AT TIME ZONE 'America/New_York')::date AS activity_date
     FROM combined
     WHERE credited_hours_logged > 0
        OR logging_method IN ('github_commit_days', 'hardware_build')
@@ -2088,4 +2092,12 @@ LEFT JOIN prog_user_day pud
 LEFT JOIN user_day ud
     ON ud.user_email = c.user_email
    AND ud.activity_date = c.activity_date
+-- Summer 2026 operates on the US Eastern (America/New_York) calendar day. Only
+-- surface rows from fully-elapsed Eastern days: drop the in-progress day and any
+-- future-dated source rows so the table's newest day is always the last complete
+-- one. This gate is on the OUTER select on purpose — the dau/dau_deduped weights
+-- above are still computed over the full final_rows set, so the surviving rows
+-- keep their exact apportionment (a complete-day SUM(dau_deduped) reconciles).
+WHERE (c.activity_hour AT TIME ZONE 'America/New_York')::date
+      < (NOW() AT TIME ZONE 'America/New_York')::date
 ORDER BY c.activity_hour DESC, c.program_name, c.user_email, c.project_name
