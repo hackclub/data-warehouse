@@ -225,6 +225,32 @@ def get_warehouse_connection():
     return psycopg2.connect(conn_string)
 
 
+def get_warehouse_connection_with_retry(attempts: int = 6, base_delay: float = 2.0, log=None):
+    """Open a warehouse connection, retrying transient failures with backoff.
+
+    The warehouse drops SSL connections under load / on Coolify redeploys
+    ("SSL SYSCALL error: EOF detected", "SSL connection has been closed
+    unexpectedly"). A single connect attempt can land in that window and fail.
+    Retry with exponential backoff so a brief blip doesn't take down a sync
+    worker. Returns a live connection, or None if all attempts fail.
+    """
+    delay = base_delay
+    for attempt in range(1, attempts + 1):
+        try:
+            return get_warehouse_connection()
+        except Exception as e:
+            msg = f"warehouse connect attempt {attempt}/{attempts} failed: {str(e)[:120]}"
+            if log:
+                log.warning(msg)
+            else:
+                logger.warning(msg)
+            if attempt == attempts:
+                return None
+            time.sleep(min(delay, 30.0))
+            delay *= 2
+    return None
+
+
 def get_postgres_worker_count(conn) -> int:
     """Get the number of parallel workers to use based on Postgres settings.
     
@@ -2523,9 +2549,9 @@ def sync_worker_loop(
     duck_conn = None
     
     try:
-        pg_conn = get_warehouse_connection()
+        pg_conn = get_warehouse_connection_with_retry(log=logger)
         duck_conn = get_ducklake_connection(num_workers=num_workers)
-        
+
         # Register connection so it can be interrupted on termination
         progress.register_duck_connection(worker_id, duck_conn)
         
@@ -2541,7 +2567,32 @@ def sync_worker_loop(
                 continue
             
             try:
+                # The warehouse drops idle SSL connections (and Coolify redeploys
+                # bounce them). A worker reuses one pg_conn for its whole queue, so a
+                # single drop would otherwise cascade-fail every remaining table with
+                # "connection already closed" (observed 2026-06-29: 1 drop -> 1230
+                # failed tables). Reconnect a dead connection before each table; if the
+                # connection dies *during* a table, reconnect and retry it once. Use a
+                # retrying connect so a brief outage doesn't kill the worker (which would
+                # otherwise leave the rest of its queue unprocessed/pending). If reconnect
+                # ultimately fails, requeue the table and back off rather than dying.
+                if pg_conn is None or pg_conn.closed:
+                    logger.warning(f"[Worker {worker_id}] warehouse connection closed; reconnecting")
+                    pg_conn = get_warehouse_connection_with_retry(log=logger)
+                    if pg_conn is None:
+                        logger.warning(f"[Worker {worker_id}] reconnect failed; requeueing {schema}.{table}")
+                        table_queue.put((schema, table))
+                        time.sleep(5.0)
+                        continue
                 stats = sync_table(pg_conn, duck_conn, schema, table, progress, worker_id)
+                if stats.get("error") and (pg_conn is None or pg_conn.closed):
+                    logger.warning(
+                        f"[Worker {worker_id}] warehouse connection dropped during "
+                        f"{schema}.{table}; reconnecting and retrying once"
+                    )
+                    pg_conn = get_warehouse_connection_with_retry(log=logger)
+                    if pg_conn is not None:
+                        stats = sync_table(pg_conn, duck_conn, schema, table, progress, worker_id)
                 with results_lock:
                     results.append(stats)
             except (TerminatedException, duckdb.InterruptException):
