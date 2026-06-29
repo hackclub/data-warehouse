@@ -11,7 +11,7 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from typing import List, Dict, Any, Optional
 import psycopg
 from psycopg.rows import dict_row
-from psycopg_pool import AsyncConnectionPool
+from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,11 @@ KEEPALIVE_KWARGS = {
 # that an agent could misread as "no data".
 MAX_QUERY_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 0.25
+
+# How long to wait for a free connection from the pool before giving up. Kept
+# short so that if the warehouse is ever connection-saturated the MCP fails
+# fast with a clear error instead of hanging an interactive request.
+POOL_ACQUIRE_TIMEOUT_SECONDS = 10.0
 
 
 # SQL statements that are never allowed, even with read-only connection
@@ -409,7 +414,7 @@ class Database:
         """
         for attempt in range(1, MAX_QUERY_ATTEMPTS + 1):
             try:
-                async with self._pool.connection() as conn:
+                async with self._pool.connection(timeout=POOL_ACQUIRE_TIMEOUT_SECONDS) as conn:
                     async with conn.cursor() as cur:
                         if params is None:
                             await cur.execute(sql)
@@ -422,6 +427,11 @@ class Database:
                         columns = [desc[0] for desc in cur.description]
                         rows = await cur.fetchmany(max_rows)
                         return [dict(row) for row in rows], columns
+            except PoolTimeout:
+                # The pool itself couldn't hand us a connection (warehouse is
+                # connection-saturated). Retrying just stacks more timeouts, so
+                # surface it immediately rather than hanging the request.
+                raise
             except psycopg.OperationalError as e:
                 # OperationalError covers severed/closed connections. Don't
                 # retry a deliberately cancelled query (e.g. statement timeout).
