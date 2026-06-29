@@ -1333,10 +1333,16 @@ def pg_type_to_duckdb(data_type: str, udt_name: str) -> str:
         # UUID
         "uuid": "UUID",
         
-        # JSON
-        "json": "JSON",
-        "jsonb": "JSON",
-        
+        # JSON -> store as VARCHAR in DuckLake. DuckLake's ALTER TABLE ADD COLUMN
+        # rejects the JSON logical type ("Unsupported user-defined type"), so a
+        # jsonb column added to a table after its DuckLake table was created can
+        # never be synced if mapped to JSON. VARCHAR works for both CREATE and ADD,
+        # is fully queryable (DuckDB auto-casts text for json_* functions), and is
+        # the portable lakehouse choice. _canonicalize_type_for_compare() treats
+        # existing JSON-typed columns as equivalent so this doesn't churn them.
+        "json": "VARCHAR",
+        "jsonb": "VARCHAR",
+
         # Network types (store as VARCHAR in DuckDB)
         "inet": "VARCHAR",
         "cidr": "VARCHAR",
@@ -1357,6 +1363,17 @@ def pg_type_to_duckdb(data_type: str, udt_name: str) -> str:
     
     # Default to VARCHAR for unknown types
     return "VARCHAR"
+
+
+def _canonicalize_type_for_compare(dtype: str) -> str:
+    """Fold equivalent types for schema-change detection.
+
+    jsonb/json now map to VARCHAR (DuckLake can't ADD a JSON column), but tables
+    created earlier store those columns as the JSON logical type. Treat JSON and
+    VARCHAR as the same so existing JSON columns aren't dropped/rebuilt on every
+    sync just because the mapping changed.
+    """
+    return "VARCHAR" if dtype and dtype.upper() == "JSON" else dtype
 
 
 def normalize_duckdb_type(conn: duckdb.DuckDBPyConnection, dtype: str) -> str:
@@ -1486,9 +1503,12 @@ def sync_table_schema(
     src_map = {name: dtype for name, dtype in src_columns}
     dst_map = {name: dtype for name, dtype in dst_columns}
     
-    # Normalize both source and destination types to DuckDB canonical form for comparison
-    src_map_normalized = {name: normalize_duckdb_type(duck_conn, dtype) for name, dtype in src_columns}
-    dst_map_normalized = {name: normalize_duckdb_type(duck_conn, dtype) for name, dtype in dst_columns}
+    # Normalize both source and destination types to DuckDB canonical form for comparison.
+    # _canonicalize_type_for_compare folds JSON -> VARCHAR so that columns DuckLake
+    # already stores as JSON (created before json mapped to VARCHAR) are treated as
+    # equivalent to the new VARCHAR mapping and are NOT dropped/rebuilt every run.
+    src_map_normalized = {name: _canonicalize_type_for_compare(normalize_duckdb_type(duck_conn, dtype)) for name, dtype in src_columns}
+    dst_map_normalized = {name: _canonicalize_type_for_compare(normalize_duckdb_type(duck_conn, dtype)) for name, dtype in dst_columns}
     
     # Collect columns to drop (removed or type changed)
     columns_to_drop = []
