@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 from orpheus_engine.defs.shared.daily_backups import (
     ParquetBackupFile,
     dataframe_to_parquet_bytes,
+    typecast_dataframe_for_parquet,
     write_daily_parquet_backup,
 )
 
@@ -29,6 +30,56 @@ def test_dataframe_to_parquet_bytes_preserves_nested_fields():
     assert parquet_bytes[:4] == b"PAR1"
     assert parquet_file.metadata.row_group(0).column(0).compression == "ZSTD"
     assert round_tripped.to_dict(as_series=False) == df.to_dict(as_series=False)
+
+
+def test_typecast_dataframe_for_parquet_conservatively_casts_scalar_strings():
+    df = pl.DataFrame(
+        {
+            "id": ["001", "002"],
+            "record_id": ["2026-06-28", "2026-06-29"],
+            "postal_code": ["02139", "94110"],
+            "created_at": ["2026-06-28T14:30:00Z", "2026-06-29T15:45:30Z"],
+            "birthday": ["2008-04-03", "2009-05-04"],
+            "age": ["17", "18"],
+            "score": ["1.5", "2"],
+            "subscribed": ["true", "false"],
+            "is_visible": ["1", "0"],
+            "title": ["123 Main", "456 Main"],
+        },
+        schema={
+            "id": pl.String,
+            "record_id": pl.String,
+            "postal_code": pl.String,
+            "created_at": pl.String,
+            "birthday": pl.String,
+            "age": pl.String,
+            "score": pl.String,
+            "subscribed": pl.String,
+            "is_visible": pl.String,
+            "title": pl.String,
+        },
+    )
+
+    typed_df = typecast_dataframe_for_parquet(df)
+    parquet_df = pl.read_parquet(io.BytesIO(dataframe_to_parquet_bytes(df)))
+
+    assert typed_df.schema["id"] == pl.String
+    assert typed_df.schema["record_id"] == pl.String
+    assert typed_df.schema["postal_code"] == pl.String
+    assert typed_df.schema["created_at"] == pl.Datetime("us", "UTC")
+    assert typed_df.schema["birthday"] == pl.Date
+    assert typed_df.schema["age"] == pl.Int64
+    assert typed_df.schema["score"] == pl.Float64
+    assert typed_df.schema["subscribed"] == pl.Boolean
+    assert typed_df.schema["is_visible"] == pl.Boolean
+    assert typed_df.schema["title"] == pl.String
+    assert parquet_df.schema == typed_df.schema
+    assert typed_df["id"].to_list() == ["001", "002"]
+    assert typed_df["postal_code"].to_list() == ["02139", "94110"]
+    assert typed_df["age"].to_list() == [17, 18]
+    assert typed_df["score"].to_list() == [1.5, 2.0]
+    assert typed_df["subscribed"].to_list() == [True, False]
+    assert typed_df["is_visible"].to_list() == [True, False]
 
 
 def test_daily_parquet_backup_local_overwrites_in_place(monkeypatch, tmp_path):

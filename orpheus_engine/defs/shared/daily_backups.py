@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -27,6 +28,57 @@ REGION_ENV = f"{BACKUP_ENV_PREFIX}REGION"
 BACKUP_TIMEZONE = ZoneInfo("America/New_York")
 PARQUET_CONTENT_TYPE = "application/vnd.apache.parquet"
 PAYLOAD_EXTENSIONS = (".csv", ".parquet")
+ISO_DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
+ISO_DATETIME_PATTERN = re.compile(
+    r"\d{4}-\d{2}-\d{2}[T ][0-2]\d:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
+)
+INTEGER_PATTERN = re.compile(r"[+-]?(?:0|[1-9]\d*)")
+NUMERIC_PATTERN = re.compile(
+    r"[+-]?(?:(?:0|[1-9]\d*)|(?:0|[1-9]\d*)\.\d*|\.\d+|(?:0|[1-9]\d*)(?:\.\d*)?[eE][+-]?\d+)"
+)
+BOOLEAN_TRUE_VALUES = {"true", "t", "yes", "y", "1"}
+BOOLEAN_FALSE_VALUES = {"false", "f", "no", "n", "0"}
+STRICT_BOOLEAN_VALUES = {"true", "false", "t", "f"}
+IDENTIFIER_COLUMN_TOKENS = {
+    "address",
+    "code",
+    "email",
+    "handle",
+    "hash",
+    "id",
+    "name",
+    "phone",
+    "postal",
+    "record",
+    "ref",
+    "slug",
+    "token",
+    "url",
+    "uri",
+    "username",
+    "uuid",
+    "zip",
+}
+BOOLEAN_COLUMN_TOKENS = {
+    "active",
+    "allowed",
+    "archived",
+    "bounced",
+    "can",
+    "clicked",
+    "disabled",
+    "enabled",
+    "flag",
+    "has",
+    "hidden",
+    "is",
+    "opened",
+    "sent",
+    "should",
+    "subscribed",
+    "verified",
+    "visible",
+}
 
 
 @dataclass(frozen=True)
@@ -61,9 +113,125 @@ class ParquetBackupResult:
 
 def dataframe_to_parquet_bytes(df: pl.DataFrame) -> bytes:
     """Serialize a Polars DataFrame to zstd-compressed Parquet bytes."""
+    df = typecast_dataframe_for_parquet(df)
     buffer = io.BytesIO()
     df.write_parquet(buffer, compression="zstd")
     return buffer.getvalue()
+
+
+def typecast_dataframe_for_parquet(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Conservatively infer scalar string columns before Parquet serialization.
+
+    Source exports often arrive with date, boolean, and numeric values as strings.
+    Parquet is much more useful when those columns are stored with native types, but
+    false positives are costly for IDs, ZIP codes, URLs, and similar textual fields.
+    """
+    expressions = []
+    for column, dtype in zip(df.columns, df.dtypes):
+        if dtype != pl.String:
+            continue
+
+        values = _non_empty_string_values(df[column])
+        if not values:
+            continue
+
+        string_expr = _clean_string_expression(column)
+        target_expr = _typecast_expression_for_values(column, values, string_expr)
+        if target_expr is not None:
+            expressions.append(target_expr.alias(column))
+
+    if not expressions:
+        return df
+
+    return df.with_columns(expressions)
+
+
+def _non_empty_string_values(series: pl.Series) -> list[str]:
+    return [
+        value
+        for raw_value in series.drop_nulls().to_list()
+        if (value := str(raw_value).strip())
+    ]
+
+
+def _clean_string_expression(column: str) -> pl.Expr:
+    stripped = pl.col(column).str.strip_chars()
+    return pl.when(stripped == "").then(None).otherwise(stripped)
+
+
+def _typecast_expression_for_values(
+    column: str,
+    values: list[str],
+    string_expr: pl.Expr,
+) -> Optional[pl.Expr]:
+    if _looks_identifier_like_column(column):
+        return None
+
+    if _all_fullmatch(ISO_DATE_PATTERN, values) and _can_parse_date(values):
+        return string_expr.str.to_date(strict=True)
+
+    if _all_fullmatch(ISO_DATETIME_PATTERN, values) and _can_parse_datetime(values):
+        return string_expr.str.to_datetime(strict=True)
+
+    lowered_values = {value.lower() for value in values}
+    if lowered_values <= (BOOLEAN_TRUE_VALUES | BOOLEAN_FALSE_VALUES):
+        if lowered_values <= STRICT_BOOLEAN_VALUES or _looks_boolean_column(column):
+            lowered = string_expr.str.to_lowercase()
+            return (
+                pl.when(lowered.is_in(BOOLEAN_TRUE_VALUES))
+                .then(pl.lit(True))
+                .when(lowered.is_in(BOOLEAN_FALSE_VALUES))
+                .then(pl.lit(False))
+                .otherwise(None)
+            )
+
+    if _all_fullmatch(INTEGER_PATTERN, values):
+        return string_expr.cast(pl.Int64, strict=True)
+
+    if _all_fullmatch(NUMERIC_PATTERN, values):
+        return string_expr.cast(pl.Float64, strict=True)
+
+    return None
+
+
+def _all_fullmatch(pattern: re.Pattern[str], values: list[str]) -> bool:
+    return all(pattern.fullmatch(value) is not None for value in values)
+
+
+def _can_parse_date(values: list[str]) -> bool:
+    try:
+        pl.Series(values).str.to_date(strict=True)
+    except pl.exceptions.PolarsError:
+        return False
+    return True
+
+
+def _can_parse_datetime(values: list[str]) -> bool:
+    try:
+        pl.Series(values).str.to_datetime(strict=True)
+    except pl.exceptions.PolarsError:
+        return False
+    return True
+
+
+def _column_tokens(column: str) -> set[str]:
+    snake_case = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", column)
+    return {
+        token
+        for token in re.split(r"[^a-z0-9]+", snake_case.lower())
+        if token
+    }
+
+
+def _looks_identifier_like_column(column: str) -> bool:
+    tokens = _column_tokens(column)
+    return bool(tokens & IDENTIFIER_COLUMN_TOKENS)
+
+
+def _looks_boolean_column(column: str) -> bool:
+    tokens = _column_tokens(column)
+    return bool(tokens & BOOLEAN_COLUMN_TOKENS)
 
 
 def write_daily_parquet_backup(
