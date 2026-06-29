@@ -918,10 +918,12 @@ hack_club_the_game_replication_config = {
                 "id", "account_id", "avatar", "ban_type", "birthday",
                 "email", "hackatime_id", "internal_notes", "is_banned",
                 "last_active", "referrer_id", "slack_id", "username",
-                "ysws_verified", "role", "deleted_at", "created_at",
+                "ysws_verified", "deleted_at", "created_at",
                 "updated_at", "referral_code", "verification_status",
                 "address_street", "address_locality", "address_region",
                 "address_postal", "address_country", "first_name", "last_name",
+                # `role` was dropped upstream and replaced by boolean flags
+                "is_admin", "is_reviewer", "is_fulfiller",
             ],
         },
     },

@@ -91,12 +91,44 @@ def _build_definitions() -> dg.Definitions:
     # Create the DuckLake row hash asset with dependencies matching materialize_all_assets_job
     warehouse_row_hashes = create_warehouse_row_hashes_asset(dep_asset_keys=all_asset_keys)
 
+    # Dedicated DuckLake job + schedule.
+    #
+    # The DuckLake assets are deliberately decoupled from materialize_all_assets_job
+    # (they're in EXCLUDED_FROM_MAIN_JOB). warehouse_row_hashes depends on ALL other
+    # assets, so when it lived in the all-assets job a single upstream failure (a dead
+    # mirror source, a dbt data-test, a flaky Zoom call) skipped the entire lakehouse
+    # sync — which is exactly why it silently stopped running on 2026-01-29. Running it
+    # as its own job decouples the lakehouse from unrelated asset health: it hashes and
+    # syncs whatever is currently committed in the warehouse, on its own cadence.
+    #
+    # Schedule ships STOPPED by default (Dagster's default). The first prod run rehashes
+    # ~5 months of drift across the large hackatime/airtable tables, so trigger it once
+    # manually and watch WAL/archiving, then enable the schedule for steady-state daily
+    # refresh.
+    materialize_ducklake_job = dg.define_asset_job(
+        name="materialize_ducklake_job",
+        selection=dg.AssetSelection.assets(
+            dg.AssetKey("warehouse_row_hashes"),
+            dg.AssetKey("ducklake_sync"),
+        ),
+    )
+    ducklake_daily_schedule = dg.ScheduleDefinition(
+        name="ducklake_daily_schedule",
+        job=materialize_ducklake_job,
+        cron_schedule="0 9 * * *",              # daily 09:00, after overnight loads
+        execution_timezone="America/New_York",
+    )
+
     # Final merged definitions including the DuckLake assets
     # - warehouse_row_hashes: computes row hashes (depends on all other assets)
     # - ducklake_sync: syncs to DuckLake (depends on warehouse_row_hashes)
     return dg.Definitions.merge(
         base_defs,
-        dg.Definitions(assets=[warehouse_row_hashes, ducklake_sync])
+        dg.Definitions(
+            assets=[warehouse_row_hashes, ducklake_sync],
+            jobs=[materialize_ducklake_job],
+            schedules=[ducklake_daily_schedule],
+        )
     )
 
 

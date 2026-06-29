@@ -6,6 +6,12 @@ EXCLUDED_FROM_MAIN_JOB: set[dg.AssetKey] = {
     dg.AssetKey("slack_member_analytics"),  # Run manually
     dg.AssetKey("slack_member_metadata_enrichment"),  # Takes too long
     dg.AssetKey("highway_github_commits"),  # One-time backfill; Highway ended Oct 2025
+    # DuckLake assets run on their own schedule (materialize_ducklake_job) so the
+    # lakehouse sync isn't gated on every other asset succeeding. warehouse_row_hashes
+    # depends on ALL assets, so a single failure here would otherwise skip it every run
+    # (it last ran 2026-01-29 for exactly this reason). See definitions.py.
+    dg.AssetKey("warehouse_row_hashes"),
+    dg.AssetKey("ducklake_sync"),
 }
 
 # 1. "All assets" job (excluding assets in EXCLUDED_FROM_MAIN_JOB)
