@@ -2,13 +2,38 @@
 PostgreSQL connection handling with read-only enforcement and SQL validation.
 """
 
+import asyncio
+import logging
 import os
 import re
 import unicodedata
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from typing import List, Dict, Any, Optional
+import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
+logger = logging.getLogger(__name__)
+
+# Client-side TCP keepalives. The warehouse pool can leave a connection sitting
+# idle between MCP requests; the network path to the Coolify-hosted Postgres
+# silently severs idle sockets, and the next query then fails with
+# "consuming input failed: SSL error: unexpected eof while reading". Keepalives
+# keep idle connections warm and let the OS detect a dead peer quickly.
+KEEPALIVE_KWARGS = {
+    "keepalives": 1,
+    "keepalives_idle": 30,
+    "keepalives_interval": 10,
+    "keepalives_count": 3,
+}
+
+# Queries handled by this server are strictly read-only (enforced by
+# validate_sql + a read-only connection), so re-running one is always safe and
+# idempotent. If a pooled connection turns out to be dead we transparently
+# retry on a fresh connection instead of surfacing a confusing SSL/EOF error
+# that an agent could misread as "no data".
+MAX_QUERY_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = 0.25
 
 
 # SQL statements that are never allowed, even with read-only connection
@@ -292,10 +317,20 @@ class Database:
             min_size=1,
             max_size=5,
             open=False,
+            # Probe every connection before handing it to a caller. This
+            # transparently discards and replaces connections that were
+            # silently dropped while idle in the pool -- the root cause of the
+            # intermittent "SSL error: unexpected eof while reading" failures.
+            check=AsyncConnectionPool.check_connection,
+            # Proactively recycle connections so we never lean on a long-lived
+            # socket that the network path may sever out from under us.
+            max_idle=300.0,
+            max_lifetime=1800.0,
             kwargs={
                 "autocommit": True,
                 "row_factory": dict_row,
                 "connect_timeout": 10,
+                **KEEPALIVE_KWARGS,
             },
         )
         await self._pool.open()
@@ -334,16 +369,7 @@ class Database:
             firstname, lastname = user_info
             sql = f"-- warehouse-mcp {firstname} {lastname}\n{sql}"
 
-        async with self._pool.connection() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(sql)
-
-                if cur.description is None:
-                    return [], []
-
-                columns = [desc[0] for desc in cur.description]
-                rows = await cur.fetchmany(max_rows)
-                return [dict(row) for row in rows], columns
+        return await self._run(sql, None, max_rows)
 
     async def execute_query_with_params(
         self,
@@ -362,16 +388,53 @@ class Database:
         Returns:
             Tuple of (rows as list of dicts, column names)
         """
-        async with self._pool.connection() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(sql, params)
+        return await self._run(sql, params, max_rows)
 
-                if cur.description is None:
-                    return [], []
+    async def _run(
+        self,
+        sql: str,
+        params: Optional[tuple],
+        max_rows: int,
+    ) -> tuple[List[Dict[str, Any]], List[str]]:
+        """
+        Acquire a pooled connection and run a read-only query, retrying on a
+        fresh connection if the one we got turns out to be dead.
 
-                columns = [desc[0] for desc in cur.description]
-                rows = await cur.fetchmany(max_rows)
-                return [dict(row) for row in rows], columns
+        The pool's ``check`` callback already replaces connections that were
+        dropped while idle, but a connection can also be severed *mid-query*
+        (typically on heavier queries). Since every query here is read-only and
+        idempotent, retrying on a new connection is safe and keeps a dropped
+        connection from surfacing as a confusing error -- or, worse, being
+        misread by an agent as an empty result.
+        """
+        for attempt in range(1, MAX_QUERY_ATTEMPTS + 1):
+            try:
+                async with self._pool.connection() as conn:
+                    async with conn.cursor() as cur:
+                        if params is None:
+                            await cur.execute(sql)
+                        else:
+                            await cur.execute(sql, params)
+
+                        if cur.description is None:
+                            return [], []
+
+                        columns = [desc[0] for desc in cur.description]
+                        rows = await cur.fetchmany(max_rows)
+                        return [dict(row) for row in rows], columns
+            except psycopg.OperationalError as e:
+                # OperationalError covers severed/closed connections. Don't
+                # retry a deliberately cancelled query (e.g. statement timeout).
+                if isinstance(e, psycopg.errors.QueryCanceled) or attempt >= MAX_QUERY_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "Connection error on query attempt %d/%d, retrying: %s",
+                    attempt, MAX_QUERY_ATTEMPTS, e,
+                )
+                await asyncio.sleep(RETRY_BACKOFF_SECONDS)
+
+        # Unreachable: the loop either returns or raises.
+        raise RuntimeError("query retry loop exited without a result")
 
     async def list_schemas(self) -> List[str]:
         """List all non-system schemas in the database."""
