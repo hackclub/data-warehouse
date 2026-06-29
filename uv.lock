@@ -3180,6 +3180,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "beautifulsoup4" },
+    { name = "boto3" },
     { name = "connectorx" },
     { name = "dagster" },
     { name = "dagster-aws" },
@@ -3233,6 +3234,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.11.16" },
     { name = "beautifulsoup4", specifier = ">=4.12.0" },
+    { name = "boto3" },
     { name = "connectorx", specifier = ">=0.3.3" },
     { name = "dagster", specifier = ">=1.13.1,<1.14.0" },
     { name = "dagster-aws", specifier = ">=0.29.1,<0.30.0" },

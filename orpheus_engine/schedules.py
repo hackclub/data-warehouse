@@ -24,35 +24,12 @@ materialize_all_assets_schedule = dg.ScheduleDefinition(
     execution_timezone="America/New_York",                 # keeps logs in local time
 )
 
-# 3. Unified YSWS refresh and warehouse assets job
-# Select the refresh assets and warehouse assets explicitly using key() method
+# 3. Unified YSWS refresh, daily Parquet backup, and warehouse assets job
 materialize_unified_ysws_job = dg.define_asset_job(
     name="materialize_unified_ysws_job",
     selection=(
-        # Airtable refresh assets (with key_prefix path syntax)
-        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/approved_projects_refresh") |
-        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/ysws_programs_refresh") |
-        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/ysws_authors_refresh") |
-        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/nps_refresh") |
-        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/ysws_project_mentions_refresh") |
-        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/ysws_project_mention_searches_refresh") |
-        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/ysws_spot_checks_refresh") |
-        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/ysws_spot_check_sessions_refresh") |
-        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/ysws_spotchecks_refresh") |
-        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/eliminated_projects_refresh") |
-        dg.AssetSelection.assets("airtable/unified_ysws_projects_db/project_fines_refresh") |
-        # Warehouse assets (no key_prefix)
-        dg.AssetSelection.assets("unified_ysws_approved_projects_warehouse") |
-        dg.AssetSelection.assets("unified_ysws_ysws_programs_warehouse") |
-        dg.AssetSelection.assets("unified_ysws_ysws_authors_warehouse") |
-        dg.AssetSelection.assets("unified_ysws_nps_warehouse") |
-        dg.AssetSelection.assets("unified_ysws_ysws_project_mentions_warehouse") |
-        dg.AssetSelection.assets("unified_ysws_ysws_project_mention_searches_warehouse") |
-        dg.AssetSelection.assets("unified_ysws_ysws_spot_checks_warehouse") |
-        dg.AssetSelection.assets("unified_ysws_ysws_spot_check_sessions_warehouse") |
-        dg.AssetSelection.assets("unified_ysws_ysws_spotchecks_warehouse") |
-        dg.AssetSelection.assets("unified_ysws_eliminated_projects_warehouse") |
-        dg.AssetSelection.assets("unified_ysws_project_fines_warehouse") |
+        dg.AssetSelection.groups("airtable_unified_ysws_projects_db_refresh") |
+        dg.AssetSelection.groups("dlt_airtable_unified_ysws") |
         dg.AssetSelection.assets("unified_ysws_ysws_programs_weighted_referral_count")
     ),
 )
@@ -142,4 +119,4 @@ frequent_15min_schedule = dg.ScheduleDefinition(
 defs = dg.Definitions(
     jobs=[materialize_all_assets_job, materialize_unified_ysws_job, materialize_frequent_job],
     schedules=[materialize_all_assets_schedule, unified_ysws_15min_schedule, frequent_15min_schedule],
-) 
+)

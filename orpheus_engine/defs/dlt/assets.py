@@ -112,6 +112,34 @@ def sanitize_df_columns_for_postgres(df: pl.DataFrame, context: AssetExecutionCo
     return df, changed_columns
 
 
+def _dlt_scalar_columns_from_polars(df: pl.DataFrame) -> dict[str, dict[str, Any]]:
+    """Build DLT column hints so all-null scalar Airtable fields stay in Postgres."""
+    columns: dict[str, dict[str, Any]] = {}
+
+    for column, dtype in zip(df.columns, df.dtypes):
+        if dtype.is_nested():
+            continue
+
+        if dtype == pl.Boolean:
+            data_type = "bool"
+        elif dtype.is_integer():
+            data_type = "bigint"
+        elif dtype.is_float() or dtype.is_decimal():
+            data_type = "double"
+        elif dtype == pl.Date:
+            data_type = "date"
+        elif dtype == pl.Datetime:
+            data_type = "timestamp"
+        elif dtype == pl.Time:
+            data_type = "time"
+        else:
+            data_type = "text"
+
+        columns[column] = {"data_type": data_type, "nullable": True}
+
+    return columns
+
+
 def create_airtable_sync_assets(
     base_name: str,
     tables: list[str],
@@ -389,6 +417,10 @@ def create_airtable_sync_assets(
 
                 # Sanitize column names for PostgreSQL compatibility (63 char limit, special chars)
                 renamed_df, _ = sanitize_df_columns_for_postgres(renamed_df, context)
+                dlt_columns = _dlt_scalar_columns_from_polars(renamed_df)
+                context.log.info(
+                    f"Prepared {len(dlt_columns)} scalar DLT column hint(s) for '{specific_table_name}'."
+                )
 
                 # Make DLT pipeline name unique per table to avoid state conflicts
                 dlt_pipeline_name = f"{pipeline_name_base}_{specific_table_name}"
@@ -431,6 +463,7 @@ def create_airtable_sync_assets(
                         data=data_iterator,
                         table_name=table_name_warehouse,
                         write_disposition="replace",
+                        columns=dlt_columns,
                         primary_key="id",
                         loader_file_format="insert_values"  # Supports nested structures and datetime
                     )
@@ -462,6 +495,7 @@ def create_airtable_sync_assets(
                             data=data_iterator,
                             table_name=table_name_warehouse,
                             write_disposition="replace",
+                            columns=dlt_columns,
                             primary_key="id",
                             loader_file_format="insert_values"
                         )
@@ -506,6 +540,7 @@ def create_airtable_sync_assets(
                             data=data_iterator,
                             table_name=table_name_warehouse,
                             write_disposition="replace",
+                            columns=dlt_columns,
                             primary_key="id",
                             loader_file_format="insert_values"
                         )

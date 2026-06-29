@@ -21,6 +21,11 @@ from orpheus_engine.defs.geocoder.resources import GeocoderResource, GeocodingEr
 from orpheus_engine.defs.ai.resources import AIResource
 from orpheus_engine.defs.genderize.resources import GenderizeResource, GenderizeApiError
 from orpheus_engine.defs.shared.address_utils import build_address_string_from_loops_row
+from orpheus_engine.defs.shared.daily_backups import (
+    ParquetBackupFile,
+    dataframe_to_parquet_bytes,
+    write_daily_parquet_backup,
+)
 
 # Import the Loops resource and error
 from orpheus_engine.defs.loops.resources import LoopsResource, LoopsApiError 
@@ -91,15 +96,32 @@ def loops_raw_audience(context) -> pl.DataFrame:
                     ignore_errors=False
                 )
                 log.info(f"Successfully loaded data from cache. DataFrame shape: {df.shape}")
+                backup_result = write_daily_parquet_backup(
+                    source="loops_audience",
+                    files=[
+                        ParquetBackupFile(
+                            filename="loops_audience.parquet",
+                            table="loops_audience",
+                            content=dataframe_to_parquet_bytes(df),
+                            row_count=df.height,
+                            column_count=df.width,
+                        )
+                    ],
+                    run_id=getattr(context, "run_id", None),
+                    log=log,
+                )
+                metadata = {
+                    "num_records": df.height,
+                    "columns": ", ".join(df.columns),
+                    "loops_job_id": "N/A (cached)", # Indicate cache usage
+                    "downloaded_filename": os.path.basename(cache_file_path), # Use cache filename
+                    "source": "cache"
+                }
+                if backup_result:
+                    metadata["parquet_backup_metadata"] = backup_result.metadata_location
                 # Skip download and rest of the try block for cache hit
                 context.add_output_metadata(
-                    metadata={
-                        "num_records": df.height,
-                        "columns": ", ".join(df.columns),
-                        "loops_job_id": "N/A (cached)", # Indicate cache usage
-                        "downloaded_filename": os.path.basename(cache_file_path), # Use cache filename
-                        "source": "cache"
-                    }
+                    metadata=metadata
                 )
                 return df
             except (pl.exceptions.ComputeError, pl.exceptions.NoDataError, pl.exceptions.ShapeError, FileNotFoundError) as e:
@@ -233,14 +255,31 @@ def loops_raw_audience(context) -> pl.DataFrame:
             ignore_errors=False
         )
         log.info(f"Successfully loaded data. DataFrame shape: {df.shape}")
+        backup_result = write_daily_parquet_backup(
+            source="loops_audience",
+            files=[
+                ParquetBackupFile(
+                    filename="loops_audience.parquet",
+                    table="loops_audience",
+                    content=dataframe_to_parquet_bytes(df),
+                    row_count=df.height,
+                    column_count=df.width,
+                )
+            ],
+            run_id=getattr(context, "run_id", None),
+            log=log,
+        )
+        metadata = {
+            "num_records": df.height,
+            "columns": ", ".join(df.columns),
+            "loops_job_id": job_id,
+            "downloaded_filename": filename or os.path.basename(cache_file_path), # Use API filename if available
+            "source": "api"
+        }
+        if backup_result:
+            metadata["parquet_backup_metadata"] = backup_result.metadata_location
         context.add_output_metadata(
-            metadata={
-                "num_records": df.height,
-                "columns": ", ".join(df.columns),
-                "loops_job_id": job_id,
-                "downloaded_filename": filename or os.path.basename(cache_file_path), # Use API filename if available
-                "source": "api"
-            }
+            metadata=metadata
         )
 
         # If caching is enabled and cache path is valid, save the downloaded file

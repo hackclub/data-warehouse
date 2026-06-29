@@ -17,6 +17,7 @@ from dagster import (
     MetadataValue,
     Definitions,
     AssetKey,
+    AssetIn,
 )
 from typing import Dict, Any, List
 
@@ -26,12 +27,20 @@ from ..airtable.definitions import airtable_config
 from ..geocoder.resources import GeocoderResource, GeocodingError
 from ..airtable.generated_ids import AirtableIDs
 from ..shared.address_utils import build_address_string_from_airtable_row
+from ..shared.daily_backups import (
+    ParquetBackupFile,
+    dataframe_to_parquet_bytes,
+    write_daily_parquet_backup,
+)
 from ..analytics.definitions import format_airtable_date
 from ..dlt.assets import create_airtable_sync_assets
 from ..airtable.definitions import create_airtable_assets
 
 # Alias for convenience
 UnifiedYSWS = AirtableIDs.unified_ysws_projects_db
+UNIFIED_YSWS_BASE_NAME = "unified_ysws_projects_db"
+UNIFIED_YSWS_BACKUP_SOURCE = "airtable_unified_ysws_db"
+UNIFIED_YSWS_TABLES = list(airtable_config.bases[UNIFIED_YSWS_BASE_NAME].tables.keys())
 
 
 def _extract_geocode_details(geocode_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -2345,20 +2354,8 @@ def unified_ysws_db_processing_done(
 
 # Create refreshed Airtable source assets that re-query after processing
 ysws_refresh_airtable_assets = create_airtable_assets(
-    base_name="unified_ysws_projects_db",
-    tables=[
-        "approved_projects", 
-        "ysws_programs", 
-        "ysws_authors",
-        "nps",
-        "ysws_project_mentions",
-        "ysws_project_mention_searches", 
-        "ysws_spot_checks",
-        "ysws_spot_check_sessions",
-        "ysws_spotchecks",
-        "eliminated_projects",
-        "project_fines"
-    ],
+    base_name=UNIFIED_YSWS_BASE_NAME,
+    tables=UNIFIED_YSWS_TABLES,
     deps=[AssetKey(["unified_ysws_db_processing_done"])],
     suffix="_refresh"
 )
@@ -2366,24 +2363,59 @@ ysws_refresh_airtable_assets = create_airtable_assets(
 # Create DLT warehouse assets that use the refreshed Airtable sources
 ysws_warehouse_refresh_assets = create_airtable_sync_assets(
     base_name="unified_ysws",
-    tables=[
-        "approved_projects", 
-        "ysws_programs", 
-        "ysws_authors",
-        "nps",
-        "ysws_project_mentions",
-        "ysws_project_mention_searches", 
-        "ysws_spot_checks",
-        "ysws_spot_check_sessions",
-        "ysws_spotchecks",
-        "eliminated_projects",
-        "project_fines"
-    ],
+    tables=UNIFIED_YSWS_TABLES,
     description="Loads refreshed YSWS data into warehouse after all processing is complete",
     source_suffix="_refresh",  # Use the refreshed Airtable sources
     warehouse_dataset_name="airtable_unified_ysws_projects_db",  # Custom warehouse schema name
-    source_base_name="unified_ysws_projects_db"  # Source assets are in unified_ysws_projects_db base
+    source_base_name=UNIFIED_YSWS_BASE_NAME  # Source assets are in unified_ysws_projects_db base
 )
+
+
+@asset(
+    name="airtable_unified_ysws_db_daily_parquet_backup",
+    group_name="airtable_unified_ysws_projects_db_refresh",
+    description="Writes one daily Parquet backup per refreshed Unified YSWS Airtable table using already-fetched source DataFrames.",
+    compute_kind="parquet_backup",
+    ins={
+        f"{table_name}_refresh": AssetIn(key_prefix=["airtable", UNIFIED_YSWS_BASE_NAME])
+        for table_name in UNIFIED_YSWS_TABLES
+    },
+)
+def airtable_unified_ysws_db_daily_parquet_backup(
+    context: AssetExecutionContext,
+    **kwargs: pl.DataFrame,
+) -> Output[None]:
+    backup_files = []
+    for table_name in UNIFIED_YSWS_TABLES:
+        df = kwargs[f"{table_name}_refresh"]
+        backup_files.append(
+            ParquetBackupFile(
+                filename=f"{table_name}.parquet",
+                table=table_name,
+                content=dataframe_to_parquet_bytes(df),
+                row_count=df.height,
+                column_count=df.width,
+            )
+        )
+
+    backup_result = write_daily_parquet_backup(
+        source=UNIFIED_YSWS_BACKUP_SOURCE,
+        files=backup_files,
+        run_id=getattr(context, "run_id", None),
+        log=context.log,
+    )
+
+    metadata = {
+        "source": MetadataValue.text(UNIFIED_YSWS_BACKUP_SOURCE),
+        "table_count": MetadataValue.int(len(UNIFIED_YSWS_TABLES)),
+        "tables": MetadataValue.text(", ".join(UNIFIED_YSWS_TABLES)),
+        "backup_configured": MetadataValue.bool(backup_result is not None),
+    }
+    if backup_result:
+        metadata["snapshot_date"] = MetadataValue.text(backup_result.snapshot_date)
+        metadata["metadata_location"] = MetadataValue.text(backup_result.metadata_location)
+
+    return Output(None, metadata=metadata)
 
 
 # Define the assets for this module
@@ -2405,5 +2437,6 @@ defs = Definitions(
         ysws_programs_prepared_for_update,
         ysws_programs_update_status,
         unified_ysws_db_processing_done,
+        airtable_unified_ysws_db_daily_parquet_backup,
     ] + ysws_refresh_airtable_assets + ysws_warehouse_refresh_assets,
 )
