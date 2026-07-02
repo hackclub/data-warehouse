@@ -50,7 +50,7 @@ pgbackrest --stanza=warehouse --type=diff backup
 Backups are run by systemd timers on the host. The schedule is:
 
 - **Full backup**: 1st and 15th of each month at 3am
-- **Diff backup**: every other day at 3am
+- **Diff backup**: every day at 3am, except the 1st and 15th (when the full runs)
 
 ### Host setup
 
