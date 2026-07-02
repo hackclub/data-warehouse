@@ -11,6 +11,18 @@ from .config import AirtableServiceConfig, AirtableBaseConfig, AirtableTableConf
 # Import the specific schema model
 from pyairtable.models.schema import TableSchema
 
+# Airtable field types with a guaranteed scalar value type. Fields declared as
+# one of these are pinned to that type instead of relying on value-based
+# inference, which is unstable: a numeric rollup/formula whose current values
+# all happen to be 0/1 (e.g. zeroed by a month rollover) would otherwise be
+# classified as boolean, flipping the warehouse column type between syncs and
+# terminally aborting the dlt load.
+AIRTABLE_INTEGER_FIELD_TYPES = {"count", "autoNumber", "rating"}
+AIRTABLE_FLOAT_FIELD_TYPES = {"number", "currency", "percent", "duration"}
+AIRTABLE_BOOLEAN_FIELD_TYPES = {"checkbox"}
+# Field types whose value type is declared in options.result.type
+AIRTABLE_RESULT_WRAPPER_FIELD_TYPES = {"formula", "rollup", "multipleLookupValues"}
+
 class AirtableApiError(Exception):
     """Custom exception for errors interacting with the Airtable API."""
     pass
@@ -126,6 +138,35 @@ class AirtableResource(ConfigurableResource):
         # Return other types unchanged
         return value
 
+    def _declared_scalar_kinds(self, schema_info: TableSchema) -> Dict[str, str]:
+        """
+        Map field IDs to a pinned scalar kind ('integer' | 'float' | 'boolean')
+        based on the field type declared in the Airtable schema. Formula,
+        rollup, and lookup fields are resolved through their declared result
+        type. Fields of any other type are omitted and fall back to
+        value-based inference.
+        """
+        kinds: Dict[str, str] = {}
+        for field in schema_info.fields:
+            field_type = field.type
+            if field_type in AIRTABLE_RESULT_WRAPPER_FIELD_TYPES:
+                # options is a pydantic model on typed schemas, but a plain
+                # dict on pyairtable's UnknownFieldSchema fallback
+                options = getattr(field, "options", None)
+                if isinstance(options, dict):
+                    result = options.get("result")
+                    field_type = result.get("type") if isinstance(result, dict) else None
+                else:
+                    result = getattr(options, "result", None)
+                    field_type = getattr(result, "type", None)
+            if field_type in AIRTABLE_INTEGER_FIELD_TYPES:
+                kinds[field.id] = "integer"
+            elif field_type in AIRTABLE_FLOAT_FIELD_TYPES:
+                kinds[field.id] = "float"
+            elif field_type in AIRTABLE_BOOLEAN_FIELD_TYPES:
+                kinds[field.id] = "boolean"
+        return kinds
+
     def get_all_records_as_polars(
         self,
         context: AssetExecutionContext,
@@ -197,9 +238,11 @@ class AirtableResource(ConfigurableResource):
                     return pl.DataFrame(schema={"id": pl.Utf8})
 
             # Get all field IDs from table schema to ensure we include all fields
+            declared_kinds: Dict[str, str] = {}
             try:
                 schema_info: TableSchema = self.get_table_schema(base_key, table_key)
                 all_fields = set(["id"] + [f.id for f in schema_info.fields])
+                declared_kinds = self._declared_scalar_kinds(schema_info)
                 
                 # Filter fields if specific fields were requested
                 if fields:
@@ -253,7 +296,14 @@ class AirtableResource(ConfigurableResource):
                 if field_id in fields_requiring_lists:
                     field_type_analysis[field_id] = "list"
                     continue
-                    
+
+                # Pin scalar fields with an Airtable-declared type; only
+                # unknown types go through value-based inference below.
+                declared_kind = declared_kinds.get(field_id)
+                if declared_kind is not None:
+                    field_type_analysis[field_id] = declared_kind
+                    continue
+
                 # Analyze non-list fields for best type
                 values = []
                 for record in preprocessed_records:
