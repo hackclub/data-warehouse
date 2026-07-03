@@ -45,6 +45,9 @@ EXCLUDED_TABLES = frozenset({
     # metadata COPYs they would otherwise cost every run.
     "summer_of_making_2025.active_insights_jobs",
     "summer_of_making_2025.active_insights_requests",
+    # OAuth refresh token for the QuickBooks Online sync — secret material
+    # that must never be mirrored out of the warehouse.
+    "quickbooks._qbo_oauth",
 })
 
 # =============================================================================

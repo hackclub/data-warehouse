@@ -19,6 +19,7 @@ import orpheus_engine.defs.airtable_users.definitions as airtable_users_defs
 import orpheus_engine.defs.zoom.definitions as zoom_defs
 import orpheus_engine.defs.highway_github.definitions as highway_github_defs
 import orpheus_engine.defs.fillout.definitions as fillout_defs
+import orpheus_engine.defs.quickbooks_online.definitions as quickbooks_defs
 import orpheus_engine.schedules as schedules
 
 from orpheus_engine.defs.shared.airtable_enterprise import AirtableEnterpriseResource
@@ -59,6 +60,7 @@ def _build_definitions() -> dg.Definitions:
         zoom_defs.defs,
         highway_github_defs.defs,
         fillout_defs.defs,
+        quickbooks_defs.defs,
         schedules.defs,
         dg.Definitions(assets=[analytics_hack_clubbers]),
         dg.Definitions(resources={
