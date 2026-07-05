@@ -25,9 +25,6 @@ import orpheus_engine.schedules as schedules
 from orpheus_engine.defs.shared.airtable_enterprise import AirtableEnterpriseResource
 from orpheus_engine.defs.shared.zoom import ZoomResource
 
-# Import analytics asset separately (it doesn't export defs)
-from orpheus_engine.defs.analytics.definitions import analytics_hack_clubbers
-
 # Import the DuckLake row hash asset factory and sync asset
 from orpheus_engine.defs.ducklake.definitions import create_warehouse_row_hashes_asset, ducklake_sync
 
@@ -62,7 +59,6 @@ def _build_definitions() -> dg.Definitions:
         fillout_defs.defs,
         quickbooks_defs.defs,
         schedules.defs,
-        dg.Definitions(assets=[analytics_hack_clubbers]),
         dg.Definitions(resources={
             "airtable_enterprise": AirtableEnterpriseResource(
                 api_key=dg.EnvVar("AIRTABLE_ENTERPRISE_PAT"),

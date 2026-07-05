@@ -20,12 +20,7 @@ try:
 except ImportError:
     print("WARNING: Could not import generated_ids.py. Run the generation script.")
     class AirtableIDs: # Dummy class for fallback
-        class analytics_hack_clubbers: # Use snake_case
-             base_id = "UNKNOWN"
-             class hack_clubbers: table_id = "UNKNOWN"
-             class field_mapping_rules: table_id = "UNKNOWN"
-             class program_mapping_rules: table_id = "UNKNOWN"
-        # Add other dummy bases/tables if necessary based on config
+        pass # Add dummy bases/tables if necessary based on config
 
 # --- Helper Function (Copied from old assets.py) ---
 def sanitize_name(name: str) -> str:
@@ -39,23 +34,6 @@ def sanitize_name(name: str) -> str:
 # Define your Airtable structure here
 airtable_config = AirtableServiceConfig(
     bases={
-        "analytics_hack_clubbers": AirtableBaseConfig(
-            base_id="appCGB6LccMzwkJZg",
-            tables={
-                "hack_clubbers": AirtableTableConfig(
-                    table_id="tbluKHJi8hmg34uOF"
-                ),
-                "field_mapping_rules": AirtableTableConfig(
-                    table_id="tbl7SkwqGYtFl4pe4"
-                ),
-                "program_mapping_rules": AirtableTableConfig(
-                    table_id="tbl02flnwdqn8NcgG"
-                ),
-                "programs": AirtableTableConfig(
-                    table_id="tblo0e0B4UQ4edi31"
-                ),
-            }
-        ),
         "neighborhood": AirtableBaseConfig(
             base_id="appnsN4MzbnfMY0ai",
             tables={

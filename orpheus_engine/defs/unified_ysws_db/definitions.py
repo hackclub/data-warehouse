@@ -19,7 +19,7 @@ from dagster import (
     AssetKey,
     AssetIn,
 )
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 # Import resources and config
 from ..airtable.resources import AirtableResource
@@ -32,9 +32,20 @@ from ..shared.daily_backups import (
     dataframe_to_parquet_bytes,
     write_daily_parquet_backup,
 )
-from ..analytics.definitions import format_airtable_date
 from ..dlt.assets import create_airtable_sync_assets
 from ..airtable.definitions import create_airtable_assets
+
+
+def format_airtable_date(dt: Optional[datetime]) -> Optional[str]:
+    """Formats datetime objects into ISO 8601 strings for Airtable."""
+    if dt is None:
+        return None
+    # Airtable expects ISO 8601 format, usually with 'Z' for UTC.
+    if dt.tzinfo is None:
+        return dt.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+    else:
+        # If timezone-aware, convert to UTC and format
+        return dt.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
 # Alias for convenience
 UnifiedYSWS = AirtableIDs.unified_ysws_projects_db
