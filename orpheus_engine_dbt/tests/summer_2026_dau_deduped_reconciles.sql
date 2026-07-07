@@ -6,7 +6,7 @@
 -- between the time log and the DAU marts.
 
 WITH log_day AS (
-    SELECT (activity_hour AT TIME ZONE 'UTC')::date AS activity_date,
+    SELECT (activity_hour AT TIME ZONE 'America/New_York')::date AS activity_date,
            SUM(dau_deduped) AS stacked_dau_deduped
     FROM {{ ref('summer_unified_time_log') }}
     GROUP BY 1
@@ -23,7 +23,7 @@ day_check AS (
 
 log_program_day AS (
     SELECT program_name,
-           (activity_hour AT TIME ZONE 'UTC')::date AS activity_date,
+           (activity_hour AT TIME ZONE 'America/New_York')::date AS activity_date,
            SUM(dau) AS stacked_dau
     FROM {{ ref('summer_unified_time_log') }}
     GROUP BY 1, 2

@@ -48,7 +48,40 @@ unified_ysws_15min_schedule = dg.ScheduleDefinition(
     execution_timezone="America/New_York",                 # keeps logs in local time
 )
 
-# 5. Frequent sync job and schedule (every 15 minutes)
+# 5. Hackatime DAU refresh job and schedule.
+# Keep this separate from the broad all-assets job so Summer 2026 DAU freshness
+# does not depend on unrelated mirrors. The hourly Hackatime model scans the
+# large heartbeat mirror, so hourly is a safer cadence than the 15-minute job
+# unless that dbt model becomes incremental.
+HACKATIME_DAU_DBT_ASSETS: tuple[dg.AssetKey, ...] = (
+    dg.AssetKey(["hackatime_analytics", "hourly_project_activity"]),
+    dg.AssetKey(["summer_2026_analytics", "summer_unified_time_log"]),
+    dg.AssetKey(["summer_2026_analytics", "daily_active_users"]),
+    dg.AssetKey(["summer_2026_analytics", "daily_active_users_deduped"]),
+    dg.AssetKey(["summer_2026_analytics", "daily_hours_logged_by_program"]),
+    dg.AssetKey(["summer_2026_analytics", "dashboard_daily_totals"]),
+    dg.AssetKey(["summer_2026_analytics", "dashboard_dau_methodology"]),
+    dg.AssetKey(["summer_2026_analytics", "dashboard_program_daily_metrics"]),
+    dg.AssetKey(["summer_2026_analytics", "summer_2026_metadata"]),
+    dg.AssetKey(["summer_2026_analytics", "dashboard_data_health"]),
+)
+
+materialize_hackatime_dau_job = dg.define_asset_job(
+    name="materialize_hackatime_dau_job",
+    selection=(
+        dg.AssetSelection.assets("hackatime_warehouse_mirror") |
+        dg.AssetSelection.assets(*HACKATIME_DAU_DBT_ASSETS)
+    ),
+)
+
+hackatime_dau_hourly_schedule = dg.ScheduleDefinition(
+    name="hackatime_dau_hourly_schedule",
+    job=materialize_hackatime_dau_job,
+    cron_schedule="10 * * * *",                            # hourly, offset from all-assets :30 runs
+    execution_timezone="America/New_York",
+)
+
+# 6. Frequent sync job and schedule (every 15 minutes)
 # Includes: Slack NPS, Campfire, Campfire Flagship (sources + warehouse mirrors), Zenventory
 materialize_frequent_job = dg.define_asset_job(
     name="materialize_frequent_job",
@@ -121,8 +154,18 @@ frequent_15min_schedule = dg.ScheduleDefinition(
     execution_timezone="America/New_York",
 )
 
-# 6. Wrap in a Definitions so Dagster can find it
+# 7. Wrap in a Definitions so Dagster can find it
 defs = dg.Definitions(
-    jobs=[materialize_all_assets_job, materialize_unified_ysws_job, materialize_frequent_job],
-    schedules=[materialize_all_assets_schedule, unified_ysws_15min_schedule, frequent_15min_schedule],
+    jobs=[
+        materialize_all_assets_job,
+        materialize_unified_ysws_job,
+        materialize_hackatime_dau_job,
+        materialize_frequent_job,
+    ],
+    schedules=[
+        materialize_all_assets_schedule,
+        unified_ysws_15min_schedule,
+        hackatime_dau_hourly_schedule,
+        frequent_15min_schedule,
+    ],
 )
