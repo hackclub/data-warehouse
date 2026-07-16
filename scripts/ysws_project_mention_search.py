@@ -354,7 +354,8 @@ def update_project_repo_stars(project_record_id: str, last_search_at: str, airta
         
         # Update both repo stars and last search timestamp
         update_data = {
-            'YSWS Project Mentions - Last Search At': last_search_at
+            'YSWS Project Mentions - Last Search At': last_search_at,
+            'YSWS Project Mentions - Override Project Search': False
         }
         
         if current_stars is not None:
