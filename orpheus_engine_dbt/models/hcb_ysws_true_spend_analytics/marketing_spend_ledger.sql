@@ -1,5 +1,5 @@
 {{ config(
-    schema='marketing_analytics',
+    schema='hcb_ysws_true_spend_analytics',
     materialized='table'
 ) }}
 
@@ -23,8 +23,8 @@
       movement where one was recorded.
 
     A payment that already matches a real marketing-org transaction (see
-    videos_db_payments.marketing_org_match_method) is skipped here so nothing
-    is double-counted; the real hcb_transaction row covers it.
+    marketing_videos_db_payments.marketing_org_match_method) is skipped here
+    so nothing is double-counted; the real hcb_transaction row covers it.
 
     Sign convention follows HCB: negative amounts are outflows (spend).
     Synthetic rows are always outflows.
@@ -71,7 +71,7 @@ synthetic_backfill AS (
         NULL::text AS hcb_code,
         'synthetic_payment' AS transaction_type,
         canonical_url_source AS backfill_payment_url
-    FROM {{ ref('videos_db_payments') }}
+    FROM {{ ref('marketing_videos_db_payments') }}
     WHERE NOT is_ignored
       AND marketing_org_match_method IS NULL
 )

@@ -2,6 +2,6 @@
 -- duplicates mean the same spend is being counted twice.
 
 SELECT ledger_id, COUNT(*) AS n
-FROM {{ ref('spend_ledger') }}
+FROM {{ ref('marketing_spend_ledger') }}
 GROUP BY ledger_id
 HAVING COUNT(*) > 1

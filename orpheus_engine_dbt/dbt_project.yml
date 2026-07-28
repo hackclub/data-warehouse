@@ -23,7 +23,7 @@ clean-targets:         # Directories removed by `dbt clean`
 
 vars:
   # HCB org whose real transactions form the non-synthetic side of
-  # public_marketing_analytics.spend_ledger
+  # public_hcb_ysws_true_spend_analytics.marketing_spend_ledger
   marketing_hcb_org_slug: "ysws-marketing"
 
 on-run-end:
@@ -70,5 +70,5 @@ models:
       +materialized: table
       +grants:
         select: ["metabase", "metabase_unified_analytics_reader", "\"stardance-mcp\"", "\"stardance-sankey\""]
-    marketing_analytics:
+    hcb_ysws_true_spend_analytics:
       +materialized: table

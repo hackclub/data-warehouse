@@ -7,8 +7,8 @@ SELECT
     p.airtable_record_id,
     p.marketing_org_match_method,
     COUNT(sl.ledger_id) AS synthetic_rows
-FROM {{ ref('videos_db_payments') }} p
-LEFT JOIN {{ ref('spend_ledger') }} sl
+FROM {{ ref('marketing_videos_db_payments') }} p
+LEFT JOIN {{ ref('marketing_spend_ledger') }} sl
     ON sl.ledger_id = 'synthetic:airtable:' || p.airtable_record_id
 WHERE NOT p.is_ignored
 GROUP BY p.airtable_record_id, p.marketing_org_match_method

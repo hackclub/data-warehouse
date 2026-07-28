@@ -1,5 +1,5 @@
 {{ config(
-    schema='marketing_analytics',
+    schema='hcb_ysws_true_spend_analytics',
     materialized='table'
 ) }}
 
@@ -20,7 +20,8 @@
       - amount_and_date: the marketing org has an outflow of the exact same
         amount within 3 days of the payment date
     Matched payments already exist as real transactions in the marketing org,
-    so spend_ledger skips them when it builds synthetic backfill rows.
+    so marketing_spend_ledger skips them when it builds synthetic backfill
+    rows.
 */
 
 WITH payments AS (
