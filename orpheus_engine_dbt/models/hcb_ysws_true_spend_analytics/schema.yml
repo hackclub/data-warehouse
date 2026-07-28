@@ -1,0 +1,88 @@
+version: 2
+
+models:
+  - name: ysws_spend_programs
+    description: >
+      YSWS spend program registry: one row per program root HCB org. Roots come
+      from Airtable ysws_programs HCB links plus manual entries (daydream,
+      campfire, Outpost = stardance-hardware).
+    columns:
+      - name: root_event_id
+        tests: [unique, not_null]
+      - name: root_slug
+        tests: [unique, not_null]
+
+  - name: ysws_spend_org_tree
+    description: >
+      Every HCB org in each program's tree, discovered via hcb.events.parent_id
+      recursive descent. Descent stops at other programs' roots and at personal
+      author/reviewer pots. Grain: (root_event_id, event_id).
+    columns:
+      - name: event_id
+        description: "Belongs to exactly one program tree."
+        tests: [unique, not_null]
+
+  - name: ysws_spend_ledger
+    description: >
+      The queryable true-spend ledger: every main-ledger outflow of every
+      program-tree org, classified into A/C (true spend), B/D/X (not this
+      program's spend), or I (intra-tree, netted). Card-grant subledger rows
+      excluded; unspent grant cards count as spend at funding time.
+      True spend = SUM(outflow_dollars) WHERE is_true_spend.
+      Also carries SYNTHETIC marketing backfill rows (spend_bucket =
+      'marketing_backfill', hcb_code = 'BACKFILL-<airtable record id>') built
+      from marketing_videos_db_payments for spend that predates the
+      ysws-marketing org, plus BACKFILL-OFFSET- rows that net
+      already-program-counted payments out of the paying program.
+    columns:
+      - name: spend_category
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['A', 'B', 'C', 'D', 'X', 'I', 'M']
+      - name: spend_bucket
+        tests: [not_null]
+
+  - name: ysws_spend_by_program
+    description: >
+      Per-program rollup reconciling gross outflow = true spend (A+C) +
+      not-spend (B+D+X) + intra-tree (I), with the legacy stated-spend figure,
+      overstatement %, tree balance, and cost per weighted hour.
+    columns:
+      - name: root_event_id
+        tests: [unique, not_null]
+
+  - name: ysws_spend_monthly
+    description: >
+      Program x month x spend_category time series of outflows for dashboards
+      and date-windowed true-spend reporting.
+
+  - name: ysws_author_budget_ledger
+    description: >
+      Every main-ledger transaction of every personal ysws-budget-* pot, with
+      budget_bucket classification. Per-person staff budget spend =
+      SUM(outflow_dollars) WHERE is_personal_spend; map slug to person
+      downstream.
+    columns:
+      - name: budget_bucket
+        tests: [not_null]
+
+  - name: ysws_author_budgets
+    description: >
+      One row per personal ysws-budget-* pot: personal spend, transfers back to
+      orgs (excluded from personal spend), funding received, balance.
+    columns:
+      - name: budget_event_id
+        tests: [unique, not_null]
+
+  - name: marketing_videos_db_payments
+    description: >
+      One row per record in the "Payments" table of the "Hack Club Videos DB"
+      Airtable base (via airtable_raw_all_bases): historical marketing
+      payments to video authors that predate the ysws-marketing org. Each
+      payment carries its match status against the marketing HCB tree;
+      unmatched payments become synthetic BACKFILL- rows in ysws_spend_ledger.
+    columns:
+      - name: airtable_record_id
+        tests: [unique, not_null]

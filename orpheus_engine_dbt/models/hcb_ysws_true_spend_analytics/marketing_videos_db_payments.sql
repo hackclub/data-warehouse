@@ -12,16 +12,16 @@
     dedicated marketing HCB org and were paid out of assorted places (HQ
     disbursements, card grants, checks, salary, ...).
 
-    Each payment is checked against the marketing HCB org's ledger (org slug
-    set by the marketing_hcb_org_slug var). Match methods, in priority order:
+    Each payment is checked against the marketing HCB org tree (the
+    bucket = 'marketing' tree in ysws_spend_org_tree, rooted at the org
+    registered in ysws_spend_programs). Match methods, in priority order:
       - canonical_url_hcb_code: the payment's "Canonical URL Source" links to
         hcb.hackclub.com/hcb/<code> and that code (or short code) belongs to
-        the marketing org
-      - amount_and_date: the marketing org has an outflow of the exact same
+        the marketing tree
+      - amount_and_date: the marketing tree has an outflow of the exact same
         amount within 3 days of the payment date
     Matched payments already exist as real transactions in the marketing org,
-    so marketing_spend_ledger skips them when it builds synthetic backfill
-    rows.
+    so ysws_spend_ledger skips them when it builds synthetic backfill rows.
 */
 
 WITH payments AS (
@@ -57,13 +57,13 @@ authors AS (
       AND table_id = 'tblAdQcf0RJNIyPs0'    -- "Attributed Authors"
 ),
 
-marketing_org AS (
-    SELECT id
-    FROM {{ source('hcb', 'events') }}
-    WHERE slug = '{{ var("marketing_hcb_org_slug") }}'
+marketing_tree AS (
+    SELECT event_id
+    FROM {{ ref('ysws_spend_org_tree') }}
+    WHERE bucket = 'marketing'
 ),
 
--- Every HCB code that lives in the marketing org: regular hcb_codes (with
+-- Every HCB code that lives in the marketing tree: regular hcb_codes (with
 -- their short codes) plus the GRANT-<id> pseudo-codes the hcb_analytics
 -- ledger synthesizes for card grants. MATERIALIZED so the per-payment
 -- lateral lookups below scan this small set instead of re-scanning
@@ -71,17 +71,17 @@ marketing_org AS (
 marketing_org_codes AS MATERIALIZED (
     SELECT hc.hcb_code, hc.short_code
     FROM {{ source('hcb', 'hcb_codes') }} hc
-    JOIN marketing_org mo ON mo.id = hc.event_id
+    JOIN marketing_tree mt ON mt.event_id = hc.event_id
     UNION ALL
     SELECT 'GRANT-' || cg.id::text AS hcb_code, NULL AS short_code
     FROM {{ source('hcb', 'card_grants') }} cg
-    JOIN marketing_org mo ON mo.id = cg.event_id
+    JOIN marketing_tree mt ON mt.event_id = cg.event_id
 ),
 
 marketing_org_ledger AS MATERIALIZED (
-    SELECT hcb_code, transaction_date, amount_cents
-    FROM {{ ref('ledger') }}
-    WHERE org_slug = '{{ var("marketing_hcb_org_slug") }}'
+    SELECT l.hcb_code, l.transaction_date, l.amount_cents
+    FROM {{ ref('ledger') }} l
+    JOIN marketing_tree mt ON mt.event_id = l.org_id
 )
 
 SELECT

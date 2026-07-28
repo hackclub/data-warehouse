@@ -36,6 +36,22 @@ Distinguishing the three HQ-bound cases (B author funds / C internal payments /
 D returned overfunding) is the whole point — they all leave to another HCB org
 but only C is an expense.
 
+CHILD-ORG TREES
+---------------
+Many programs route real spend through child HCB orgs (ysws-siege-framework-grants,
+stardance-hardware, horizons-* houses, daydream/campfire city orgs). A single-org
+view calls those transfers X and understates spend. This tool consolidates the
+org TREE using HCB's actual sub-organization relationship (hcb.events.parent_id),
+descended recursively — naming-independent, so it also catches sub-orgs that
+don't share the parent's slug prefix (blueprint has 46, scrapyard 93).
+Parent->child transfers are netted out (category I, neither expense nor
+not-expense) and the children's own external outflows are classified normally.
+Personal author/reviewer pots (ysws-resolution-<name>, ysws-budget-*) are never
+joined even when they are sub-orgs — transfers into them stay category B.
+Slug-prefix lookalikes that are NOT sub-orgs in HCB are reported; --children all
+also joins those (plus use --include-orgs for related orgs with neither link,
+e.g. som-sticker-shipments); --children none reproduces the single-org view.
+
 Notes:
   - Unspent grant cards ARE an expense: the card-grant *funding* is a main-ledger
     outflow (category A) the moment the card is loaded, regardless of whether the
@@ -48,6 +64,8 @@ USAGE
 -----
   bin/ysws_true_expense.py <program-name-or-slug> [--ledger] [--json]
   bin/ysws_true_expense.py "Summer of Making" --include-orgs som-sticker-shipments
+  bin/ysws_true_expense.py campfire                     # full sub-org tree (regions + cities)
+  bin/ysws_true_expense.py siege --children none        # single-org view
   bin/ysws_true_expense.py fallout --hours-name "Fallout"
   bin/ysws_true_expense.py --list
 
@@ -100,13 +118,15 @@ RETURN_KEYWORDS = (
 CHAPTER_PREFIXES = ("build-guild-",)
 
 # ---- Category system --------------------------------------------------------
-# code -> (label, is_expense)
+# code -> (label, is_expense). is_expense None = intra-tree, excluded from both
+# sides of the expense split (it nets against a child org's classified spend).
 CATEGORIES = {
     "A": ("A - Spent on the event", True),
     "C": ("C - Internal cost (HQ postage / fulfillment / services / fines)", True),
     "B": ("B - Into YSWS author funds (future events)", False),
     "D": ("D - Returned to HQ (overfunding)", False),
     "X": ("X - Other internal (washes / other programs)", False),
+    "I": ("I - Intra-tree transfer (netted out, child spend counted directly)", None),
 }
 
 # Fine-grained bucket -> (label, category code). Buckets give --ledger detail;
@@ -122,6 +142,7 @@ BUCKETS = {
     "fines":            ("Fines swept to central account (real cost to the event)", "C"),
     "wash_roundtrip":   ("Round-trip wash with another org", "X"),
     "inter_org":        ("Transfer to another program / org", "X"),
+    "intra_tree":       ("Transfer to a child org of this program (netted)", "I"),
 }
 
 
@@ -202,18 +223,16 @@ def list_programs():
 
 
 def resolve_slug(token, programs):
-    """Return a minimal org dict for a program name or bare HCB slug."""
+    """Return a minimal org dict for a program name or bare HCB slug.
+
+    Precedence: exact program name/slug > exact HCB slug > partial program
+    match. Exact-HCB before partial matters for tree roots: "campfire" must hit
+    the parent org `campfire`, not partial-match the "Campfire Flagship" program.
+    """
     t = token.strip().lower()
     for p in programs:
         if (p["slug"] or "").lower() == t or (p["program_name"] or "").lower() == t:
             return p
-    partial = [p for p in programs
-               if t in (p["program_name"] or "").lower() or t in (p["slug"] or "").lower()]
-    if len(partial) == 1:
-        return partial[0]
-    if len(partial) > 1:
-        names = ", ".join(f'{p["program_name"]} ({p["slug"]})' for p in partial[:12])
-        sys.exit(f'Ambiguous "{token}" -> {names}')
     hcb = query(f"""
         SELECT e.slug, e.name AS program_name, e.id AS event_id, o.total_outflow_cents,
                NULL::text AS weighted_total, NULL::text AS budget_per_hour
@@ -221,8 +240,16 @@ def resolve_slug(token, programs):
         WHERE lower(e.slug)={sql_str(t)}
     """)
     if hcb:
-        sys.stderr.write(f'note: "{token}" not in ysws_programs; using HCB org "{hcb[0]["slug"]}".\n')
+        sys.stderr.write(f'note: using HCB org "{hcb[0]["slug"]}" (exact slug match; '
+                         f'not an exact ysws_programs name).\n')
         return hcb[0]
+    partial = [p for p in programs
+               if t in (p["program_name"] or "").lower() or t in (p["slug"] or "").lower()]
+    if len(partial) == 1:
+        return partial[0]
+    if len(partial) > 1:
+        names = ", ".join(f'{p["program_name"]} ({p["slug"]})' for p in partial[:12])
+        sys.exit(f'Ambiguous "{token}" -> {names}')
     sys.exit(f'No program matching "{token}". Try --list.')
 
 
@@ -250,6 +277,18 @@ def weighted_hours(program_name, hours_name, weighted_total_hint):
 # Core analysis
 # ---------------------------------------------------------------------------
 
+def is_personal_pot(slug, name):
+    """Narrow author-fund test for TREE MEMBERSHIP: personal reviewer/author pots
+    only. A program-prefixed '<program>-something-fund' org is a program sub-fund
+    (e.g. daydream-kindness-fund) and belongs IN the tree; '-fund' suffixes only
+    mark personal pots for external-dest classification (is_author_fund)."""
+    s = slug or ""
+    if s.startswith(("ysws-budget-", "ysws-resolution-")) or s.endswith(("-earnings", "-jemoney")):
+        return True
+    n = (name or "").lower()
+    return "budget" in n or "earnings" in n
+
+
 def is_author_fund(dest_slug, dest_name, memo):
     ds = dest_slug or ""
     if ds.startswith(("ysws-budget-", "ysws-resolution-")) or ds.endswith(("-fund", "-earnings", "-jemoney")):
@@ -262,7 +301,7 @@ def is_author_fund(dest_slug, dest_name, memo):
     return False
 
 
-def classify(row, own_slug, net_by_slug):
+def classify(row, own_slug, tree_slugs, net_by_slug):
     """Assign one main-ledger OUTFLOW row to a fine-grained bucket."""
     ttype = row["transaction_type"]
     internal_flag = row.get("is_internal_transfer") in ("t", "true", True)
@@ -284,6 +323,8 @@ def classify(row, own_slug, net_by_slug):
 
     if dest is None or dest == own_slug:
         return "grants"                              # self -> grant-card funding
+    if dest in tree_slugs:
+        return "intra_tree"                          # I -> netted; child spend counted
     if is_author_fund(dest, dname, memo):
         return "author_fund"                         # B
     if any(k in memo for k in INTERNAL_PAYMENT_KEYWORDS) or dest in SERVICE_ORGS:
@@ -300,95 +341,169 @@ def classify(row, own_slug, net_by_slug):
     return "inter_org"                               # X
 
 
-def analyze_org(org):
-    """Categorize one org's outflows. Returns buckets, ledger, balance, gross."""
-    eid, slug = org["event_id"], org["slug"]
-    gross = -f(org["total_outflow_cents"]) / 100.0
+# ---------------------------------------------------------------------------
+# Child-org tree discovery
+# ---------------------------------------------------------------------------
 
+def discover_tree(root, includes, children_mode, excludes=()):
+    """Build the org tree: root + --include-orgs + HCB sub-organizations.
+
+    Children come from the DB's actual sub-org relationship (hcb.events.parent_id),
+    descended recursively. Personal author/reviewer pots (is_personal_pot, e.g.
+    ysws-resolution-<name>) never join and are not descended into — transfers
+    into them must stay category B. Slug-prefix lookalikes that are NOT sub-orgs
+    are reported (and joined only under --children all) so nothing drops silently.
+    Returns (members, child_notes).
+    """
+    members = {int(root["event_id"]): dict(root)}
+    for o in includes:
+        members[int(o["event_id"])] = dict(o)
+
+    notes = {"joined": [], "prefix_not_suborg": [], "author_fund_kids": [], "excluded": []}
+    if children_mode == "none":
+        return list(members.values()), notes
+
+    root_ids_csv = ",".join(str(i) for i in members)
+    desc = query(f"""
+        WITH RECURSIVE tree AS (
+          SELECT e.id, e.slug, e.name, e.parent_id FROM hcb.events e
+          WHERE e.id IN ({root_ids_csv})
+          UNION
+          SELECT e.id, e.slug, e.name, e.parent_id FROM hcb.events e
+          JOIN tree t ON e.parent_id = t.id)
+        SELECT t.id AS event_id, t.slug, t.name, t.parent_id, o.total_outflow_cents
+        FROM tree t LEFT JOIN public_hcb_analytics.orgs o ON o.event_id = t.id
+    """)
+    by_parent = {}
+    for d in desc:
+        if d["parent_id"] is not None:
+            by_parent.setdefault(int(d["parent_id"]), []).append(d)
+    # BFS from the roots, pruning personal-pot subtrees.
+    frontier = list(members)
+    while frontier:
+        nxt = []
+        for pid in frontier:
+            for c in by_parent.get(pid, []):
+                eid = int(c["event_id"])
+                if eid in members:
+                    continue
+                if c["slug"] in excludes:
+                    notes["excluded"].append(c["slug"])   # a different program's
+                    continue                              # fund — subtree detached
+                if is_personal_pot(c["slug"], c.get("name")):
+                    notes["author_fund_kids"].append(c["slug"])
+                    continue
+                members[eid] = c
+                notes["joined"].append(c["slug"])
+                nxt.append(eid)
+        frontier = nxt
+
+    # Diagnostic: slug-prefix lookalikes that are not sub-orgs in HCB.
+    lookalikes = query(f"""
+        SELECT e.id AS event_id, e.slug, e.name, o.total_outflow_cents
+        FROM hcb.events e JOIN public_hcb_analytics.orgs o ON o.event_id = e.id
+        WHERE e.slug LIKE {sql_str(root["slug"] + "-")} || '%'
+    """)
+    lookalikes = [c for c in lookalikes if int(c["event_id"]) not in members
+                  and c["slug"] not in excludes
+                  and not is_personal_pot(c["slug"], c.get("name"))]
+    if children_mode == "all":
+        for c in lookalikes:
+            members[int(c["event_id"])] = c
+            notes["joined"].append(c["slug"])
+    else:
+        notes["prefix_not_suborg"] = [
+            (c["slug"], -f(c["total_outflow_cents"]) / 100.0) for c in lookalikes
+            if f(c["total_outflow_cents"]) != 0
+        ]
+    return list(members.values()), notes
+
+
+# ---------------------------------------------------------------------------
+# Tree analysis
+# ---------------------------------------------------------------------------
+
+def analyze(prog, program_name, includes, hours_name, children_mode="auto", excludes=()):
+    members, child_notes = discover_tree(prog, includes, children_mode, excludes)
+    ids = [int(m["event_id"]) for m in members]
+    ids_csv = ",".join(str(i) for i in ids)
+    slug_by_id = {int(m["event_id"]): m["slug"] for m in members}
+    tree_slugs = set(slug_by_id.values())
+
+    # Wash detection: tree-wide out/in vs each EXTERNAL org.
     net_rows = query(f"""
         WITH fl AS (
-          SELECT CASE WHEN d.source_event_id={eid} THEN d.event_id ELSE d.source_event_id END AS other_id,
-                 SUM(CASE WHEN d.source_event_id={eid} THEN d.amount ELSE 0 END) out_cents,
-                 SUM(CASE WHEN d.event_id={eid} THEN d.amount ELSE 0 END) in_cents
+          SELECT d.event_id AS other_id, SUM(d.amount) AS out_cents, 0 AS in_cents
           FROM hcb.disbursements d
-          WHERE d.aasm_state='deposited'
-            AND (d.source_event_id={eid} OR d.event_id={eid}) AND d.source_event_id<>d.event_id
+          WHERE d.aasm_state='deposited' AND d.source_event_id IN ({ids_csv})
+            AND d.event_id NOT IN ({ids_csv})
+          GROUP BY 1
+          UNION ALL
+          SELECT d.source_event_id, 0, SUM(d.amount)
+          FROM hcb.disbursements d
+          WHERE d.aasm_state='deposited' AND d.event_id IN ({ids_csv})
+            AND d.source_event_id NOT IN ({ids_csv})
           GROUP BY 1)
-        SELECT ev.slug AS other_slug, fl.out_cents, fl.in_cents
-        FROM fl LEFT JOIN hcb.events ev ON ev.id=fl.other_id
+        SELECT ev.slug AS other_slug, SUM(fl.out_cents) AS out_cents, SUM(fl.in_cents) AS in_cents
+        FROM fl LEFT JOIN hcb.events ev ON ev.id = fl.other_id
+        GROUP BY 1
     """)
     net_by_slug = {r["other_slug"]: (f(r["out_cents"]) / 100.0, f(r["in_cents"]) / 100.0)
                    for r in net_rows if r["other_slug"]}
 
     ledger = query(f"""
-        SELECT transaction_date, transaction_type, amount_dollars, display_memo,
+        SELECT org_id, transaction_date, transaction_type, amount_dollars, display_memo,
                dest_org_slug, dest_org_name, disbursement_name,
                is_internal_transfer, transaction_source_type
         FROM public_hcb_analytics.ledger
-        WHERE org_id={eid} AND flow_direction='outflow' AND subledger_id IS NULL
+        WHERE org_id IN ({ids_csv}) AND flow_direction='outflow' AND subledger_id IS NULL
           AND transaction_source_type <> 'CardGrant'
         ORDER BY transaction_date, amount_dollars
     """)
-    for row in ledger:
-        row["_bucket"] = classify(row, slug, net_by_slug)
-        row["_amt"] = -f(row["amount_dollars"])
-
     buckets = {}
     for row in ledger:
+        row["_org"] = slug_by_id.get(int(row["org_id"]), "?")
+        row["_bucket"] = classify(row, row["_org"], tree_slugs, net_by_slug)
+        row["_amt"] = -f(row["amount_dollars"])
         b = buckets.setdefault(row["_bucket"], {"amount": 0.0, "n": 0})
         b["amount"] += row["_amt"]
         b["n"] += 1
 
-    extra = query(f"""
-        SELECT balance_cents, card_grants_total_cents, card_grants_active_cents
-        FROM public_hcb_analytics.orgs WHERE event_id={eid}
-    """)
-    ex = extra[0] if extra else {}
-    return {
-        "slug": slug, "gross": gross, "buckets": buckets, "ledger": ledger,
-        "balance": f(ex.get("balance_cents")) / 100.0,
-        "grants_funded": f(ex.get("card_grants_total_cents")) / 100.0,
-        "grants_unspent": f(ex.get("card_grants_active_cents")) / 100.0,
-    }
-
-
-def analyze(prog, program_name, includes, hours_name):
-    orgs = [analyze_org(prog)] + [analyze_org(o) for o in includes]
-
-    buckets = {}
-    ledger = []
-    for o in orgs:
-        for k, v in o["buckets"].items():
-            b = buckets.setdefault(k, {"amount": 0.0, "n": 0})
-            b["amount"] += v["amount"]
-            b["n"] += v["n"]
-        for r in o["ledger"]:
-            r["_org"] = o["slug"]
-        ledger += o["ledger"]
+    stats = query(f"""
+        SELECT COALESCE(SUM(balance_cents),0) AS bal,
+               COALESCE(SUM(card_grants_total_cents),0) AS cg_total,
+               COALESCE(SUM(card_grants_active_cents),0) AS cg_active,
+               COALESCE(SUM(total_outflow_cents),0) AS outflow
+        FROM public_hcb_analytics.orgs WHERE event_id IN ({ids_csv})
+    """)[0]
 
     cat_totals = {c: 0.0 for c in CATEGORIES}
     for k, v in buckets.items():
         cat_totals[bucket_cat(k)] += v["amount"]
 
-    event_cost = sum(v for c, v in cat_totals.items() if CATEGORIES[c][1])
-    not_expense = sum(v for c, v in cat_totals.items() if not CATEGORIES[c][1])
+    event_cost = sum(v for c, v in cat_totals.items() if CATEGORIES[c][1] is True)
+    not_expense = sum(v for c, v in cat_totals.items() if CATEGORIES[c][1] is False)
+    intra_tree = cat_totals.get("I", 0.0)
     gross = sum(v["amount"] for v in buckets.values())   # categorized total (reconciles)
-    stated = sum(o["gross"] for o in orgs)               # orgs-stats cross-check
+    stated = -f(stats["outflow"]) / 100.0                # orgs-stats cross-check
     wh, n_proj, wh_src = weighted_hours(program_name, hours_name, prog.get("weighted_total"))
 
     return {
         "program": program_name, "slug": prog["slug"],
-        "included_orgs": [o["slug"] for o in orgs[1:]],
+        "tree_orgs": sorted(tree_slugs - {prog["slug"]}),
+        "child_notes": child_notes,
+        "children_mode": children_mode,
         "gross_outflow": gross,
         "stated_outflow": stated,
         "categories": cat_totals,
         "event_cost": event_cost,
         "not_an_expense": not_expense,
+        "intra_tree": intra_tree,
         "cost_per_hour": (event_cost / wh) if wh else None,
         "weighted_hours": wh, "weighted_hours_source": wh_src, "approved_projects": n_proj,
-        "balance_not_yet_expense": sum(o["balance"] for o in orgs),
-        "grants_funded": sum(o["grants_funded"] for o in orgs),
-        "grants_unspent": sum(o["grants_unspent"] for o in orgs),
+        "balance_not_yet_expense": f(stats["bal"]) / 100.0,
+        "grants_funded": f(stats["cg_total"]) / 100.0,
+        "grants_unspent": f(stats["cg_active"]) / 100.0,
         "budget_per_hour": f(prog.get("budget_per_hour")) or None,
         "stated_vs_categorized": stated - gross,
         "buckets": buckets, "ledger": ledger,
@@ -408,11 +523,24 @@ def print_report(a, show_ledger=False):
     cph = (lambda x: f"${x/wh:6.2f}/hr") if wh else (lambda x: "     n/a")
 
     print("=" * 80)
-    title = f"  {a['program']}  ({a['slug']})"
-    if a["included_orgs"]:
-        title += f"  + {', '.join(a['included_orgs'])}"
-    print(title)
+    print(f"  {a['program']}  ({a['slug']})")
     print("=" * 80)
+    tree = a["tree_orgs"]
+    if tree:
+        shown = ", ".join(tree[:6]) + (f", … +{len(tree)-6} more" if len(tree) > 6 else "")
+        print(f"  Org tree ({len(tree)+1} orgs, --children {a['children_mode']}): + {shown}")
+    notes = a["child_notes"]
+    if notes.get("prefix_not_suborg"):
+        d = sorted(notes["prefix_not_suborg"], key=lambda t: -t[1])
+        shown = ", ".join(f"{s} (${amt:,.0f})" for s, amt in d[:5])
+        more = f", … +{len(d)-5} more" if len(d) > 5 else ""
+        print(f"  Slug lookalikes NOT sub-orgs in HCB (--children all to add): {shown}{more}")
+    if notes.get("author_fund_kids"):
+        print(f"  Author-fund child orgs kept OUT of tree (transfers stay B): "
+          f"{', '.join(notes['author_fund_kids'][:6])}")
+    if notes.get("excluded"):
+        print(f"  Sub-orgs DETACHED via --exclude-orgs (another program's fund; "
+          f"transfers become X): {', '.join(notes['excluded'])}")
     print(f"  EVENT EXPENSE (A + C)              : {money(a['event_cost'])}   {cph(a['event_cost'])}")
     print(f"  Weighted hours                    : {wh:,.0f}   (source: {a['weighted_hours_source']})")
     if a["budget_per_hour"]:
@@ -421,17 +549,20 @@ def print_report(a, show_ledger=False):
     print("  Where every outflow dollar went:")
     for c, (label, is_exp) in CATEGORIES.items():
         amt = a["categories"].get(c, 0.0)
-        if amt == 0 and c == "X":
+        if amt == 0 and c in ("X", "I"):
             continue
-        tag = "EXPENSE" if is_exp else "not exp"
+        tag = "EXPENSE" if is_exp is True else ("not exp" if is_exp is False else "netted ")
         print(f"    [{tag}] {label:<52} {money(amt)}")
     print(f"    {'':>9}{'EVENT EXPENSE (A+C)':<52} {money(a['event_cost'])}")
     print()
-    print(f"  Not yet an expense (cash still in main balance) : {money(a['balance_not_yet_expense'])}")
+    print(f"  Not yet an expense (cash still in tree balances) : {money(a['balance_not_yet_expense'])}")
     print(f"  (grant cards funded {money(a['grants_funded'])}, of which unspent "
           f"{money(a['grants_unspent'])} — already counted as expense)")
-    print(f"  Gross outflow {money(a['gross_outflow'])}  =  event {money(a['event_cost'])}"
-          f"  +  not-an-expense {money(a['not_an_expense'])}")
+    recon = f"  Gross outflow {money(a['gross_outflow'])}  =  event {money(a['event_cost'])}" \
+            f"  +  not-an-expense {money(a['not_an_expense'])}"
+    if a["intra_tree"]:
+        recon += f"  +  intra-tree {money(a['intra_tree'])}"
+    print(recon)
     if abs(a["stated_vs_categorized"]) > 1:
         print(f"  (note: orgs-stats outflow {money(a['stated_outflow'])} differs from "
               f"categorized total by {money(a['stated_vs_categorized'])} — ledger/stats mismatch)")
@@ -461,9 +592,19 @@ def main():
     ap = argparse.ArgumentParser(description="True YSWS event expense from the HCB ledger.")
     ap.add_argument("program", nargs="?", help="program name or HCB slug")
     ap.add_argument("--include-orgs", default="",
-                    help="comma-separated extra HCB slugs to fold into this event "
-                         "(e.g. a fulfillment org funded by HQ). Assumes they're "
-                         "independently funded — no cross-org netting.")
+                    help="comma-separated extra HCB slugs to fold into the org tree "
+                         "(e.g. a fulfillment org funded by HQ that doesn't share "
+                         "the slug prefix). Transfers between tree orgs are netted.")
+    ap.add_argument("--exclude-orgs", default="",
+                    help="comma-separated sub-org slugs to DETACH from the tree "
+                         "(their whole subtree), for sub-orgs that actually hold a "
+                         "different program's money (e.g. stardance-hardware is "
+                         "Outpost). Transfers to them classify as X / inter-org.")
+    ap.add_argument("--children", choices=["auto", "all", "none"], default="auto",
+                    help="child-org discovery: 'auto' descends HCB's real sub-org "
+                         "tree (hcb.events.parent_id, default); 'all' additionally "
+                         "joins slug-prefix lookalikes that aren't linked sub-orgs; "
+                         "'none' = single-org view.")
     ap.add_argument("--hours-name", help="ysws_name to match in approved_projects "
                     "for weighted hours (defaults to the program name)")
     ap.add_argument("--ledger", action="store_true", help="print the full itemized ledger")
@@ -482,7 +623,8 @@ def main():
     prog = resolve_slug(args.program, programs)
     includes = [resolve_slug(s.strip(), programs)
                 for s in args.include_orgs.split(",") if s.strip()]
-    a = analyze(prog, prog["program_name"], includes, args.hours_name)
+    excludes = tuple(s.strip() for s in args.exclude_orgs.split(",") if s.strip())
+    a = analyze(prog, prog["program_name"], includes, args.hours_name, args.children, excludes)
 
     if args.json:
         out = {k: v for k, v in a.items() if k not in ("ledger",)}

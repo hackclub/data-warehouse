@@ -21,14 +21,10 @@ clean-targets:         # Directories removed by `dbt clean`
   - "dbt_packages"
   - "logs"
 
-vars:
-  # HCB org whose real transactions form the non-synthetic side of
-  # public_hcb_ysws_true_spend_analytics.marketing_spend_ledger
-  marketing_hcb_org_slug: "ysws-marketing"
-
 on-run-end:
   - "GRANT USAGE ON SCHEMA public_summer_2026_analytics TO metabase, metabase_unified_analytics_reader"
   - "GRANT USAGE ON SCHEMA public_stardance_analytics TO metabase, metabase_unified_analytics_reader, \"stardance-mcp\", \"stardance-sankey\""
+  - "GRANT USAGE ON SCHEMA public_hcb_ysws_true_spend_analytics TO \"zrl_2026-leadership-dashboard_crobat\""
 
 # Default settings for all models  
 models:
@@ -72,3 +68,5 @@ models:
         select: ["metabase", "metabase_unified_analytics_reader", "\"stardance-mcp\"", "\"stardance-sankey\""]
     hcb_ysws_true_spend_analytics:
       +materialized: table
+      +grants:
+        select: ["\"zrl_2026-leadership-dashboard_crobat\""]
