@@ -583,3 +583,15 @@ sources:
       - name: repos
         description: "One row per scraped repo with scrape_status (ok/not_found/empty/error) and commit_count."
         meta: { dagster: { deps: ['highway_github_commits'] } }
+  - name: test_program
+    schema: test_program
+    tables:
+      - name: participants
+        description: "Test Program participants table."
+        meta: { dagster: { deps: ['test_program_warehouse_mirror'] } }
+      - name: projects
+        description: "Test Program projects table."
+        meta: { dagster: { deps: ['test_program_warehouse_mirror'] } }
+      - name: work_sessions
+        description: "Test Program work_sessions table."
+        meta: { dagster: { deps: ['test_program_warehouse_mirror'] } }

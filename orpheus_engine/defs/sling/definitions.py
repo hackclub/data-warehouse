@@ -28,6 +28,7 @@ from .assets import (
     review_warehouse_mirror,
     joe_warehouse_mirror,
     auth_warehouse_mirror,  # absolute minimum permissions for monthly active stats
+    test_program_warehouse_mirror,
     sling_replication_resource,
 )
 
@@ -60,7 +61,7 @@ defs = Definitions(
         hcb_warehouse_mirror,
         review_warehouse_mirror,
         joe_warehouse_mirror,
-        auth_warehouse_mirror,
+        auth_warehouse_mirror,test_program_warehouse_mirror,
     ],
     resources={
         "sling": sling_replication_resource,

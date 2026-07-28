@@ -241,6 +241,9 @@ WITH program_windows AS (
         -- switches to app-native user_daily_activity (section 6b) from
         -- 2026-04-22 onward; the run window below closes the Hackatime path at
         -- the handoff so the two never overlap.
+        ('test_program', TIMESTAMP WITH TIME ZONE ' 00:00:00+00',
+                   NULL::timestamptz),
+    
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -1600,6 +1603,26 @@ hackatime_matches AS (
 -- DAU is unaffected by the cap. The cap applies per logging path: a user-day
 -- can still exceed 24h when a program counts hackatime AND custom time
 -- (different sources, deliberately not netted against each other).
+test_program_custom_hourly AS (
+    SELECT
+        DATE_TRUNC('hour', a.started_at AT TIME ZONE 'UTC') AS activity_hour,
+        'test_program'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u.email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u.email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u.email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u.email)), '+', 1)
+        END AS user_email,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        ROUND(SUM((duration_seconds / 3600.0))::numeric, 4) AS raw_hours_logged,
+        'custom'::text AS logging_method,
+        ('test_program.work_sessions.duration_seconds; entries=' || COUNT(*)::text) AS source_detail
+    FROM {{ source('test_program', 'work_sessions') }} a
+    JOIN {{ source('test_program', 'users') }} u ON u.id = a.participant_id
+    WHERE a.duration_seconds > 0
+    GROUP BY 1, 2, 3, 4, 5
+),
+
 custom_in_window AS (
     SELECT
         activity_hour,
@@ -1632,6 +1655,7 @@ custom_in_window AS (
             UNION ALL SELECT * FROM shiba_custom_hourly
             UNION ALL SELECT * FROM arcade_custom_hourly
             UNION ALL SELECT * FROM juice_custom_hourly
+            UNION ALL SELECT * FROM test_program_custom_hourly
         ) c
         JOIN program_windows w
             ON w.program_name = c.program_name

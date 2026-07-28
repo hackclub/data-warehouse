@@ -80,7 +80,7 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "CONSTRUCT_COOLIFY_URL",
     "CARNIVAL_COOLIFY_URL",
     "ATTEND_COOLIFY_URL",
-    "WAREHOUSE_COOLIFY_URL",
+    "TEST_PROGRAM_DATABASE_URL","WAREHOUSE_COOLIFY_URL",
 ]
 
 for _env_var in _SLING_CONNECTION_URL_ENV_VARS:
@@ -312,6 +312,11 @@ hcb_db_connection = SlingConnectionResource(
     ssh_tunnel=EnvVar("HCB_SSH_TUNNEL"),
     ssh_private_key=_get_hcb_ssh_private_key(),
 )
+test_program_db_connection = SlingConnectionResource(
+    name="TEST_PROGRAM_DB",
+    type="postgres",
+    connection_string=EnvVar("TEST_PROGRAM_DATABASE_URL"),
+)
 
 # 2. Target Connection (Warehouse Database)
 warehouse_db_connection = SlingConnectionResource(
@@ -351,7 +356,7 @@ sling_replication_resource = SlingResource(
         joe_db_connection,
         auth_db_connection,
         hcb_db_connection,
-        warehouse_db_connection,
+        test_program_db_connection,warehouse_db_connection,
     ]
 )
 
@@ -3211,6 +3216,43 @@ def auth_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=auth_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+test_program_replication_config = {
+    "source": "TEST_PROGRAM_DB",
+    "target": "WAREHOUSE_DB",
+
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "test_program.{stream_table}",
+    },
+
+    "streams": {
+        "public.participants": None,
+        "public.projects": None,
+        "public.work_sessions": None,
+    },
+}
+
+@dg.asset(
+    name="test_program_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def test_program_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the entire Test Program DB → warehouse in a single shot."""
+    context.log.info("Starting Test Program → warehouse Sling replication")
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=test_program_replication_config,
     ):
         pass
 
