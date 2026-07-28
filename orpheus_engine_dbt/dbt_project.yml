@@ -21,6 +21,11 @@ clean-targets:         # Directories removed by `dbt clean`
   - "dbt_packages"
   - "logs"
 
+vars:
+  # HCB org whose real transactions form the non-synthetic side of
+  # public_marketing_analytics.spend_ledger
+  marketing_hcb_org_slug: "ysws-marketing"
+
 on-run-end:
   - "GRANT USAGE ON SCHEMA public_summer_2026_analytics TO metabase, metabase_unified_analytics_reader"
   - "GRANT USAGE ON SCHEMA public_stardance_analytics TO metabase, metabase_unified_analytics_reader, \"stardance-mcp\", \"stardance-sankey\""
@@ -65,3 +70,5 @@ models:
       +materialized: table
       +grants:
         select: ["metabase", "metabase_unified_analytics_reader", "\"stardance-mcp\"", "\"stardance-sankey\""]
+    marketing_analytics:
+      +materialized: table
