@@ -10,10 +10,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 WORKDIR /app
 
 # Copy dependency files
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 
 # Install dependencies
-RUN uv sync --no-dev
+RUN uv sync --frozen --no-dev
 
 # Copy application code
 COPY db.py cache.py server.py ./
@@ -25,4 +25,3 @@ USER appuser
 EXPOSE 8000
 
 CMD ["uv", "run", "python", "server.py"]
-

@@ -807,7 +807,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp", specifier = ">=1.0.0" },
+    { name = "mcp", specifier = ">=1.0.0,<2" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1.0" },
     { name = "psycopg-pool", specifier = ">=3.1.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
