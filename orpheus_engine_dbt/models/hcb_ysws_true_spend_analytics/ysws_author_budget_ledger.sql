@@ -36,6 +36,7 @@ SELECT
     p.name AS budget_name,
     l.transaction_id,
     l.hcb_code,
+    'https://hcb.hackclub.com/hcb/' || l.hcb_code AS hcb_url,
     l.transaction_date,
     l.transaction_type,
     l.transaction_source_type,

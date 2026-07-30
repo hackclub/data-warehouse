@@ -43,6 +43,13 @@ models:
                 values: ['A', 'B', 'C', 'D', 'X', 'I', 'M']
       - name: spend_bucket
         tests: [not_null]
+      - name: hcb_url
+        description: >
+          Clickable link to the transaction's page on hcb.hackclub.com. Real
+          rows link to their own transaction; synthetic OFFSET-/BACKFILL- rows
+          link to the linked real transaction that generated them, when there
+          is one. NULL when nothing resolvable exists (e.g. GRANT- pseudo-codes
+          or unlinked backfills).
 
   - name: ysws_spend_by_program
     description: >
@@ -67,6 +74,8 @@ models:
     columns:
       - name: budget_bucket
         tests: [not_null]
+      - name: hcb_url
+        description: "Clickable link to the transaction's page on hcb.hackclub.com."
 
   - name: ysws_author_budgets
     description: >
@@ -105,3 +114,8 @@ models:
         tests: [not_null]
       - name: amount_dollars
         tests: [not_null]
+      - name: hcb_url
+        description: >
+          Clickable link to the underlying HCB transaction, for rows whose
+          source_reference is an HCB code (security bounties, server charges).
+          NULL for fulfillment bounty payout runs.

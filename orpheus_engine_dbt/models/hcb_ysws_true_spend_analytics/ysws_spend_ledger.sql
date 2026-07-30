@@ -391,6 +391,17 @@ unioned AS (
 
 SELECT
     c.*,
+    -- Clickable HCB transaction page. Real rows link to their own transaction
+    -- (/hcb/<code> resolves full HCB-xxx-xxx codes). Synthetic rows (OFFSET-,
+    -- BACKFILL-) have no HCB page of their own, so they link to the linked
+    -- real transaction that generated them, when there is one. GRANT-<id>
+    -- pseudo-codes are warehouse-synthesized and have no HCB page.
+    CASE
+        WHEN c.hcb_code LIKE 'HCB-%'
+            THEN 'https://hcb.hackclub.com/hcb/' || c.hcb_code
+        WHEN c.linked_hcb_code IS NOT NULL AND c.linked_hcb_code NOT LIKE 'GRANT-%'
+            THEN 'https://hcb.hackclub.com/hcb/' || c.linked_hcb_code
+    END AS hcb_url,
     CASE c.spend_bucket
         WHEN 'grants'           THEN 'A'
         WHEN 'external_spend'   THEN 'A'

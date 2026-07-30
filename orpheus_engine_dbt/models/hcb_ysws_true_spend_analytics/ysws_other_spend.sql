@@ -93,6 +93,9 @@ SELECT
     source_id,
     source_system || ':' || source_id AS source_key,
     source_reference,
+    CASE WHEN source_reference LIKE 'HCB-%'
+         THEN 'https://hcb.hackclub.com/hcb/' || source_reference
+    END AS hcb_url,
     detail,
     amount_dollars
 FROM security_bounties
@@ -106,6 +109,9 @@ SELECT
     source_id,
     source_system || ':' || source_id AS source_key,
     source_reference,
+    CASE WHEN source_reference LIKE 'HCB-%'
+         THEN 'https://hcb.hackclub.com/hcb/' || source_reference
+    END AS hcb_url,
     detail,
     amount_dollars
 FROM fulfillment_bounties
@@ -119,6 +125,9 @@ SELECT
     source_id,
     source_system || ':' || source_id AS source_key,
     source_reference,
+    CASE WHEN source_reference LIKE 'HCB-%'
+         THEN 'https://hcb.hackclub.com/hcb/' || source_reference
+    END AS hcb_url,
     detail,
     amount_dollars
 FROM server_charges
