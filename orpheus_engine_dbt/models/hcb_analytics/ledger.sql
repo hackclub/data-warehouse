@@ -9,13 +9,29 @@
     All HCB financial transactions with rich metadata.
     Use is_hq flag to filter for Hack Club HQ transactions.
 
-    HCB Code patterns:
-    - HCB-500-{id} - Disbursements (internal transfers)
-    - HCB-200-{id} - ACH transfers
-    - HCB-100-{id} - Donations
-    - HCB-600-{id} - Stripe card transactions
-    - HCB-300-{id} - Checks
-    - HCB-000-{id} - Raw/other transactions
+    HCB Code patterns (mirrors HCB's
+    TransactionGroupingEngine::Calculate::HcbCode constants, verified against
+    the id spaces of the mirrored vendor tables — e.g. every HCB-200 id
+    resolves in donations and every HCB-300 id in ach_transfers):
+    - HCB-000/001-{id} - Raw/other transactions
+    - HCB-100-{id} - Invoices
+    - HCB-200-{id} - Donations       (HCB-201: deprecated partner donations)
+    - HCB-300-{id} - ACH transfers
+    - HCB-310-{id} - Wires
+    - HCB-350-{id} - PayPal transfers
+    - HCB-360-{id} - Wise transfers
+    - HCB-400-{id} - Legacy checks
+    - HCB-401-{id} - Increase checks
+    - HCB-402-{id} - Check deposits
+    - HCB-500-{id} - Outgoing disbursements (internal transfers)
+    - HCB-550-{id} - Incoming disbursements (same disbursements.id space)
+    - HCB-600-{id} - Stripe card transactions (601: force captures)
+    - HCB-610-{id} - Stripe service fees
+    - HCB-700/701-{id} - Bank fees (HCB platform fee)
+    - HCB-702-{id} - Fee revenue
+    - HCB-710-{id} - Reimbursement expense payouts
+    - HCB-712-{id} - Reimbursement payout holdings
+    - HCB-900-{id} - Outgoing fee reimbursements
     - GRANT-{id} - Card grants (funds issued to user cards)
 
     Card grants are shown as negative amounts (outflow) representing funds
@@ -75,11 +91,28 @@ parsed_codes AS (
         *,
         CASE
             WHEN hcb_code LIKE 'HCB-500-%' THEN 'disbursement'
-            WHEN hcb_code LIKE 'HCB-200-%' THEN 'ach_transfer'
-            WHEN hcb_code LIKE 'HCB-100-%' THEN 'donation'
+            WHEN hcb_code LIKE 'HCB-550-%' THEN 'incoming_disbursement'
+            WHEN hcb_code LIKE 'HCB-100-%' THEN 'invoice'
+            WHEN hcb_code LIKE 'HCB-200-%' THEN 'donation'
+            WHEN hcb_code LIKE 'HCB-201-%' THEN 'donation'
+            WHEN hcb_code LIKE 'HCB-300-%' THEN 'ach_transfer'
+            WHEN hcb_code LIKE 'HCB-310-%' THEN 'wire'
+            WHEN hcb_code LIKE 'HCB-350-%' THEN 'paypal_transfer'
+            WHEN hcb_code LIKE 'HCB-360-%' THEN 'wise_transfer'
+            WHEN hcb_code LIKE 'HCB-400-%' THEN 'check'
+            WHEN hcb_code LIKE 'HCB-401-%' THEN 'check'
+            WHEN hcb_code LIKE 'HCB-402-%' THEN 'check_deposit'
             WHEN hcb_code LIKE 'HCB-600-%' THEN 'card_transaction'
-            WHEN hcb_code LIKE 'HCB-300-%' THEN 'check'
+            WHEN hcb_code LIKE 'HCB-601-%' THEN 'card_transaction'
+            WHEN hcb_code LIKE 'HCB-610-%' THEN 'stripe_service_fee'
+            WHEN hcb_code LIKE 'HCB-700-%' THEN 'bank_fee'
+            WHEN hcb_code LIKE 'HCB-701-%' THEN 'bank_fee'
+            WHEN hcb_code LIKE 'HCB-702-%' THEN 'fee_revenue'
+            WHEN hcb_code LIKE 'HCB-710-%' THEN 'expense_payout'
+            WHEN hcb_code LIKE 'HCB-712-%' THEN 'payout_holding'
+            WHEN hcb_code LIKE 'HCB-900-%' THEN 'fee_reimbursement'
             WHEN hcb_code LIKE 'HCB-000-%' THEN 'raw_transaction'
+            WHEN hcb_code LIKE 'HCB-001-%' THEN 'raw_transaction'
             ELSE 'other'
         END AS transaction_type,
         -- Extract ID from HCB code for joining
@@ -148,7 +181,9 @@ wire_meta AS (
     FROM {{ source('hcb', 'wires') }}
 ),
 
--- Check metadata (both legacy and Increase)
+-- Check metadata (both legacy and Increase). The two tables have independent
+-- id spaces, distinguished by hcb_code prefix: HCB-401 = Increase, HCB-400 =
+-- legacy — so the join below must match on check_source too.
 check_meta AS (
     SELECT
         id,
@@ -311,8 +346,10 @@ SELECT
     COALESCE(
         -- For disbursements, show source or dest based on flow
         CASE
-            WHEN pc.transaction_type = 'disbursement' AND pc.amount_cents > 0 THEN dm.source_org_name
-            WHEN pc.transaction_type = 'disbursement' AND pc.amount_cents < 0 THEN dm.dest_org_name
+            WHEN pc.transaction_type IN ('disbursement', 'incoming_disbursement')
+                 AND pc.amount_cents > 0 THEN dm.source_org_name
+            WHEN pc.transaction_type IN ('disbursement', 'incoming_disbursement')
+                 AND pc.amount_cents < 0 THEN dm.dest_org_name
             ELSE NULL
         END,
         am.ach_recipient_name,
@@ -330,17 +367,26 @@ LEFT JOIN org_info oi ON oi.org_id = pc.event_id
 LEFT JOIN plan_info pi ON pi.event_id = pc.event_id
 LEFT JOIN user_info ui ON ui.user_id = pc.transacting_user_id
 LEFT JOIN internal_transfers it ON it.hcb_code = pc.hcb_code
--- Join vendor tables based on transaction type and hcb_code_id
+-- Join vendor tables based on transaction type and hcb_code_id.
+-- Both disbursement legs (HCB-500 outgoing, HCB-550 incoming) carry the same
+-- disbursements.id, so one join covers both.
 LEFT JOIN disbursement_meta dm
-    ON pc.transaction_type = 'disbursement' AND dm.id = pc.hcb_code_id
+    ON pc.transaction_type IN ('disbursement', 'incoming_disbursement')
+   AND dm.id = pc.hcb_code_id
 LEFT JOIN ach_meta am
     ON pc.transaction_type = 'ach_transfer' AND am.id = pc.hcb_code_id
 LEFT JOIN donation_meta dnm
     ON pc.transaction_type = 'donation' AND dnm.id = pc.hcb_code_id
+-- Wires group under HCB-310; older rows may instead reference the wire as
+-- their transaction source. CASE keeps the join single-valued.
 LEFT JOIN wire_meta wm
-    ON pc.transaction_source_type = 'Wire' AND wm.id = pc.transaction_source_id
+    ON wm.id = CASE
+        WHEN pc.transaction_type = 'wire' THEN pc.hcb_code_id
+        WHEN pc.transaction_source_type = 'Wire' THEN pc.transaction_source_id
+    END
 LEFT JOIN check_meta cm
     ON pc.transaction_type = 'check' AND cm.id = pc.hcb_code_id
+   AND cm.check_source = CASE WHEN pc.hcb_code LIKE 'HCB-401-%' THEN 'increase' ELSE 'legacy' END
 )
 
 -- Combine canonical transactions with card grants

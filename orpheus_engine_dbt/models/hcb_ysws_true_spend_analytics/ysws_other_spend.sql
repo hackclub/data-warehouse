@@ -30,7 +30,13 @@ WITH security_bounties AS (
         COALESCE(l.transaction_id::text, l.hcb_code) AS source_id,
         l.hcb_code AS source_reference,
         l.program_name AS detail,
-        l.outflow_dollars::numeric AS amount_dollars
+        l.outflow_dollars::numeric AS amount_dollars,
+        l.initiated_by_name,
+        l.receipt_count,
+        l.receipt_marked_no_or_lost,
+        l.tag_labels,
+        l.spent_date,
+        l.settled_after_days
     FROM {{ ref('ysws_spend_ledger') }} l
     WHERE l.bucket = 'program'
       AND (
@@ -47,7 +53,13 @@ fulfillment_bounties AS (
         r.id::text AS source_id,
         NULL::text AS source_reference,
         'Flavortown'::text AS detail,
-        r.total_amount::numeric AS amount_dollars
+        r.total_amount::numeric AS amount_dollars,
+        NULL::text AS initiated_by_name,
+        NULL::bigint AS receipt_count,
+        NULL::boolean AS receipt_marked_no_or_lost,
+        NULL::text[] AS tag_labels,
+        NULL::date AS spent_date,
+        NULL::integer AS settled_after_days
     FROM {{ source('flavortown', 'fulfillment_payout_runs') }} r
     WHERE r.aasm_state = 'approved'
 
@@ -60,7 +72,13 @@ fulfillment_bounties AS (
         r.id::text AS source_id,
         NULL::text AS source_reference,
         'Stardance'::text AS detail,
-        r.total_amount::numeric AS amount_dollars
+        r.total_amount::numeric AS amount_dollars,
+        NULL::text AS initiated_by_name,
+        NULL::bigint AS receipt_count,
+        NULL::boolean AS receipt_marked_no_or_lost,
+        NULL::text[] AS tag_labels,
+        NULL::date AS spent_date,
+        NULL::integer AS settled_after_days
     FROM {{ source('stardance', 'fulfillment_payout_runs') }} r
     WHERE r.aasm_state = 'approved'
 ),
@@ -77,8 +95,15 @@ server_charges AS (
                 THEN 'Hetzner'
             ELSE 'Cloudflare'
         END AS detail,
-        ABS(l.amount_dollars)::numeric AS amount_dollars
+        ABS(l.amount_dollars)::numeric AS amount_dollars,
+        COALESCE(l.requested_by_name, l.transacting_user_name) AS initiated_by_name,
+        COALESCE(e.receipt_count, 0) AS receipt_count,
+        COALESCE(e.receipt_marked_no_or_lost, FALSE) AS receipt_marked_no_or_lost,
+        e.tag_labels,
+        e.spent_date,
+        e.settled_after_days
     FROM {{ ref('ledger') }} l
+    LEFT JOIN {{ ref('hcb_code_enrichment') }} e ON e.hcb_code = l.hcb_code
     WHERE l.org_slug = 'hq'
       AND l.transaction_source_type = 'RawStripeTransaction'
       AND l.flow_direction = 'outflow'
@@ -97,7 +122,13 @@ SELECT
          THEN 'https://hcb.hackclub.com/hcb/' || source_reference
     END AS hcb_url,
     detail,
-    amount_dollars
+    amount_dollars,
+    initiated_by_name,
+    receipt_count,
+    receipt_marked_no_or_lost,
+    tag_labels,
+    spent_date,
+    settled_after_days
 FROM security_bounties
 
 UNION ALL
@@ -113,7 +144,13 @@ SELECT
          THEN 'https://hcb.hackclub.com/hcb/' || source_reference
     END AS hcb_url,
     detail,
-    amount_dollars
+    amount_dollars,
+    initiated_by_name,
+    receipt_count,
+    receipt_marked_no_or_lost,
+    tag_labels,
+    spent_date,
+    settled_after_days
 FROM fulfillment_bounties
 
 UNION ALL
@@ -129,5 +166,11 @@ SELECT
          THEN 'https://hcb.hackclub.com/hcb/' || source_reference
     END AS hcb_url,
     detail,
-    amount_dollars
+    amount_dollars,
+    initiated_by_name,
+    receipt_count,
+    receipt_marked_no_or_lost,
+    tag_labels,
+    spent_date,
+    settled_after_days
 FROM server_charges

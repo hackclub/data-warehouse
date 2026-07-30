@@ -50,6 +50,27 @@ models:
           link to the linked real transaction that generated them, when there
           is one. NULL when nothing resolvable exists (e.g. GRANT- pseudo-codes
           or unlinked backfills).
+      - name: initiated_by_name
+        description: >
+          Who initiated the transaction, where HCB records one: the requesting
+          user for disbursements, the creating user otherwise. NULL for card
+          swipes (that detail lives in raw_stripe_transactions, which is not
+          mirrored) and for synthetic rows.
+      - name: ach_payment_for
+        description: "The 'payment for' note on ACH transfers."
+      - name: receipt_count
+        description: "Receipts attached to the transaction's HCB page (via hcb_code_enrichment)."
+      - name: receipt_marked_no_or_lost
+        description: "TRUE when someone marked the receipt lost / never existed on HCB."
+      - name: tag_labels
+        description: "User-defined HCB tag labels on the transaction, sorted."
+      - name: spent_date
+        description: >
+          When the money actually moved (earliest pending-transaction date:
+          card swipe / transfer initiation). transaction_date is the settled
+          ledger date.
+      - name: settled_after_days
+        description: "Days between spent_date and settlement; NULL when unknown."
 
   - name: ysws_spend_by_program
     description: >
@@ -76,6 +97,20 @@ models:
         tests: [not_null]
       - name: hcb_url
         description: "Clickable link to the transaction's page on hcb.hackclub.com."
+      - name: initiated_by_name
+        description: >
+          Who initiated the transaction, where HCB records one. NULL for card
+          swipes and other rows with no recorded user.
+      - name: receipt_count
+        description: "Receipts attached to the transaction's HCB page."
+      - name: receipt_marked_no_or_lost
+        description: "TRUE when someone marked the receipt lost / never existed on HCB."
+      - name: tag_labels
+        description: "User-defined HCB tag labels on the transaction, sorted."
+      - name: spent_date
+        description: "When the money actually moved (earliest pending-transaction date)."
+      - name: settled_after_days
+        description: "Days between spent_date and settlement; NULL when unknown."
 
   - name: ysws_author_budgets
     description: >
@@ -119,3 +154,17 @@ models:
           Clickable link to the underlying HCB transaction, for rows whose
           source_reference is an HCB code (security bounties, server charges).
           NULL for fulfillment bounty payout runs.
+      - name: initiated_by_name
+        description: >
+          Who initiated the underlying HCB transaction, where recorded. NULL
+          for card charges and payout runs.
+      - name: receipt_count
+        description: "Receipts attached to the underlying HCB page; NULL for payout runs."
+      - name: receipt_marked_no_or_lost
+        description: "TRUE when someone marked the receipt lost / never existed on HCB."
+      - name: tag_labels
+        description: "User-defined HCB tag labels on the underlying transaction."
+      - name: spent_date
+        description: "When the money actually moved (earliest pending-transaction date)."
+      - name: settled_after_days
+        description: "Days between spent_date and settlement; NULL when unknown."

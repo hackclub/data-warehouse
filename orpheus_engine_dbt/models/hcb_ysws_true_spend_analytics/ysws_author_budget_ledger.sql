@@ -50,10 +50,23 @@ SELECT
     l.dest_org_slug,
     l.dest_org_name,
     l.counterparty_name,
+    -- Who initiated it, where HCB records one (card swipes have no user in
+    -- the mirrored tables).
+    COALESCE(l.requested_by_name, l.transacting_user_name) AS initiated_by_name,
+    l.ach_payment_for,
+    -- Display enrichment from the code's HCB page.
+    COALESCE(e.receipt_count, 0) AS receipt_count,
+    COALESCE(e.receipt_marked_no_or_lost, FALSE) AS receipt_marked_no_or_lost,
+    e.tag_labels,
+    e.spent_date,
+    e.settled_after_days,
 
     CASE
         WHEN l.flow_direction = 'inflow' THEN
-            CASE WHEN l.transaction_type = 'disbursement' THEN 'funding_received'
+            -- Incoming disbursement legs group under HCB-550 (typed
+            -- incoming_disbursement); older ones share the HCB-500 code.
+            CASE WHEN l.transaction_type IN ('disbursement', 'incoming_disbursement')
+                     THEN 'funding_received'
                  ELSE 'other_inflow' END
         WHEN l.transaction_type = 'disbursement' THEN
             CASE WHEN l.dest_org_slug IS NULL OR l.dest_org_slug = p.slug
@@ -71,5 +84,6 @@ SELECT
 
 FROM {{ ref('ledger') }} l
 JOIN pots p ON p.event_id = l.org_id
+LEFT JOIN {{ ref('hcb_code_enrichment') }} e ON e.hcb_code = l.hcb_code
 WHERE l.subledger_id IS NULL
   AND l.transaction_source_type IS DISTINCT FROM 'CardGrant'

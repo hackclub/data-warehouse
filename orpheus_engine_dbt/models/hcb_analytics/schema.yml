@@ -1,0 +1,11 @@
+version: 2
+
+models:
+  - name: hcb_code_enrichment
+    description: >
+      Per-hcb_code display enrichment for transaction lists: receipt status,
+      user tags, and spent-vs-settled timing. One row per hcb_code, so ledger
+      joins never fan out.
+    columns:
+      - name: hcb_code
+        tests: [unique, not_null]
