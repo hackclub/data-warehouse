@@ -32,7 +32,18 @@ class ZoomResource(dg.ConfigurableResource):
         self, context: dg.InitResourceContext
     ) -> Iterator["ZoomResource"]:
         session = requests.Session()
-        retry = Retry(total=3, status_forcelist=[500, 502, 503, 504], backoff_factor=1)
+        # respect_retry_after_header=False is load-bearing. urllib3 honours
+        # Retry-After for 429/413/503 regardless of status_forcelist, and its
+        # parser accepts only integer seconds or an RFC 1123 date. Zoom sends an
+        # ISO 8601 timestamp ("2026-07-30T00:00:00Z"), so urllib3 raised
+        # InvalidHeader before _request's own 429 handling below could run.
+        # Leave 429 to that handler, which tolerates any Retry-After format.
+        retry = Retry(
+            total=3,
+            status_forcelist=[500, 502, 503, 504],
+            backoff_factor=1,
+            respect_retry_after_header=False,
+        )
         session.mount("https://", HTTPAdapter(max_retries=retry))
         self._session = session
         self._token = None

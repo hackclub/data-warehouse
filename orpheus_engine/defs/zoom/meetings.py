@@ -167,7 +167,14 @@ PARTICIPANT_COLUMNS = [
 
 
 def _participant_row(p: dict, meeting_uuid: str, run_ts: datetime) -> tuple:
-    pid = f"{meeting_uuid}:{p.get('id', '')}:{p.get('join_time', '')}"
+    # Keyed on user_id, NOT the report API's `id`. `id` is the Zoom account id and
+    # is empty for anyone not signed in to a Zoom account -- 97.6% of rows in this
+    # workspace. That collapsed the key to `{meeting_uuid}::{join_time}`, so any two
+    # guests joining in the same second produced one key and the upsert aborted with
+    # CardinalityViolation. `user_id` is the per-session participant id: populated on
+    # 100% of observed rows, and (meeting_uuid, user_id, join_time) was distinct
+    # across every row on hand. join_time stays in the key so rejoins are separate.
+    pid = f"{meeting_uuid}:{p.get('user_id', '')}:{p.get('join_time', '')}"
     return (
         pid,
         meeting_uuid,
@@ -293,7 +300,10 @@ DETAIL_COLUMNS = [
 
 
 def _detail_row(p: dict, meeting_uuid: str, run_ts: datetime) -> tuple:
-    did = f"{meeting_uuid}:{p.get('id', '')}:{p.get('join_time', '')}"
+    # See _participant_row: `id` is empty for guests. The dashboard/metrics endpoints
+    # return participant_uuid, which was populated on 100% of observed rows. It
+    # repeats within a meeting when someone rejoins, so join_time stays in the key.
+    did = f"{meeting_uuid}:{p.get('participant_uuid', '')}:{p.get('join_time', '')}"
     return (
         did,
         meeting_uuid,
@@ -446,7 +456,9 @@ QOS_COLUMNS = [
 
 
 def _qos_row(p: dict, meeting_uuid: str, run_ts: datetime) -> tuple:
-    qid = f"{meeting_uuid}:{p.get('id', '')}:{p.get('join_time', '')}"
+    # Same fix as _detail_row -- this is the same metrics payload, so
+    # participant_uuid is present and `id` is empty for guests.
+    qid = f"{meeting_uuid}:{p.get('participant_uuid', '')}:{p.get('join_time', '')}"
     return (
         qid,
         meeting_uuid,
@@ -703,7 +715,17 @@ def zoom_meeting_polls(
             questions = zoom.fetch_meeting_polls(meeting_id=uuid, log=log)
             for q in questions:
                 for detail in q.get("question_details", []):
-                    pid = hashlib.sha256(f"{uuid}:{q.get('email', '')}:{q.get('name', '')}:{detail.get('question', '')}:{detail.get('answer', '')}".encode()).hexdigest()[:24]
+                    # polling_id + date_time distinguish separate launches of the
+                    # same poll; without them a relaunch re-hashes to the same key.
+                    # Anonymous polls report email="" and name="" for every
+                    # respondent, so two anonymous people picking the same option
+                    # still tie -- upsert_rows dedupes that (last-write-wins), which
+                    # is correct here because the rows are genuinely identical.
+                    pid = hashlib.sha256(
+                        f"{uuid}:{q.get('email', '')}:{q.get('name', '')}"
+                        f":{detail.get('polling_id', '')}:{detail.get('date_time', '')}"
+                        f":{detail.get('question', '')}:{detail.get('answer', '')}".encode()
+                    ).hexdigest()[:24]
                     batch.append((
                         pid, uuid,
                         q.get("email"), q.get("name"),
@@ -796,25 +818,48 @@ def zoom_meeting_qa(
     for i, uuid in enumerate(meeting_uuids):
         try:
             questions = zoom.fetch_meeting_qa(meeting_id=uuid, log=log)
+            # Payload shape (verified against stored raw):
+            #   {name, email, user_id, question_details: [
+            #       {question, answer, question_id, create_time, question_status,
+            #        answer_details: [{name, email, user_id, content, type, create_time}]}]}
+            # The previous parser read q["answer_list"] and q["question"], neither of
+            # which exists, so it always took the else-branch: every question/answer
+            # column landed NULL and the key collapsed to sha256(uuid::email). Since
+            # anonymous askers all report email="anonymous", every anonymous question
+            # in a meeting shared one key and the upsert aborted.
             for q in questions:
-                answer_list = q.get("answer_list", [])
-                if answer_list:
-                    for a in answer_list:
-                        aid = hashlib.sha256(f"{uuid}:{q.get('question', '')}:{q.get('email', '')}:{a.get('name', '')}:{a.get('answer', '')}".encode()).hexdigest()[:24]
+                asker_name = q.get("name")
+                asker_email = q.get("email")
+                for detail in q.get("question_details", []):
+                    question_id = detail.get("question_id", "")
+                    question_text = detail.get("question")
+                    answer_details = detail.get("answer_details") or []
+                    if answer_details:
+                        for a in answer_details:
+                            # question_id is a Zoom-assigned UUID; pairing it with the
+                            # answerer and their answer timestamp keeps multiple
+                            # answers to one question distinct.
+                            aid = hashlib.sha256(
+                                f"{uuid}:{question_id}:{a.get('user_id', '')}"
+                                f":{a.get('create_time', '')}".encode()
+                            ).hexdigest()[:24]
+                            batch.append((
+                                aid, uuid,
+                                question_text, asker_name, asker_email,
+                                a.get("content"), a.get("name"),
+                                clean_json(q), run_ts,
+                            ))
+                    else:
+                        # Unanswered question, or answered live with no answer record.
+                        qid = hashlib.sha256(
+                            f"{uuid}:{question_id}".encode()
+                        ).hexdigest()[:24]
                         batch.append((
-                            aid, uuid,
-                            q.get("question"), q.get("name"), q.get("email"),
-                            a.get("answer"), a.get("name"),
+                            qid, uuid,
+                            question_text, asker_name, asker_email,
+                            detail.get("answer"), None,
                             clean_json(q), run_ts,
                         ))
-                else:
-                    qid = hashlib.sha256(f"{uuid}:{q.get('question', '')}:{q.get('email', '')}".encode()).hexdigest()[:24]
-                    batch.append((
-                        qid, uuid,
-                        q.get("question"), q.get("name"), q.get("email"),
-                        None, None,
-                        clean_json(q), run_ts,
-                    ))
         except Exception as e:
             errors += 1
             if errors <= 5:

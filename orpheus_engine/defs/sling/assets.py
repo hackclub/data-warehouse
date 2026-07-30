@@ -992,6 +992,15 @@ stardance_ahoy_replication_config = {
 # are incremental; the wildcard mirrors the whole schema and per-table entries below
 # only encode the exceptions (different update key, full-refresh, disabled, or a
 # column allow-list that drops encrypted/token columns).
+#
+# Lives on Coolify worker "cooked" (100.82.244.53), database container
+# v6hk0c0r73ousk8znunci56v -- confirmed as prod via the stardance app container's
+# own DATABASE_URL. Coolify publishes it through a `<dbuuid>-proxy` container, and
+# the published host port is NOT stable: it was 7327 until 2026-07-30, when Coolify
+# recreated the proxy and reassigned it to 23421. A "connection refused" here almost
+# always means the proxy was recreated on a new port rather than the DB going away --
+# check `docker ps | grep <dbuuid>-proxy` on cooked and update STARDANCE_COOLIFY_URL.
+# (The Ahoy DB is a separate container, uh0np4g9bnopawes761wdipt, still on 7695.)
 stardance_replication_config = {
     "source": "STARDANCE_DB",
     "target": "WAREHOUSE_DB",
@@ -1698,12 +1707,16 @@ horizons_replication_config = {
             "update_key": "updated_at",
             "select": [
                 "user_id", "email", "first_name", "last_name", "birthday",
-                "role", "onboard_complete", "onboarded_at", "address_line_1",
+                # `role` (scalar text) was dropped upstream and replaced by
+                # `roles` (text[]). Sling stringifies Postgres arrays, so this
+                # lands in the warehouse as text holding an array literal, e.g.
+                # '{user}' -- same shape as fallout.users.roles / macondo.users.roles.
+                "roles", "onboard_complete", "onboarded_at", "address_line_1",
                 "address_line_2", "city", "state", "country", "zip_code",
                 "airtable_rec_id", "hackatime_account", "created_at",
                 "updated_at", "referral_code", "raffle_pos", "is_fraud",
                 "is_sus", "slack_user_id", "hca_id", "verification_status",
-            ],  # Excludes hackatime_access_token
+            ],  # Excludes hackatime_access_token, admin_comment, banned_reason
         },
 
         # --- Incremental: append-only (created_at) ---
@@ -2248,13 +2261,20 @@ attend_replication_config = {
         "public.participants": None,
         "public.participant_events": {
             "select": [
-                "id", "airtable_record_id", "checked_in_at",
+                "id", "airtable_record_id",
                 "code_of_conduct_accepted_at", "created_at", "event_id",
                 "luma_guest_id", "luma_sync_error", "onboarding_step",
                 "participant_id", "status", "updated_at", "onboarding_completed_at",
                 "slack_user_id", "nfc_badge_assigned_at", "nfc_badge_assigned_by_id",
             ],  # Excludes nfc_badge_token (badge auth), onboarding_payload
                 # (free-form answers), code_of_conduct_signature
+                # Dropped upstream: checked_in_at. Attend replaced the denormalized
+                # check-in timestamp with the scans model -- derive check-in from
+                # attend.scans joined to attend.scan_contexts where checks_in IS TRUE
+                # (both mirrored in full below).
+                # Not mirrored (deliberate, sensitive): um_status, um_verified_at,
+                # um_guardian_confirmed_at, um_review_requested_at, um_verified_by_id
+                # (underage-minor verification workflow). Add only if consciously needed.
         },
         "public.guardians": None,
         "public.guardian_participant_events": {
@@ -3152,6 +3172,25 @@ def joe_warehouse_mirror(
     return None
 
 # --- Review Database Replication Configuration ---
+# BROKEN AS OF 2026-05-31 -- DO NOT RE-DIAGNOSE, THE SOURCE IS GONE.
+#
+# This mirrors review.hackclub.com, which is the "shipwrights" app (Coolify app
+# sw-dash, repo hackclub/shipwrights). REVIEW_COOLIFY_URL points at
+# 100.82.244.53:8879 (Coolify worker "cooked"); that Postgres no longer exists,
+# so every run fails with "connection refused". It is NOT a moved Coolify proxy
+# port -- there is no Postgres container on cooked serving this data at all.
+#
+# Shipwrights migrated off Postgres to MySQL. Its live DATABASE_URL (see the
+# sw-dash app's env vars in Coolify tier3) now points at an external MySQL host
+# that still has the three tables this mirror carried (ship_certs, users,
+# ysws_reviews) plus ~20 new ones. The last row this mirror ever saw was updated
+# 2026-05-29; last successful materialization was 2026-05-31.
+#
+# Repointing is deliberately NOT done here: that MySQL box is a third-party host
+# rather than Hack Club infra, and the new schema carries sessions, yubikeys,
+# login_logs and push_subs, so it would need a Sling mysql connection plus an
+# explicit table allow-list to replace the `public.*` wildcard below -- never the
+# wildcard. Decide whether that host is sanctioned before wiring it up.
 review_replication_config = {
     "source": "REVIEW_DB",
     "target": "WAREHOUSE_DB",
