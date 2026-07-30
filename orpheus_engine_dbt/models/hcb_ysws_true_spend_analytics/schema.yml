@@ -86,3 +86,22 @@ models:
     columns:
       - name: airtable_record_id
         tests: [unique, not_null]
+
+  - name: ysws_other_spend
+    description: >
+      One row per shared YSWS operating cost shown under Other in the leadership
+      dashboard: security bounty chargebacks, approved fulfillment bounty runs,
+      and direct HQ Hetzner or Cloudflare server charges.
+    columns:
+      - name: source_key
+        tests: [unique, not_null]
+      - name: cost_type
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['security_bounty', 'fulfillment_bounty', 'servers']
+      - name: transaction_date
+        tests: [not_null]
+      - name: amount_dollars
+        tests: [not_null]

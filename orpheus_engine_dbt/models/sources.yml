@@ -184,6 +184,9 @@ sources:
       - name: posts
         description: "Flavortown posts linking devlogs to projects and users."
         meta: { dagster: { deps: ['flavortown_warehouse_mirror'] } }
+      - name: fulfillment_payout_runs
+        description: "Flavortown approved and pending fulfillment bounty payout runs."
+        meta: { dagster: { deps: ['flavortown_warehouse_mirror'] } }
 
   - name: stardance
     schema: stardance
@@ -223,6 +226,9 @@ sources:
         meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
       - name: materialized_all_signups
         description: "Stardance matview: one row per distinct non-fraud signup email, with signup-time IP geocode (country_code/country/is_us)."
+        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+      - name: fulfillment_payout_runs
+        description: "Stardance approved and pending fulfillment bounty payout runs."
         meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
 
   - name: fallout
