@@ -18,6 +18,8 @@ from typing import Dict, Optional
 
 import psycopg2
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from dagster import (
     AssetExecutionContext,
     Definitions,
@@ -126,6 +128,21 @@ def get_zenventory_web_session() -> requests.Session:
         raise ValueError("ZENVENTORY_WEB_USERNAME and ZENVENTORY_WEB_PASSWORD must be set")
 
     s = requests.Session()
+    # The Zenventory web app intermittently drops connections mid-request
+    # ("Remote end closed connection without response"), which used to fail the
+    # whole sync (~7 step failures/day). Retry transient connection/read errors
+    # and 5xx/429 with backoff; all calls on this session are idempotent
+    # (login PUT included -- re-logging-in is harmless).
+    retry = Retry(
+        total=4,
+        connect=4,
+        read=4,
+        status=4,
+        status_forcelist=[429, 500, 502, 503, 504],
+        backoff_factor=1.5,
+        allowed_methods=["GET", "PUT", "HEAD"],
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retry))
     s.get(f"{ZENVENTORY_BASE_URL}/", timeout=10)
     r = s.put(
         f"{ZENVENTORY_BASE_URL}/api/auth/login",
@@ -151,11 +168,17 @@ def fetch_item_image_url(
 ) -> Optional[str]:
     """Fetch the default image URL for a Zenventory item via the web app API."""
     xsrf = session.cookies.get("XSRF-TOKEN", "")
-    r = session.get(
-        f"{ZENVENTORY_BASE_URL}/api/admin-items/edititem/{item_id}/images",
-        headers={"Accept": "application/json", "X-XSRF-TOKEN": xsrf},
-        timeout=10,
-    )
+    try:
+        r = session.get(
+            f"{ZENVENTORY_BASE_URL}/api/admin-items/edititem/{item_id}/images",
+            headers={"Accept": "application/json", "X-XSRF-TOKEN": xsrf},
+            timeout=10,
+        )
+    except requests.RequestException:
+        # Even after the session-level retries, treat a dead connection as
+        # "no image" rather than failing the entire inventory sync -- the
+        # image URL is cosmetic and the next 15-minute run refreshes it.
+        return None
     if r.status_code != 200:
         return None
 
