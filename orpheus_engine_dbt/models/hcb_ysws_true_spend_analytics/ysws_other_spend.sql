@@ -18,8 +18,20 @@
       fulfillment_bounty
                         Approved Flavortown and Stardance payout runs, accrued
                         to the run's service-period end date.
-      servers           Direct HQ card charges from Hetzner and Cloudflare.
-                        Raw HCB-to-HCB reimbursements are intentionally excluded.
+      servers           HQ server-infrastructure costs, from two sources:
+                        (1) direct HQ card charges from hosting / CDN / DNS
+                        vendors (Hetzner, Cloudflare, AWS, DigitalOcean,
+                        Vercel, Linode, Heroku, Railway, ...), and
+                        (2) HQ-funded reimbursements of server bills paid out
+                        through the HCB reimbursement clearinghouse — since
+                        April 2026 the large monthly Hetzner invoice is paid
+                        personally and reimbursed, so it never appears as an
+                        HQ card charge. See server_reimbursements below for
+                        how those are tied back to HQ without the (unmirrored)
+                        reimbursement-report tables.
+                        Deliberately excluded: comms (Twilio), AI credits and
+                        subscriptions (OpenAI, Anthropic), and dev tooling
+                        (GitHub) — infra-adjacent but not server spend.
 */
 
 WITH security_bounties AS (
@@ -93,6 +105,11 @@ fulfillment_bounties AS (
 ),
 
 server_charges AS (
+    -- Direct HQ card charges from hosting / CDN / DNS vendors. The vendor
+    -- list is matched against card memos; keep the WHERE alternation and the
+    -- detail CASE in sync when adding a vendor. Deliberately NOT matched:
+    -- bare "AWS" (retail Amazon and e.g. "SHAWS" collide — the card memo is
+    -- always "Amazon web services"), Twilio, OpenAI, Anthropic, GitHub.
     SELECT
         'servers'::text AS cost_type,
         l.transaction_date,
@@ -100,9 +117,25 @@ server_charges AS (
         COALESCE(l.transaction_id::text, l.hcb_code) AS source_id,
         l.hcb_code AS source_reference,
         CASE
-            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'HETZNER'
-                THEN 'Hetzner'
-            ELSE 'Cloudflare'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'HETZNER' THEN 'Hetzner'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'CLOUDFLARE' THEN 'Cloudflare'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'AMAZON WEB' THEN 'AWS'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'DIGITALOCEAN' THEN 'DigitalOcean'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'GOOGLE CLOUD' THEN 'Google Cloud'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'VERCEL-NEON' THEN 'Neon'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'VERCEL' THEN 'Vercel'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'FLY\.IO' THEN 'Fly.io'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'RAILWAY' THEN 'Railway'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'HEROKU' THEN 'Heroku'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'NETLIFY' THEN 'Netlify'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'LINODE|AKAMAI' THEN 'Linode'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'SCALEWAY' THEN 'Scaleway'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'BACKBLAZE' THEN 'Backblaze'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'BUNNY\.NET|BUNNYCDN' THEN 'Bunny.net'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'FASTLY' THEN 'Fastly'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'DNSIMPLE' THEN 'DNSimple'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'PORKBUN' THEN 'Porkbun'
+            ELSE 'Other hosting'
         END AS detail,
         ABS(l.amount_dollars)::numeric AS amount_dollars,
         COALESCE(l.requested_by_name, l.transacting_user_name, e.card_user_name) AS initiated_by_name,
@@ -120,7 +153,81 @@ server_charges AS (
       AND l.transaction_source_type = 'RawStripeTransaction'
       AND l.flow_direction = 'outflow'
       AND NOT l.is_internal_transfer
-      AND CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* '(HETZNER|CLOUDFLARE)'
+      AND CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo)
+          ~* '(HETZNER|CLOUDFLARE|AMAZON WEB|DIGITALOCEAN|GOOGLE CLOUD|VERCEL|FLY\.IO|RAILWAY|HEROKU|NETLIFY|LINODE|AKAMAI|SCALEWAY|BACKBLAZE|BUNNY\.NET|BUNNYCDN|FASTLY|DNSIMPLE|PORKBUN)'
+),
+
+-- Since April 2026 the big monthly Hetzner invoice is paid personally and
+-- reimbursed through the HCB reimbursement clearinghouse, so it never hits
+-- the HQ card (the Servers line collapsed to a small fraction of its prior
+-- level when that switch happened). The clearinghouse payout (HCB-300) carries the
+-- report title in ach_payment_for; the per-expense charge lands on HQ as an
+-- HCB-710 expense payout whose mirrored memo is only an opaque short code —
+-- the reimbursement-report tables are not replicated into the warehouse.
+-- So a server-keyword payout is tied back to HQ by amount:
+--   * exact:    one HQ HCB-710 row within 3 days equals the payout, or
+--   * dominant: HQ's HCB-710 rows that day sum to the payout and this row is
+--     >= 90% of it (mixed reports like "postage & servers!" carry a few
+--     dollars of ride-along spend, which this leaves out).
+-- A 50/50 mixed report would be dropped by both paths (undercount, never
+-- overcount); expense-level memos verified against the HCB API 2026-07-30.
+hq_expense_payouts AS (
+    SELECT
+        l.transaction_id,
+        l.hcb_code,
+        l.transaction_date,
+        ABS(l.amount_dollars)::numeric AS amount_dollars,
+        SUM(ABS(l.amount_dollars)::numeric)
+            OVER (PARTITION BY l.transaction_date) AS same_day_total
+    FROM {{ ref('ledger') }} l
+    WHERE l.org_slug = 'hq'
+      AND l.hcb_code LIKE 'HCB-710-%'
+      AND l.flow_direction = 'outflow'
+),
+
+server_reimbursement_payouts AS (
+    SELECT
+        l.transaction_date,
+        ABS(l.amount_dollars)::numeric AS amount_dollars,
+        l.ach_recipient_name,
+        l.ach_payment_for
+    FROM {{ ref('ledger') }} l
+    WHERE l.org_slug = 'reimbursement-clearinghouse'
+      AND l.hcb_code LIKE 'HCB-300-%'
+      AND l.flow_direction = 'outflow'
+      AND l.ach_payment_for ~* '(hetzner|cloudflare|server|hosting|vps)'
+),
+
+server_reimbursements AS (
+    SELECT DISTINCT ON (e.hcb_code)
+        'servers'::text AS cost_type,
+        e.transaction_date,
+        'hcb_reimbursement'::text AS source_system,
+        COALESCE(e.transaction_id::text, e.hcb_code) AS source_id,
+        e.hcb_code AS source_reference,
+        CASE
+            WHEN p.ach_payment_for ~* 'HETZNER' THEN 'Hetzner'
+            WHEN p.ach_payment_for ~* 'CLOUDFLARE' THEN 'Cloudflare'
+            ELSE 'Servers (reimbursed)'
+        END AS detail,
+        e.amount_dollars,
+        p.ach_recipient_name AS initiated_by_name,
+        NULL::bigint AS receipt_count,
+        NULL::boolean AS receipt_marked_no_or_lost,
+        NULL::text[] AS tag_labels,
+        NULL::date AS spent_date,
+        NULL::integer AS settled_after_days,
+        NULL::text AS card_last4,
+        NULL::text AS charge_method,
+        NULL::text AS charge_wallet
+    FROM hq_expense_payouts e
+    JOIN server_reimbursement_payouts p
+      ON ABS(p.transaction_date - e.transaction_date) <= 3
+     AND (
+          p.amount_dollars = e.amount_dollars
+          OR (p.amount_dollars = e.same_day_total AND e.amount_dollars >= 0.9 * p.amount_dollars)
+     )
+    ORDER BY e.hcb_code, e.transaction_date
 )
 
 SELECT
@@ -195,3 +302,28 @@ SELECT
     charge_method,
     charge_wallet
 FROM server_charges
+
+UNION ALL
+
+SELECT
+    cost_type,
+    transaction_date,
+    source_system,
+    source_id,
+    source_system || ':' || source_id AS source_key,
+    source_reference,
+    CASE WHEN source_reference LIKE 'HCB-%'
+         THEN 'https://hcb.hackclub.com/hcb/' || source_reference
+    END AS hcb_url,
+    detail,
+    amount_dollars,
+    initiated_by_name,
+    receipt_count,
+    receipt_marked_no_or_lost,
+    tag_labels,
+    spent_date,
+    settled_after_days,
+    card_last4,
+    charge_method,
+    charge_wallet
+FROM server_reimbursements

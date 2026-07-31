@@ -144,7 +144,9 @@ models:
     description: >
       One row per shared YSWS operating cost shown under Other in the leadership
       dashboard: security bounty chargebacks, approved fulfillment bounty runs,
-      and direct HQ Hetzner or Cloudflare server charges.
+      and HQ server-infrastructure costs — direct HQ card charges from hosting /
+      CDN / DNS vendors plus HQ-funded server-bill reimbursements paid out
+      through the HCB reimbursement clearinghouse.
     columns:
       - name: source_key
         tests: [unique, not_null]
