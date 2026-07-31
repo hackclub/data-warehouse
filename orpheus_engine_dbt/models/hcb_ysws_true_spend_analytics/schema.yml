@@ -81,6 +81,42 @@ models:
       - name: settled_after_days
         description: "Days between spent_date and settlement; NULL when unknown."
 
+  - name: ysws_grant_spend
+    description: >
+      Vendor-level decomposition of every card-grant funding row in
+      ysws_spend_ledger (spend_bucket = 'grants'), for showing program spend
+      by vendor. allocation_kind = 'spend' rows are the grantee's subledger
+      card transactions (merchant + card enrichment) allocated back onto the
+      grant's funding month(s), proportionally when a grant was topped up
+      across months; 'unspent' rows are each funding row's not-yet-spent
+      remainder (incl. money later returned/expired). EXACT: per program x
+      accrual_month, SUM(allocated_dollars) equals the grants-bucket outflow
+      in ysws_spend_ledger, so vendor rows + unspent replace the grants line
+      with every column still tying out. accrual_month is the FUNDING month;
+      transaction_date is the underlying transaction's own date.
+    columns:
+      - name: allocation_kind
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['spend', 'unspent']
+      - name: accrual_month
+        tests: [not_null]
+      - name: allocated_dollars
+        tests: [not_null]
+      - name: grant_id
+        tests: [not_null]
+      - name: is_partial_allocation
+        description: >
+          TRUE on 'spend' rows whose transaction was split across several
+          funding months (grant top-ups); allocated_dollars is then this
+          month's share of txn_dollars.
+      - name: hcb_url
+        description: >
+          The underlying transaction's HCB page: the card swipe for 'spend'
+          rows, the funding disbursement for 'unspent' rows.
+
   - name: ysws_spend_by_program
     description: >
       Per-program rollup reconciling gross outflow = true spend (A+C) +
