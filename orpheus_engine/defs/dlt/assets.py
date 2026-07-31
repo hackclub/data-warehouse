@@ -3,7 +3,10 @@ from dlt.destinations import postgres # Import the specific destination class
 
 import hashlib
 import os
-from typing import Iterable, Dict, Any
+import shutil
+import tempfile
+import time
+from typing import Iterable, Dict, Any, Optional
 import orpheus_engine.defs.loops.definitions as loops_defs
 import polars as pl
 
@@ -21,6 +24,97 @@ def warehouse_coolify_destination() -> postgres:
     # Initialize the destination with credentials
     # DLT handles the connection details internally
     return dlt.destinations.postgres(credentials=creds)
+
+
+# --- Run-scoped dlt working directories ---
+#
+# All of these loads are full-refresh ("replace") syncs, so dlt's local working
+# directory carries NO state worth keeping between runs. Sharing one directory
+# per pipeline across runs caused two distinct production failure storms
+# (2026-07-17..30, ~800 step failures):
+#
+#   1. A run killed mid-load (redeploy, OOM, max-runtime kill) left a pending
+#      load package behind. Every later run tried to resume that package first
+#      and died on FileNotFoundError (".../load/normalized/<id>/schema_updates
+#      .json"), permanently red until someone happened to redeploy the
+#      container (daydream_ysws_config failed this way for 13 days straight).
+#   2. Overlapping runs of the same asset (15-min job overlapping itself while
+#      the warehouse was slow, or overlapping the 6-hourly all-assets job)
+#      raced on the same directory and deleted each other's normalize/load
+#      files mid-flight.
+#
+# Giving every materialization its own throwaway directory removes the shared
+# state entirely: nothing to resume, nothing to race on. Pipeline state that
+# matters (schema versions) lives in the destination's _dlt tables and is
+# restored from there on each run.
+DLT_PIPELINES_ROOT = ".dlt_pipelines"
+
+
+def _fresh_pipelines_dir(pipeline_name: str, run_id: str) -> str:
+    """Create a unique, run-scoped dlt pipelines directory."""
+    os.makedirs(DLT_PIPELINES_ROOT, exist_ok=True)
+    return tempfile.mkdtemp(
+        prefix=f"{pipeline_name}_{run_id[:8]}_", dir=DLT_PIPELINES_ROOT
+    )
+
+
+def _sweep_stale_pipeline_dirs(max_age_hours: float = 24.0) -> None:
+    """
+    Best-effort cleanup of run-scoped dirs leaked by crashed runs.
+
+    Normal runs remove their own directory in a finally block; this only
+    catches dirs orphaned by a hard kill. Anything older than max_age_hours is
+    guaranteed dead (jobs carry dagster/max_runtime caps well below that).
+    """
+    try:
+        now = time.time()
+        for entry in os.scandir(DLT_PIPELINES_ROOT):
+            try:
+                if entry.is_dir(follow_symlinks=False) and (
+                    now - entry.stat().st_mtime > max_age_hours * 3600
+                ):
+                    shutil.rmtree(entry.path, ignore_errors=True)
+            except OSError:
+                continue
+    except OSError:
+        pass
+
+
+def _exception_chain_text(exc: BaseException) -> str:
+    """Flatten an exception and its __cause__/__context__ chain to one string."""
+    parts = []
+    seen: set[int] = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        parts.append(f"{type(current).__name__}: {current}")
+        current = current.__cause__ or current.__context__
+    return "\n".join(parts)
+
+
+def _dlt_retryable_reason(exc: BaseException) -> Optional[str]:
+    """
+    Classify a pipeline.run failure as retryable-with-fresh-state, or None.
+
+    These are exactly the failure signatures observed in prod event_logs where
+    a retry with a clean working directory succeeds:
+      - local load-package corruption (missing files inside the pipelines dir)
+      - a normalize job failing on those missing files
+      - the destination schema-creation race between parallel assets
+    Genuine data/connectivity errors return None and propagate.
+    """
+    text = _exception_chain_text(exc)
+    if "pg_namespace_nspname_index" in text and "already exists" in text:
+        return "schema_create_race"
+    if "FileNotFoundError" in text or "No such file or directory" in text:
+        return "local_state_corruption"
+    if (
+        "NormalizeJobFailed" in text
+        or "unterminated quoted string" in text
+        or "LoadClientJobRetry" in text
+    ):
+        return "corrupted_load_package"
+    return None
 
 def sanitize_postgres_column_name(col_name: str) -> str:
     """
@@ -429,139 +523,70 @@ def create_airtable_sync_assets(
                 context.log.info(f"Destination: Postgres, Dataset (Schema): '{dataset_name}', Table: '{table_name_warehouse}'")
                 context.log.info(f"Columns after renaming: {renamed_df.columns}")
 
-                try:
-                    pipeline = dlt.pipeline(
-                        pipeline_name=dlt_pipeline_name, # Use unique pipeline name
-                        destination=warehouse_coolify_destination(),
-                        dataset_name=dataset_name,
-                        progress="log",
-                        pipelines_dir=".dlt_pipelines"  # Consistent working directory
-                    )
-                except Exception as e:
-                    context.log.warning(f"Pipeline creation failed, likely due to corrupted state: {e}")
-                    # Drop the corrupted pipeline and recreate
-                    import shutil
-                    import os
-                    pipeline_dir = f".dlt_pipelines/{dlt_pipeline_name}"
-                    if os.path.exists(pipeline_dir):
-                        shutil.rmtree(pipeline_dir)
-                        context.log.info(f"Removed corrupted pipeline directory: {pipeline_dir}")
-                    
-                    pipeline = dlt.pipeline(
-                        pipeline_name=dlt_pipeline_name,
-                        destination=warehouse_coolify_destination(),
-                        dataset_name=dataset_name,
-                        progress="log",
-                        pipelines_dir=".dlt_pipelines"
-                    )
+                # Each materialization gets its own throwaway working directory
+                # (see DLT_PIPELINES_ROOT comment for the two failure storms
+                # this prevents), plus one retry with fresh state for the known
+                # transient/corruption signatures.
+                _sweep_stale_pipeline_dirs()
+                pipelines_dir = _fresh_pipelines_dir(dlt_pipeline_name, context.run_id)
 
-                # Convert to dict iterator - DLT will create child tables for nested structures
-                # Use insert_values format (PostgreSQL doesn't support parquet directly)
-                data_iterator = renamed_df.iter_rows(named=True)
-                try:
-                    load_info = pipeline.run(
-                        data=data_iterator,
+                def _run_load(active_dir: str):
+                    pipeline = dlt.pipeline(
+                        pipeline_name=dlt_pipeline_name,  # Use unique pipeline name
+                        destination=warehouse_coolify_destination(),
+                        dataset_name=dataset_name,
+                        progress="log",
+                        pipelines_dir=active_dir,
+                    )
+                    # Convert to dict iterator - DLT will create child tables for
+                    # nested structures. Use insert_values format (PostgreSQL
+                    # doesn't support parquet directly).
+                    return pipeline.run(
+                        data=renamed_df.iter_rows(named=True),
                         table_name=table_name_warehouse,
                         write_disposition="replace",
                         columns=dlt_columns,
                         primary_key="id",
-                        loader_file_format="insert_values"  # Supports nested structures and datetime
+                        loader_file_format="insert_values",
                     )
 
-                    context.log.info(f"DLT pipeline run finished successfully for table '{specific_table_name}'.")
-                    context.log.info(f"Load Info for '{specific_table_name}': {load_info}")
+                recovered_from = None
+                try:
+                    try:
+                        load_info = _run_load(pipelines_dir)
+                    except Exception as e:
+                        reason = _dlt_retryable_reason(e)
+                        if reason is None:
+                            context.log.error(f"DLT pipeline '{dlt_pipeline_name}' failed: {e}")
+                            raise
+                        context.log.warning(
+                            f"DLT pipeline '{dlt_pipeline_name}' failed with recoverable "
+                            f"condition '{reason}' ({e}). Retrying once with fresh state..."
+                        )
+                        shutil.rmtree(pipelines_dir, ignore_errors=True)
+                        pipelines_dir = _fresh_pipelines_dir(dlt_pipeline_name, context.run_id)
+                        load_info = _run_load(pipelines_dir)
+                        recovered_from = reason
+                        context.log.info(f"DLT pipeline retry succeeded after '{reason}'.")
+                finally:
+                    shutil.rmtree(pipelines_dir, ignore_errors=True)
 
-                    return Output(
-                        value=None,
-                        metadata={
-                            "dlt_pipeline_name": MetadataValue.text(dlt_pipeline_name),
-                            "dlt_dataset_name": MetadataValue.text(dataset_name),
-                            "dlt_table_name": MetadataValue.text(table_name_warehouse),
-                            "write_disposition": MetadataValue.text("replace"),
-                            "first_run": MetadataValue.bool(load_info.first_run),
-                            "num_records": MetadataValue.int(renamed_df.height),
-                            "columns": MetadataValue.text(", ".join(renamed_df.columns))
-                        }
-                    )
+                context.log.info(f"DLT pipeline run finished successfully for table '{specific_table_name}'.")
+                context.log.info(f"Load Info for '{specific_table_name}': {load_info}")
 
-                except Exception as e:
-                    error_str = str(e)
-                    # Check if this is a schema already exists error (race condition from parallel runs)
-                    if "pg_namespace_nspname_index" in error_str and "already exists" in error_str:
-                        context.log.warning(f"Schema already exists (race condition from parallel runs). Retrying...")
-                        # Just retry - the schema already exists which is what we want
-                        data_iterator = renamed_df.iter_rows(named=True)
-                        load_info = pipeline.run(
-                            data=data_iterator,
-                            table_name=table_name_warehouse,
-                            write_disposition="replace",
-                            columns=dlt_columns,
-                            primary_key="id",
-                            loader_file_format="insert_values"
-                        )
-                        
-                        context.log.info(f"DLT pipeline retry succeeded after schema creation race condition.")
-                        return Output(
-                            value=None,
-                            metadata={
-                                "dlt_pipeline_name": MetadataValue.text(dlt_pipeline_name),
-                                "dlt_dataset_name": MetadataValue.text(dataset_name),
-                                "dlt_table_name": MetadataValue.text(table_name_warehouse),
-                                "write_disposition": MetadataValue.text("replace"),
-                                "first_run": MetadataValue.bool(load_info.first_run),
-                                "num_records": MetadataValue.int(renamed_df.height),
-                                "columns": MetadataValue.text(", ".join(renamed_df.columns)),
-                                "recovered_from_schema_race": MetadataValue.bool(True)
-                            }
-                        )
-                    # Check if this is a corrupted load package error (unterminated quoted string, SQL syntax errors)
-                    elif "unterminated quoted string" in error_str or "LoadClientJobRetry" in error_str:
-                        context.log.warning(f"DLT pipeline '{dlt_pipeline_name}' has corrupted load package. Clearing pipeline state and retrying...")
-                        # Clear the entire pipeline directory to remove corrupted load packages
-                        import shutil
-                        import os
-                        pipeline_dir = f".dlt_pipelines/{dlt_pipeline_name}"
-                        if os.path.exists(pipeline_dir):
-                            shutil.rmtree(pipeline_dir)
-                            context.log.info(f"Removed corrupted pipeline directory: {pipeline_dir}")
-                        
-                        # Recreate pipeline and retry with sanitized data
-                        pipeline = dlt.pipeline(
-                            pipeline_name=dlt_pipeline_name,
-                            destination=warehouse_coolify_destination(),
-                            dataset_name=dataset_name,
-                            progress="log",
-                            pipelines_dir=".dlt_pipelines"
-                        )
-                        
-                        # Reload data with insert_values format
-                        data_iterator = renamed_df.iter_rows(named=True)
-                        load_info = pipeline.run(
-                            data=data_iterator,
-                            table_name=table_name_warehouse,
-                            write_disposition="replace",
-                            columns=dlt_columns,
-                            primary_key="id",
-                            loader_file_format="insert_values"
-                        )
-                        
-                        context.log.info(f"DLT pipeline retry succeeded after clearing corrupted state.")
-                        return Output(
-                            value=None,
-                            metadata={
-                                "dlt_pipeline_name": MetadataValue.text(dlt_pipeline_name),
-                                "dlt_dataset_name": MetadataValue.text(dataset_name),
-                                "dlt_table_name": MetadataValue.text(table_name_warehouse),
-                                "write_disposition": MetadataValue.text("replace"),
-                                "first_run": MetadataValue.bool(load_info.first_run),
-                                "num_records": MetadataValue.int(renamed_df.height),
-                                "columns": MetadataValue.text(", ".join(renamed_df.columns)),
-                                "recovered_from_corruption": MetadataValue.bool(True)
-                            }
-                        )
-                    else:
-                        context.log.error(f"DLT pipeline '{dlt_pipeline_name}' failed: {e}")
-                        raise
+                metadata = {
+                    "dlt_pipeline_name": MetadataValue.text(dlt_pipeline_name),
+                    "dlt_dataset_name": MetadataValue.text(dataset_name),
+                    "dlt_table_name": MetadataValue.text(table_name_warehouse),
+                    "write_disposition": MetadataValue.text("replace"),
+                    "first_run": MetadataValue.bool(load_info.first_run),
+                    "num_records": MetadataValue.int(renamed_df.height),
+                    "columns": MetadataValue.text(", ".join(renamed_df.columns)),
+                }
+                if recovered_from:
+                    metadata["recovered_from"] = MetadataValue.text(recovered_from)
+
+                return Output(value=None, metadata=metadata)
             
             # Set the function name to match the asset name
             sync_asset.__name__ = f"{base_name}_{specific_table_name}_warehouse"
@@ -706,19 +731,6 @@ def loops_audience(
     
     context.log.info(f"Total columns to load: {len(sanitized_df.columns)}")
 
-    # Configure the dlt pipeline.
-    # Destination details (credentials) are fetched by the helper function.
-    pipeline = dlt.pipeline(
-        pipeline_name=pipeline_name,
-        destination=warehouse_coolify_destination(),
-        dataset_name=dataset_name,
-        progress="log" # Optional: display progress logs
-    )
-
-    # Run the pipeline, passing the data received from the upstream asset.
-    # Convert Polars DataFrame to dict iterator - DLT will handle nested structures
-    data_iterator = sanitized_df.iter_rows(named=True)
-    
     # Log a sample of the data being loaded for debugging
     sample_data = sanitized_df.head(1).to_dicts()
     if sample_data:
@@ -726,15 +738,44 @@ def loops_audience(
         for key, value in sample_data[0].items():
             if 'loopsMailingList' in key:
                 context.log.info(f"  {key}: {value} (type: {type(value).__name__})")
-    
-    try:
-        load_info = pipeline.run(
-            data=data_iterator,
+
+    # Run-scoped working directory + one fresh-state retry, same rationale as
+    # create_airtable_sync_assets (see DLT_PIPELINES_ROOT comment above).
+    _sweep_stale_pipeline_dirs()
+    pipelines_dir = _fresh_pipelines_dir(pipeline_name, context.run_id)
+
+    def _run_load(active_dir: str):
+        pipeline = dlt.pipeline(
+            pipeline_name=pipeline_name,
+            destination=warehouse_coolify_destination(),
+            dataset_name=dataset_name,
+            progress="log",  # Optional: display progress logs
+            pipelines_dir=active_dir,
+        )
+        # Convert Polars DataFrame to dict iterator - DLT will handle nested structures
+        return pipeline.run(
+            data=sanitized_df.iter_rows(named=True),
             table_name=table_name,
             write_disposition="replace", # Options: "append", "replace", "merge"
             primary_key="email", # Specify primary key for potential merging or indexing
             loader_file_format="insert_values"  # Supports nested structures and datetime
         )
+
+    try:
+        try:
+            load_info = _run_load(pipelines_dir)
+        except Exception as e:
+            reason = _dlt_retryable_reason(e)
+            if reason is None:
+                raise
+            context.log.warning(
+                f"DLT pipeline '{pipeline_name}' failed with recoverable condition "
+                f"'{reason}' ({e}). Retrying once with fresh state..."
+            )
+            shutil.rmtree(pipelines_dir, ignore_errors=True)
+            pipelines_dir = _fresh_pipelines_dir(pipeline_name, context.run_id)
+            load_info = _run_load(pipelines_dir)
+            context.log.info(f"DLT pipeline retry succeeded after '{reason}'.")
 
         context.log.info(f"DLT pipeline run finished successfully.")
         # Pretty-print the load info for detailed logs
@@ -770,4 +811,6 @@ def loops_audience(
         
         # Re-raise the exception to mark the Dagster asset run as failed
         raise
+    finally:
+        shutil.rmtree(pipelines_dir, ignore_errors=True)
 
