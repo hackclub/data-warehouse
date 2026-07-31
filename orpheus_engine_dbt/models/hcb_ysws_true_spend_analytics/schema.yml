@@ -144,9 +144,10 @@ models:
     description: >
       One row per shared YSWS operating cost shown under Other in the leadership
       dashboard: security bounty chargebacks, approved fulfillment bounty runs,
-      and HQ server-infrastructure costs — direct HQ card charges from hosting /
-      CDN / DNS vendors plus HQ-funded server-bill reimbursements paid out
-      through the HCB reimbursement clearinghouse.
+      HQ server-infrastructure costs (direct HQ card charges from hosting /
+      CDN / DNS / dev-infra vendors plus HQ-funded server-bill reimbursements
+      paid out through the HCB reimbursement clearinghouse), and OpenAI /
+      Anthropic spend from HQ and central non-program YSWS orgs.
     columns:
       - name: source_key
         tests: [unique, not_null]
@@ -155,7 +156,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ['security_bounty', 'fulfillment_bounty', 'servers']
+                values: ['security_bounty', 'fulfillment_bounty', 'servers', 'ai']
       - name: transaction_date
         tests: [not_null]
       - name: amount_dollars

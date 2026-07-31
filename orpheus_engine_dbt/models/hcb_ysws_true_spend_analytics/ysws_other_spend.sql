@@ -19,19 +19,27 @@
                         Approved Flavortown and Stardance payout runs, accrued
                         to the run's service-period end date.
       servers           HQ server-infrastructure costs, from two sources:
-                        (1) direct HQ card charges from hosting / CDN / DNS
-                        vendors (Hetzner, Cloudflare, AWS, DigitalOcean,
-                        Vercel, Linode, Heroku, Railway, ...), and
+                        (1) direct HQ card charges from hosting / CDN / DNS /
+                        dev-infra vendors (Hetzner, Cloudflare, AWS,
+                        DigitalOcean, Vercel, Linode, Heroku, Railway, GitHub,
+                        Twilio, ...), and
                         (2) HQ-funded reimbursements of server bills paid out
                         through the HCB reimbursement clearinghouse — since
                         April 2026 the large monthly Hetzner invoice is paid
                         personally and reimbursed, so it never appears as an
-                        HQ card charge. See server_reimbursements below for
+                        HQ card charge. See infra_reimbursements below for
                         how those are tied back to HQ without the (unmirrored)
                         reimbursement-report tables.
-                        Deliberately excluded: comms (Twilio), AI credits and
-                        subscriptions (OpenAI, Anthropic), and dev tooling
-                        (GitHub) — infra-adjacent but not server spend.
+                        Twilio for the HCB platform is excluded (HCB pays its
+                        own Twilio from the bank org, which this never scans;
+                        the rare HQ-card charge memoed for HCB is filtered).
+      ai                OpenAI / Anthropic spend paid from HQ or from central
+                        YSWS orgs that sit outside the program trees. AI spend
+                        from program orgs stays in program true spend and AI
+                        spend from individual author budgets stays in the
+                        staff budget lines — counting either here would
+                        double-count. Includes HQ-funded reimbursements of AI
+                        credits via the clearinghouse.
 */
 
 WITH security_bounties AS (
@@ -105,11 +113,14 @@ fulfillment_bounties AS (
 ),
 
 server_charges AS (
-    -- Direct HQ card charges from hosting / CDN / DNS vendors. The vendor
-    -- list is matched against card memos; keep the WHERE alternation and the
-    -- detail CASE in sync when adding a vendor. Deliberately NOT matched:
-    -- bare "AWS" (retail Amazon and e.g. "SHAWS" collide — the card memo is
-    -- always "Amazon web services"), Twilio, OpenAI, Anthropic, GitHub.
+    -- Direct HQ card charges from hosting / CDN / DNS / dev-infra vendors.
+    -- The vendor list is matched against card memos; keep the WHERE
+    -- alternation and the detail CASE in sync when adding a vendor.
+    -- Deliberately NOT matched: bare "AWS" (retail Amazon and e.g. "SHAWS"
+    -- collide — the card memo is always "Amazon web services"). Twilio
+    -- charges memoed for the HCB platform are excluded (HCB pays its own
+    -- Twilio account from the bank org; this model never scans that org, but
+    -- the odd HCB top-up has landed on the HQ card).
     SELECT
         'servers'::text AS cost_type,
         l.transaction_date,
@@ -135,6 +146,10 @@ server_charges AS (
             WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'FASTLY' THEN 'Fastly'
             WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'DNSIMPLE' THEN 'DNSimple'
             WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'PORKBUN' THEN 'Porkbun'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'TWILIO' THEN 'Twilio'
+            -- Tight on purpose: bare GITHUB matches sticker printing runs
+            -- ("GitHub will reimburse"), GitHub Universe travel, etc.
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'GITHUB,? INC|GITHUB GITHUB|^\s*GITHUB\s*$' THEN 'GitHub'
             ELSE 'Other hosting'
         END AS detail,
         ABS(l.amount_dollars)::numeric AS amount_dollars,
@@ -154,7 +169,65 @@ server_charges AS (
       AND l.flow_direction = 'outflow'
       AND NOT l.is_internal_transfer
       AND CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo)
-          ~* '(HETZNER|CLOUDFLARE|AMAZON WEB|DIGITALOCEAN|GOOGLE CLOUD|VERCEL|FLY\.IO|RAILWAY|HEROKU|NETLIFY|LINODE|AKAMAI|SCALEWAY|BACKBLAZE|BUNNY\.NET|BUNNYCDN|FASTLY|DNSIMPLE|PORKBUN)'
+          ~* '(HETZNER|CLOUDFLARE|AMAZON WEB|DIGITALOCEAN|GOOGLE CLOUD|VERCEL|FLY\.IO|RAILWAY|HEROKU|NETLIFY|LINODE|AKAMAI|SCALEWAY|BACKBLAZE|BUNNY\.NET|BUNNYCDN|FASTLY|DNSIMPLE|PORKBUN|TWILIO|GITHUB,? INC|GITHUB GITHUB|^\s*GITHUB\s*$)'
+      -- HCB's own Twilio account is paid from the bank org; drop the rare
+      -- HCB-memoed Twilio top-up that landed on the HQ card.
+      AND NOT (
+          CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo, l.custom_memo) ~* 'TWILIO'
+          AND CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo, l.custom_memo) ~* 'HCB'
+      )
+),
+
+-- OpenAI / Anthropic paid from HQ or from central YSWS orgs that sit outside
+-- the YSWS spend trees (tree orgs are already counted as program/marketing
+-- true spend; ysws-budget-* orgs are individual author funds counted in the
+-- staff budget lines — both would double-count here). "CLAUDE" alone is not
+-- matched: card memos are "ANTHROPIC* CLAUDE SUB" / "CLAUDE.AI", and bare
+-- CLAUDE could be a person's name in a human memo.
+ai_charges AS (
+    SELECT
+        'ai'::text AS cost_type,
+        l.transaction_date,
+        -- Not 'hcb_hq': these card rows also cover central YSWS orgs, and a
+        -- distinct source_system keeps source_key collision-proof against
+        -- server_charges (same transaction_id space).
+        'hcb_ai'::text AS source_system,
+        COALESCE(l.transaction_id::text, l.hcb_code) AS source_id,
+        l.hcb_code AS source_reference,
+        CASE
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'CHATGPT' THEN 'OpenAI · ChatGPT subs'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'OPENAI' THEN 'OpenAI · API & credits'
+            WHEN CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo) ~* 'CLAUDE( SUB|\.AI)' THEN 'Anthropic · Claude subs'
+            ELSE 'Anthropic · API'
+        END AS detail,
+        ABS(l.amount_dollars)::numeric AS amount_dollars,
+        COALESCE(l.requested_by_name, l.transacting_user_name, e.card_user_name) AS initiated_by_name,
+        COALESCE(e.receipt_count, 0) AS receipt_count,
+        COALESCE(e.receipt_marked_no_or_lost, FALSE) AS receipt_marked_no_or_lost,
+        e.tag_labels,
+        e.spent_date,
+        e.settled_after_days,
+        e.card_last4,
+        e.charge_method,
+        e.charge_wallet
+    FROM {{ ref('ledger') }} l
+    LEFT JOIN {{ ref('hcb_code_enrichment') }} e ON e.hcb_code = l.hcb_code
+    WHERE (
+            l.org_slug = 'hq'
+            OR (
+                l.org_slug LIKE 'ysws-%'
+                AND l.org_slug NOT LIKE 'ysws-budget-%'
+                AND NOT EXISTS (
+                    SELECT 1 FROM {{ ref('ysws_spend_org_tree') }} t
+                    WHERE t.org_slug = l.org_slug
+                )
+            )
+          )
+      AND l.transaction_source_type = 'RawStripeTransaction'
+      AND l.flow_direction = 'outflow'
+      AND NOT l.is_internal_transfer
+      AND CONCAT_WS(' ', l.display_memo, l.raw_memo, l.friendly_memo)
+          ~* '(OPENAI|CHATGPT|ANTHROPIC|CLAUDE( SUB|\.AI))'
 ),
 
 -- Since April 2026 the big monthly Hetzner invoice is paid personally and
@@ -164,7 +237,8 @@ server_charges AS (
 -- report title in ach_payment_for; the per-expense charge lands on HQ as an
 -- HCB-710 expense payout whose mirrored memo is only an opaque short code —
 -- the reimbursement-report tables are not replicated into the warehouse.
--- So a server-keyword payout is tied back to HQ by amount:
+-- So an infra-keyword payout (servers or AI credits) is tied back to HQ by
+-- amount:
 --   * exact:    one HQ HCB-710 row within 3 days equals the payout, or
 --   * dominant: HQ's HCB-710 rows that day sum to the payout and this row is
 --     >= 90% of it (mixed reports like "postage & servers!" carry a few
@@ -185,7 +259,7 @@ hq_expense_payouts AS (
       AND l.flow_direction = 'outflow'
 ),
 
-server_reimbursement_payouts AS (
+infra_reimbursement_payouts AS (
     SELECT
         l.transaction_date,
         ABS(l.amount_dollars)::numeric AS amount_dollars,
@@ -195,12 +269,17 @@ server_reimbursement_payouts AS (
     WHERE l.org_slug = 'reimbursement-clearinghouse'
       AND l.hcb_code LIKE 'HCB-300-%'
       AND l.flow_direction = 'outflow'
-      AND l.ach_payment_for ~* '(hetzner|cloudflare|server|hosting|vps)'
+      -- Bare "cloudflare" is not matched: it catches conference/travel
+      -- reimbursements ("Cloudflare Connect speaking").
+      AND l.ach_payment_for ~* '(hetzner|cloudflare (bill|invoice|credits?)|server|hosting|vps|openai|anthropic|chatgpt|claude)'
 ),
 
-server_reimbursements AS (
+infra_reimbursements AS (
     SELECT DISTINCT ON (e.hcb_code)
-        'servers'::text AS cost_type,
+        CASE
+            WHEN p.ach_payment_for ~* '(openai|anthropic|chatgpt|claude)' THEN 'ai'
+            ELSE 'servers'
+        END::text AS cost_type,
         e.transaction_date,
         'hcb_reimbursement'::text AS source_system,
         COALESCE(e.transaction_id::text, e.hcb_code) AS source_id,
@@ -208,6 +287,8 @@ server_reimbursements AS (
         CASE
             WHEN p.ach_payment_for ~* 'HETZNER' THEN 'Hetzner'
             WHEN p.ach_payment_for ~* 'CLOUDFLARE' THEN 'Cloudflare'
+            WHEN p.ach_payment_for ~* '(OPENAI|CHATGPT)' THEN 'OpenAI · API & credits'
+            WHEN p.ach_payment_for ~* '(ANTHROPIC|CLAUDE)' THEN 'Anthropic · API'
             ELSE 'Servers (reimbursed)'
         END AS detail,
         e.amount_dollars,
@@ -221,7 +302,7 @@ server_reimbursements AS (
         NULL::text AS charge_method,
         NULL::text AS charge_wallet
     FROM hq_expense_payouts e
-    JOIN server_reimbursement_payouts p
+    JOIN infra_reimbursement_payouts p
       ON ABS(p.transaction_date - e.transaction_date) <= 3
      AND (
           p.amount_dollars = e.amount_dollars
@@ -326,4 +407,29 @@ SELECT
     card_last4,
     charge_method,
     charge_wallet
-FROM server_reimbursements
+FROM infra_reimbursements
+
+UNION ALL
+
+SELECT
+    cost_type,
+    transaction_date,
+    source_system,
+    source_id,
+    source_system || ':' || source_id AS source_key,
+    source_reference,
+    CASE WHEN source_reference LIKE 'HCB-%'
+         THEN 'https://hcb.hackclub.com/hcb/' || source_reference
+    END AS hcb_url,
+    detail,
+    amount_dollars,
+    initiated_by_name,
+    receipt_count,
+    receipt_marked_no_or_lost,
+    tag_labels,
+    spent_date,
+    settled_after_days,
+    card_last4,
+    charge_method,
+    charge_wallet
+FROM ai_charges
