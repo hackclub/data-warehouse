@@ -88,6 +88,25 @@ sources:
       - name: increase_checks
         description: "Check payments via Increase."
         meta: { dagster: { deps: ['hcb_warehouse_mirror'] } }
+      - name: wise_transfers
+        description: "Outgoing Wise (international) transfers - HCB-360 codes. Recipient, purpose, original currency amount."
+        meta: { dagster: { deps: ['hcb_warehouse_mirror'] } }
+      - name: paypal_transfers
+        description: "Outgoing PayPal transfers - HCB-350 codes."
+        meta: { dagster: { deps: ['hcb_warehouse_mirror'] } }
+      # Reimbursements
+      - name: reimbursement_reports
+        description: "Reimbursement reports: title, person reimbursed (user_id), lifecycle timestamps."
+        meta: { dagster: { deps: ['hcb_warehouse_mirror'] } }
+      - name: reimbursement_expenses
+        description: "Individual expenses inside a reimbursement report - the human-readable memo behind HCB-710 payouts."
+        meta: { dagster: { deps: ['hcb_warehouse_mirror'] } }
+      - name: reimbursement_expense_payouts
+        description: "Per-expense payout charges on the funding org - the id space of HCB-710 ledger rows."
+        meta: { dagster: { deps: ['hcb_warehouse_mirror'] } }
+      - name: reimbursement_payout_holdings
+        description: "Per-report holding on the clearinghouse (HCB-712) linking to the transfer that paid the person."
+        meta: { dagster: { deps: ['hcb_warehouse_mirror'] } }
       # Card/Authorization Tables
       - name: stripe_cards
         description: "Physical and virtual cards issued to users."

@@ -200,6 +200,36 @@ check_meta AS (
     FROM {{ source('hcb', 'checks') }}
 ),
 
+-- Wise transfer metadata (HCB-360)
+wise_meta AS (
+    SELECT
+        id,
+        recipient_name AS wise_recipient_name
+    FROM {{ source('hcb', 'wise_transfers') }}
+),
+
+-- PayPal transfer metadata (HCB-350)
+paypal_meta AS (
+    SELECT
+        id,
+        recipient_name AS paypal_recipient_name
+    FROM {{ source('hcb', 'paypal_transfers') }}
+),
+
+-- Reimbursement expense payout metadata (HCB-710): the person reimbursed.
+-- Each payout resolves to exactly one expense -> report -> user.
+reimbursement_meta AS (
+    SELECT
+        rep.id,
+        u.full_name AS reimbursed_user_name
+    FROM {{ source('hcb', 'reimbursement_expense_payouts') }} rep
+    JOIN {{ source('hcb', 'reimbursement_expenses') }} re
+        ON re.id = rep.reimbursement_expenses_id
+    JOIN {{ source('hcb', 'reimbursement_reports') }} rr
+        ON rr.id = re.reimbursement_report_id
+    LEFT JOIN {{ source('hcb', 'users') }} u ON u.id = rr.user_id
+),
+
 -- Org info for the transaction's org
 org_info AS (
     SELECT
@@ -356,6 +386,9 @@ SELECT
         CASE WHEN dnm.is_anonymous_donation THEN 'Anonymous Donor' ELSE dnm.donor_name END,
         wm.wire_recipient_name,
         cm.check_recipient_name,
+        wsm.wise_recipient_name,
+        ppm.paypal_recipient_name,
+        rm.reimbursed_user_name,
         pc.friendly_memo
     ) AS counterparty_name,
 
@@ -387,6 +420,12 @@ LEFT JOIN wire_meta wm
 LEFT JOIN check_meta cm
     ON pc.transaction_type = 'check' AND cm.id = pc.hcb_code_id
    AND cm.check_source = CASE WHEN pc.hcb_code LIKE 'HCB-401-%' THEN 'increase' ELSE 'legacy' END
+LEFT JOIN wise_meta wsm
+    ON pc.transaction_type = 'wise_transfer' AND wsm.id = pc.hcb_code_id
+LEFT JOIN paypal_meta ppm
+    ON pc.transaction_type = 'paypal_transfer' AND ppm.id = pc.hcb_code_id
+LEFT JOIN reimbursement_meta rm
+    ON pc.transaction_type = 'expense_payout' AND rm.id = pc.hcb_code_id
 )
 
 -- Combine canonical transactions with card grants

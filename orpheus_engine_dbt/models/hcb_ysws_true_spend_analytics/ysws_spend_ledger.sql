@@ -411,14 +411,32 @@ SELECT
     e.tag_labels,
     e.spent_date,
     e.settled_after_days,
-    -- Who made the payment: the ledger's user (disbursements, transfers)
-    -- else the cardholder who swiped.
-    COALESCE(c.ledger_initiated_by_name, e.card_user_name) AS initiated_by_name,
+    -- Who made the payment: the vendor-table sender when the rail records
+    -- one (the ledger's mapped user can be whoever grouped the transaction,
+    -- not who sent it — a Wise transfer sent by Amber used to show its
+    -- bookkeeper), else the ledger's user (disbursements, transfers), else
+    -- the cardholder who swiped.
+    COALESCE(e.transfer_sent_by_name, c.ledger_initiated_by_name,
+             e.card_user_name) AS initiated_by_name,
     e.card_last4,
     e.charge_method,
     e.charge_wallet,
     e.merchant_country,
     e.merchant_category,
+    -- Rich transfer detail (Wise / PayPal / wire / ACH / check /
+    -- reimbursement): recipient, purpose, original currency amount, sender,
+    -- state — what the transaction's HCB page shows. NULL for other types.
+    e.transfer_recipient_name,
+    e.transfer_recipient_email,
+    e.transfer_recipient_country,
+    e.transfer_purpose,
+    e.transfer_original_amount_cents,
+    e.transfer_original_currency,
+    e.transfer_sent_by_name,
+    e.transfer_sent_at,
+    e.transfer_state,
+    e.reimbursement_report_name,
+    e.reimbursement_expense_memo,
     -- Clickable HCB transaction page. Real rows link to their own transaction
     -- (/hcb/<code> resolves full HCB-xxx-xxx codes). Synthetic rows (OFFSET-,
     -- BACKFILL-) have no HCB page of their own, so they link to the linked

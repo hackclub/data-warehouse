@@ -27,12 +27,40 @@
       charge_wallet             apple_pay / google_pay / samsung_pay, if any
       card_last4 / card_name / card_type_text / card_user_name / card_user_email
                                 the card that made the charge and its holder
+      transfer_recipient_name / _email / _country
+                                who an outgoing payment went to, from the
+                                vendor table the hcb_code type implies (Wise,
+                                PayPal, wire, ACH, check) — for HCB-710
+                                reimbursement payouts, the person reimbursed.
+                                _country is ISO alpha-2 via hcb_country_codes
+                                (HCB stores its own enum integer).
+      transfer_purpose          the human "payment for" (report title for
+                                reimbursements)
+      transfer_original_amount_cents / transfer_original_currency
+                                the pre-conversion amount for rails that
+                                settle from a foreign currency (Wise, wires);
+                                e.g. £1,234.56 GBP settling as $1,650.00
+      transfer_sent_by_name     the HCB user who initiated the transfer (the
+                                person reimbursed, for HCB-710)
+      transfer_sent_at          when it was sent/approved
+      transfer_state            vendor-table aasm_state (deposited, sent,
+                                in_transit, rejected, ...)
+      reimbursement_report_name / reimbursement_expense_memo
+                                HCB-710 only: the report title and the
+                                per-expense memo (the ledger memo for these
+                                rows is an opaque short code)
 
     Card fields come from raw_stripe_transactions (settled, via
     transaction_source_id) and raw_pending_stripe_transactions (auth method,
     via canonical_pending_transactions.raw_pending_stripe_transaction_id) —
     the card id inside stripe_transaction changed format over time, hence
     the COALESCE of ->'card'->>'id' and ->>'card'.
+
+    Transfer fields join each vendor table on the id embedded in the code
+    (HCB-<type>-<id>; see ledger.sql for the verified type map). Every
+    vendor-table id is a primary key and each HCB-710 payout resolves to
+    exactly one expense and report, so these joins never fan out. Legacy
+    HCB-400 checks predate recipient tracking and only carry purpose/memo.
 
     hcb_codes rows are created lazily by HCB's UI, but coverage is total in
     practice: every real HCB-% code in the YSWS spend ledger had a row as of
@@ -165,6 +193,90 @@ code_tags AS (
     JOIN tag_labels tl ON tl.hcb_code_row_id = hc.id
     CROSS JOIN LATERAL UNNEST(tl.tag_labels) AS label
     GROUP BY 1
+),
+
+-- The vendor-table id is embedded in the code itself: HCB-<type>-<id>.
+code_ids AS (
+    SELECT
+        hcb_code,
+        SPLIT_PART(hcb_code, '-', 2) AS code_type,
+        CASE WHEN hcb_code ~ '^HCB-\d{3}-\d+$'
+             THEN SPLIT_PART(hcb_code, '-', 3)::BIGINT
+        END AS code_id
+    FROM per_code
+),
+
+-- Rich detail for outgoing payments, unified across rails. Only one branch
+-- of each COALESCE is ever non-NULL per row (the joins are keyed on the
+-- code type), so cross-type ordering is irrelevant.
+transfer_details AS (
+    SELECT
+        c.hcb_code,
+        COALESCE(wt.recipient_name, pp.recipient_name, w.recipient_name,
+                 a.recipient_name, ic.recipient_name, ru.full_name)
+            AS transfer_recipient_name,
+        COALESCE(wt.recipient_email, pp.recipient_email, w.recipient_email,
+                 a.recipient_email, ic.recipient_email, ru.email)
+            AS transfer_recipient_email,
+        COALESCE(wtc.alpha2, wc.alpha2) AS transfer_recipient_country,
+        COALESCE(wt.payment_for, pp.payment_for, w.payment_for,
+                 a.payment_for, ic.payment_for, lc.payment_for, rr.name)
+            AS transfer_purpose,
+        -- Foreign-currency rails: the amount entered at send time, in the
+        -- send currency (the settled USD amount is on the ledger row).
+        COALESCE(wt.amount_cents::BIGINT, w.amount_cents::BIGINT)
+            AS transfer_original_amount_cents,
+        COALESCE(wt.currency, w.currency) AS transfer_original_currency,
+        COALESCE(wtu.full_name, ppu.full_name, wu.full_name, au.full_name,
+                 icu.full_name, lcu.full_name, ru.full_name)
+            AS transfer_sent_by_name,
+        COALESCE(wt.sent_at, wt.approved_at, pp.approved_at, w.approved_at,
+                 a.approved_at, ic.approved_at, lc.approved_at,
+                 rr.reimbursed_at, rep.created_at) AS transfer_sent_at,
+        COALESCE(wt.aasm_state, pp.aasm_state, w.aasm_state, a.aasm_state,
+                 ic.aasm_state, lc.aasm_state, rep.aasm_state)
+            AS transfer_state,
+        rr.name AS reimbursement_report_name,
+        re.memo AS reimbursement_expense_memo
+    FROM code_ids c
+    -- Wise (HCB-360)
+    LEFT JOIN {{ source('hcb', 'wise_transfers') }} wt
+        ON c.code_type = '360' AND wt.id = c.code_id
+    LEFT JOIN {{ ref('hcb_country_codes') }} wtc
+        ON wtc.country_id = wt.recipient_country
+    LEFT JOIN {{ source('hcb', 'users') }} wtu ON wtu.id = wt.user_id
+    -- PayPal (HCB-350)
+    LEFT JOIN {{ source('hcb', 'paypal_transfers') }} pp
+        ON c.code_type = '350' AND pp.id = c.code_id
+    LEFT JOIN {{ source('hcb', 'users') }} ppu ON ppu.id = pp.user_id
+    -- Wires (HCB-310)
+    LEFT JOIN {{ source('hcb', 'wires') }} w
+        ON c.code_type = '310' AND w.id = c.code_id
+    LEFT JOIN {{ ref('hcb_country_codes') }} wc
+        ON wc.country_id = w.recipient_country
+    LEFT JOIN {{ source('hcb', 'users') }} wu ON wu.id = w.user_id
+    -- ACH (HCB-300)
+    LEFT JOIN {{ source('hcb', 'ach_transfers') }} a
+        ON c.code_type = '300' AND a.id = c.code_id
+    LEFT JOIN {{ source('hcb', 'users') }} au ON au.id = a.creator_id
+    -- Increase checks (HCB-401)
+    LEFT JOIN {{ source('hcb', 'increase_checks') }} ic
+        ON c.code_type = '401' AND ic.id = c.code_id
+    LEFT JOIN {{ source('hcb', 'users') }} icu ON icu.id = ic.user_id
+    -- Legacy checks (HCB-400; independent id space from HCB-401)
+    LEFT JOIN {{ source('hcb', 'checks') }} lc
+        ON c.code_type = '400' AND lc.id = c.code_id
+    LEFT JOIN {{ source('hcb', 'users') }} lcu ON lcu.id = lc.creator_id
+    -- Reimbursement expense payouts (HCB-710) -> expense -> report -> person
+    LEFT JOIN {{ source('hcb', 'reimbursement_expense_payouts') }} rep
+        ON c.code_type = '710' AND rep.id = c.code_id
+    LEFT JOIN {{ source('hcb', 'reimbursement_expenses') }} re
+        ON re.id = rep.reimbursement_expenses_id
+    LEFT JOIN {{ source('hcb', 'reimbursement_reports') }} rr
+        ON rr.id = re.reimbursement_report_id
+    LEFT JOIN {{ source('hcb', 'users') }} ru ON ru.id = rr.user_id
+    WHERE c.code_type IN ('300', '310', '350', '360', '400', '401', '710')
+      AND c.code_id IS NOT NULL
 )
 
 SELECT
@@ -189,9 +301,21 @@ SELECT
     cd.card_name,
     cd.card_type_text,
     cd.card_user_name,
-    cd.card_user_email
+    cd.card_user_email,
+    td.transfer_recipient_name,
+    td.transfer_recipient_email,
+    td.transfer_recipient_country,
+    td.transfer_purpose,
+    td.transfer_original_amount_cents,
+    td.transfer_original_currency,
+    td.transfer_sent_by_name,
+    td.transfer_sent_at,
+    td.transfer_state,
+    td.reimbursement_report_name,
+    td.reimbursement_expense_memo
 FROM per_code pc
 LEFT JOIN code_tags ct ON ct.hcb_code = pc.hcb_code
 LEFT JOIN pending_settle ps ON ps.hcb_code = pc.hcb_code
 LEFT JOIN card_info ci ON ci.hcb_code = pc.hcb_code
 LEFT JOIN cards cd ON cd.stripe_id = ci.card_stripe_id
+LEFT JOIN transfer_details td ON td.hcb_code = pc.hcb_code

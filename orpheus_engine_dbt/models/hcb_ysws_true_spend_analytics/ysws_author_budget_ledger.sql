@@ -50,9 +50,11 @@ SELECT
     l.dest_org_slug,
     l.dest_org_name,
     l.counterparty_name,
-    -- Who made the payment: the ledger's user (disbursements, transfers)
-    -- else the cardholder who swiped.
-    COALESCE(l.requested_by_name, l.transacting_user_name, e.card_user_name) AS initiated_by_name,
+    -- Who made the payment: the vendor-table sender when the rail records
+    -- one, else the ledger's user (disbursements, transfers), else the
+    -- cardholder who swiped.
+    COALESCE(e.transfer_sent_by_name, l.requested_by_name,
+             l.transacting_user_name, e.card_user_name) AS initiated_by_name,
     l.ach_payment_for,
     -- Display enrichment from the code's HCB page.
     COALESCE(e.receipt_count, 0) AS receipt_count,
@@ -65,6 +67,19 @@ SELECT
     e.charge_wallet,
     e.merchant_country,
     e.merchant_category,
+    -- Rich transfer detail (Wise / PayPal / wire / ACH / check /
+    -- reimbursement); see ysws_spend_ledger.
+    e.transfer_recipient_name,
+    e.transfer_recipient_email,
+    e.transfer_recipient_country,
+    e.transfer_purpose,
+    e.transfer_original_amount_cents,
+    e.transfer_original_currency,
+    e.transfer_sent_by_name,
+    e.transfer_sent_at,
+    e.transfer_state,
+    e.reimbursement_report_name,
+    e.reimbursement_expense_memo,
 
     CASE
         WHEN l.flow_direction = 'inflow' THEN

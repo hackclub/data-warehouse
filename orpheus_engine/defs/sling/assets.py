@@ -2443,6 +2443,42 @@ hcb_replication_config = {
         "public.wires": None,
         "public.checks": None,
         "public.increase_checks": None,
+        "public.wise_transfers": {
+            "select": [
+                "id", "aasm_state", "amount_cents", "approved_at", "sent_at",
+                "currency", "payment_for", "recipient_country",
+                "recipient_email", "recipient_name", "return_reason",
+                "quoted_usd_amount_cents", "usd_amount_cents", "event_id",
+                "user_id", "created_at", "updated_at",
+            ],  # Excludes recipient bank/address/phone and *_ciphertext PII
+        },
+        "public.paypal_transfers": None,
+
+        # --- Reimbursements ---
+        # The chain behind every HCB-710 expense-payout ledger row:
+        # expense_payouts -> expenses (the human-readable memo) -> reports
+        # (title + who gets reimbursed). payout_holdings links a report's
+        # HCB-712 holding to the transfer that actually paid the person.
+        "public.reimbursement_reports": {
+            "select": [
+                "id", "user_id", "event_id", "invited_by_id", "name",
+                "maximum_amount_cents", "aasm_state", "submitted_at",
+                "reimbursement_requested_at", "reimbursement_approved_at",
+                "rejected_at", "reimbursed_at", "created_at", "updated_at",
+                "deleted_at", "reviewer_id", "conversion_rate", "currency",
+                "card_grant_id",
+            ],  # Excludes invite_message free text
+        },
+        "public.reimbursement_expenses": {
+            "select": [
+                "id", "reimbursement_report_id", "approved_by_id", "memo",
+                "amount_cents", "description", "aasm_state", "approved_at",
+                "created_at", "updated_at", "expense_number", "deleted_at",
+                "type", "value", "category",
+            ],
+        },
+        "public.reimbursement_expense_payouts": None,
+        "public.reimbursement_payout_holdings": None,
 
         # --- Card/Authorization Tables ---
         "public.stripe_cards": None,

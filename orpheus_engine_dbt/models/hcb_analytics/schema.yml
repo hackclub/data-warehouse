@@ -4,11 +4,14 @@ models:
   - name: hcb_code_enrichment
     description: >
       Per-hcb_code display enrichment for transaction lists: receipt status,
-      user tags, spent-vs-settled timing, and card-transaction detail
+      user tags, spent-vs-settled timing, card-transaction detail
       (merchant name/city/country/category, charge method + wallet, card
       last4/name/type, and the cardholder's name/email) from the raw Stripe
-      transaction mirrors. One row per hcb_code, so ledger joins never fan
-      out.
+      transaction mirrors, and transfer detail (recipient name/email/country,
+      purpose, original-currency amount, sender, state) from the vendor table
+      each code type implies — Wise, PayPal, wires, ACH, checks, and the
+      reimbursement chain behind HCB-710 expense payouts (report title +
+      per-expense memo). One row per hcb_code, so ledger joins never fan out.
     columns:
       - name: hcb_code
         tests: [unique, not_null]
@@ -19,3 +22,16 @@ models:
                 values: ['keyed_in', 'swipe', 'chip', 'contactless', 'online']
               config:
                 severity: warn
+      - name: transfer_recipient_country
+        description: "ISO alpha-2, decoded from HCB's enum via hcb_country_codes."
+
+  - name: hcb_country_codes
+    description: >
+      HCB's integer country enum (app/models/concerns/country_enumable.rb) ->
+      ISO 3166-1 alpha-2. Static copy; wires.recipient_country and
+      wise_transfers.recipient_country are NOT ISO numeric codes.
+    columns:
+      - name: country_id
+        tests: [unique, not_null]
+      - name: alpha2
+        tests: [unique, not_null]

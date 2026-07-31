@@ -52,11 +52,44 @@ models:
           or unlinked backfills).
       - name: initiated_by_name
         description: >
-          Who made the payment: the requesting user for disbursements, the
-          creating user for transfers, else the cardholder who swiped. NULL
-          for synthetic rows.
+          Who made the payment: the vendor-table sender for Wise / PayPal /
+          wire / ACH / check rows (the ledger's mapped user can be a
+          bookkeeper, not the sender), the requesting user for disbursements,
+          else the cardholder who swiped. The person reimbursed, for
+          expense_payout rows. NULL for synthetic rows.
       - name: ach_payment_for
-        description: "The 'payment for' note on ACH transfers."
+        description: "The 'payment for' note on ACH transfers (superseded by transfer_purpose)."
+      - name: transfer_recipient_name
+        description: >
+          Who an outgoing payment went to (Wise / PayPal / wire / ACH /
+          Increase-check recipient; the person reimbursed for expense_payout
+          rows). NULL for cards, disbursements, and synthetic rows.
+      - name: transfer_recipient_email
+        description: "Recipient email, where the rail records one."
+      - name: transfer_recipient_country
+        description: "Recipient country as ISO alpha-2 (Wise + wires only)."
+      - name: transfer_purpose
+        description: >
+          The human 'payment for' note (report title for expense_payout
+          rows). Superset of ach_payment_for.
+      - name: transfer_original_amount_cents
+        description: >
+          For rails sent in a foreign currency (Wise, wires): the amount in
+          the send currency. The row's amount_dollars stays the settled USD.
+      - name: transfer_original_currency
+        description: "Currency code of transfer_original_amount_cents (e.g. GBP)."
+      - name: transfer_sent_by_name
+        description: "The HCB user who initiated the transfer, per the vendor table."
+      - name: transfer_sent_at
+        description: "When the transfer was sent/approved, per the vendor table."
+      - name: transfer_state
+        description: "Vendor-table aasm_state: deposited / settled / sent / in_transit / pending / rejected / failed / reversed."
+      - name: reimbursement_report_name
+        description: "expense_payout rows: the reimbursement report's title."
+      - name: reimbursement_expense_memo
+        description: >
+          expense_payout rows: the per-expense memo — the human-readable
+          label for HCB-710 rows, whose ledger memo is an opaque short code.
       - name: card_last4
         description: "Last 4 digits of the card, for card transactions."
       - name: charge_method
