@@ -125,10 +125,10 @@ classified AS (
         l.dest_org_name,
         l.counterparty_name,
         l.is_internal_transfer,
-        -- Who initiated it, where HCB records one: the requesting user for
-        -- disbursements, the creating user otherwise. Card swipes have no
-        -- user here (that would need raw_stripe_transactions, not mirrored).
-        COALESCE(l.requested_by_name, l.transacting_user_name) AS initiated_by_name,
+        -- Who initiated it, per the ledger: the requesting user for
+        -- disbursements, the creating user otherwise. Card swipes get their
+        -- spender from hcb_code_enrichment in the final SELECT instead.
+        COALESCE(l.requested_by_name, l.transacting_user_name) AS ledger_initiated_by_name,
         l.ach_payment_for,
 
         CASE
@@ -230,7 +230,7 @@ offsets AS (
         NULL::text AS dest_org_name,
         'Marketing (' || c.org_slug || ')' AS counterparty_name,
         FALSE AS is_internal_transfer,
-        NULL::text AS initiated_by_name,
+        NULL::text AS ledger_initiated_by_name,
         NULL::text AS ach_payment_for,
         'marketing_offset' AS spend_bucket,
         TRUE AS is_synthetic_offset,
@@ -277,7 +277,7 @@ backfill_rows AS (
         NULL::text AS dest_org_name,
         bp.person_name AS counterparty_name,
         FALSE AS is_internal_transfer,
-        NULL::text AS initiated_by_name,
+        NULL::text AS ledger_initiated_by_name,
         NULL::text AS ach_payment_for,
         'marketing_backfill' AS spend_bucket,
         FALSE AS is_synthetic_offset,
@@ -374,7 +374,7 @@ backfill_offsets AS (
         NULL::text AS dest_org_name,
         'Marketing (Videos DB backfill)' AS counterparty_name,
         FALSE AS is_internal_transfer,
-        NULL::text AS initiated_by_name,
+        NULL::text AS ledger_initiated_by_name,
         NULL::text AS ach_payment_for,
         'marketing_offset' AS spend_bucket,
         TRUE AS is_synthetic_offset,
@@ -403,14 +403,22 @@ unioned AS (
 
 SELECT
     c.*,
-    -- Display enrichment: receipt status, tags, and spent-vs-settled timing
-    -- from the code's HCB page. NULL / 0-receipt for synthetic rows (their
-    -- pseudo-codes have no HCB page).
+    -- Display enrichment: receipt status, tags, spent-vs-settled timing, and
+    -- card detail from the code's HCB page. NULL / 0-receipt for synthetic
+    -- rows (their pseudo-codes have no HCB page).
     COALESCE(e.receipt_count, 0) AS receipt_count,
     COALESCE(e.receipt_marked_no_or_lost, FALSE) AS receipt_marked_no_or_lost,
     e.tag_labels,
     e.spent_date,
     e.settled_after_days,
+    -- Who made the payment: the ledger's user (disbursements, transfers)
+    -- else the cardholder who swiped.
+    COALESCE(c.ledger_initiated_by_name, e.card_user_name) AS initiated_by_name,
+    e.card_last4,
+    e.charge_method,
+    e.charge_wallet,
+    e.merchant_country,
+    e.merchant_category,
     -- Clickable HCB transaction page. Real rows link to their own transaction
     -- (/hcb/<code> resolves full HCB-xxx-xxx codes). Synthetic rows (OFFSET-,
     -- BACKFILL-) have no HCB page of their own, so they link to the linked

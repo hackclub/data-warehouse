@@ -4,8 +4,18 @@ models:
   - name: hcb_code_enrichment
     description: >
       Per-hcb_code display enrichment for transaction lists: receipt status,
-      user tags, and spent-vs-settled timing. One row per hcb_code, so ledger
-      joins never fan out.
+      user tags, spent-vs-settled timing, and card-transaction detail
+      (merchant name/city/country/category, charge method + wallet, card
+      last4/name/type, and the cardholder's name/email) from the raw Stripe
+      transaction mirrors. One row per hcb_code, so ledger joins never fan
+      out.
     columns:
       - name: hcb_code
         tests: [unique, not_null]
+      - name: charge_method
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['keyed_in', 'swipe', 'chip', 'contactless', 'online']
+              config:
+                severity: warn

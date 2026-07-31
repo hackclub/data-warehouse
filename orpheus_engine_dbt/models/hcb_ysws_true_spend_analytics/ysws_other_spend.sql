@@ -36,7 +36,10 @@ WITH security_bounties AS (
         l.receipt_marked_no_or_lost,
         l.tag_labels,
         l.spent_date,
-        l.settled_after_days
+        l.settled_after_days,
+        l.card_last4,
+        l.charge_method,
+        l.charge_wallet
     FROM {{ ref('ysws_spend_ledger') }} l
     WHERE l.bucket = 'program'
       AND (
@@ -59,7 +62,10 @@ fulfillment_bounties AS (
         NULL::boolean AS receipt_marked_no_or_lost,
         NULL::text[] AS tag_labels,
         NULL::date AS spent_date,
-        NULL::integer AS settled_after_days
+        NULL::integer AS settled_after_days,
+        NULL::text AS card_last4,
+        NULL::text AS charge_method,
+        NULL::text AS charge_wallet
     FROM {{ source('flavortown', 'fulfillment_payout_runs') }} r
     WHERE r.aasm_state = 'approved'
 
@@ -78,7 +84,10 @@ fulfillment_bounties AS (
         NULL::boolean AS receipt_marked_no_or_lost,
         NULL::text[] AS tag_labels,
         NULL::date AS spent_date,
-        NULL::integer AS settled_after_days
+        NULL::integer AS settled_after_days,
+        NULL::text AS card_last4,
+        NULL::text AS charge_method,
+        NULL::text AS charge_wallet
     FROM {{ source('stardance', 'fulfillment_payout_runs') }} r
     WHERE r.aasm_state = 'approved'
 ),
@@ -96,12 +105,15 @@ server_charges AS (
             ELSE 'Cloudflare'
         END AS detail,
         ABS(l.amount_dollars)::numeric AS amount_dollars,
-        COALESCE(l.requested_by_name, l.transacting_user_name) AS initiated_by_name,
+        COALESCE(l.requested_by_name, l.transacting_user_name, e.card_user_name) AS initiated_by_name,
         COALESCE(e.receipt_count, 0) AS receipt_count,
         COALESCE(e.receipt_marked_no_or_lost, FALSE) AS receipt_marked_no_or_lost,
         e.tag_labels,
         e.spent_date,
-        e.settled_after_days
+        e.settled_after_days,
+        e.card_last4,
+        e.charge_method,
+        e.charge_wallet
     FROM {{ ref('ledger') }} l
     LEFT JOIN {{ ref('hcb_code_enrichment') }} e ON e.hcb_code = l.hcb_code
     WHERE l.org_slug = 'hq'
@@ -128,7 +140,10 @@ SELECT
     receipt_marked_no_or_lost,
     tag_labels,
     spent_date,
-    settled_after_days
+    settled_after_days,
+    card_last4,
+    charge_method,
+    charge_wallet
 FROM security_bounties
 
 UNION ALL
@@ -150,7 +165,10 @@ SELECT
     receipt_marked_no_or_lost,
     tag_labels,
     spent_date,
-    settled_after_days
+    settled_after_days,
+    card_last4,
+    charge_method,
+    charge_wallet
 FROM fulfillment_bounties
 
 UNION ALL
@@ -172,5 +190,8 @@ SELECT
     receipt_marked_no_or_lost,
     tag_labels,
     spent_date,
-    settled_after_days
+    settled_after_days,
+    card_last4,
+    charge_method,
+    charge_wallet
 FROM server_charges

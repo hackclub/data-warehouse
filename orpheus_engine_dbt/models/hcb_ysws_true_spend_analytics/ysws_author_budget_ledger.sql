@@ -50,9 +50,9 @@ SELECT
     l.dest_org_slug,
     l.dest_org_name,
     l.counterparty_name,
-    -- Who initiated it, where HCB records one (card swipes have no user in
-    -- the mirrored tables).
-    COALESCE(l.requested_by_name, l.transacting_user_name) AS initiated_by_name,
+    -- Who made the payment: the ledger's user (disbursements, transfers)
+    -- else the cardholder who swiped.
+    COALESCE(l.requested_by_name, l.transacting_user_name, e.card_user_name) AS initiated_by_name,
     l.ach_payment_for,
     -- Display enrichment from the code's HCB page.
     COALESCE(e.receipt_count, 0) AS receipt_count,
@@ -60,6 +60,11 @@ SELECT
     e.tag_labels,
     e.spent_date,
     e.settled_after_days,
+    e.card_last4,
+    e.charge_method,
+    e.charge_wallet,
+    e.merchant_country,
+    e.merchant_category,
 
     CASE
         WHEN l.flow_direction = 'inflow' THEN

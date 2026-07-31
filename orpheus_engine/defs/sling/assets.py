@@ -2447,8 +2447,16 @@ hcb_replication_config = {
         # --- Card/Authorization Tables ---
         "public.stripe_cards": None,
         "public.stripe_cardholders": None,
-        "public.stripe_authorizations": None,
+        "public.stripe_authorizations": None,  # Frozen upstream since 2023-09; kept for history
         "public.card_grants": None,
+        # Modern card-transaction detail (merchant, card, cardholder, auth
+        # method) lives in the stripe_transaction jsonb of these two tables.
+        # NOTE: the replication role has a 30s source-side statement_timeout;
+        # incremental catch-ups fit easily, but a from-scratch reload of
+        # raw_pending_stripe_transactions (~1 GB) needs the session override
+        # `options=-c statement_timeout=0` on the source connection.
+        "public.raw_stripe_transactions": None,
+        "public.raw_pending_stripe_transactions": None,
 
         # --- Tags/Metadata ---
         "public.tags": None,

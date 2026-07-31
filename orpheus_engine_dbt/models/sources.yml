@@ -115,6 +115,14 @@ sources:
       - name: receipts
         description: "Receipt attachments with AI-extracted merchant names, amounts, and memos."
         meta: { dagster: { deps: ['hcb_warehouse_mirror'] } }
+      # Raw Stripe card transactions (stripe_transaction jsonb carries
+      # merchant_data, card id, and — on pending — authorization_method/wallet)
+      - name: raw_stripe_transactions
+        description: "Settled Stripe Issuing transactions; source rows behind card canonical transactions."
+        meta: { dagster: { deps: ['hcb_warehouse_mirror'] } }
+      - name: raw_pending_stripe_transactions
+        description: "Stripe Issuing authorizations (pending card transactions)."
+        meta: { dagster: { deps: ['hcb_warehouse_mirror'] } }
 
   - name: slack
     schema: slack

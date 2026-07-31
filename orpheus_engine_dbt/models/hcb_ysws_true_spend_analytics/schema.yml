@@ -52,12 +52,21 @@ models:
           or unlinked backfills).
       - name: initiated_by_name
         description: >
-          Who initiated the transaction, where HCB records one: the requesting
-          user for disbursements, the creating user otherwise. NULL for card
-          swipes (that detail lives in raw_stripe_transactions, which is not
-          mirrored) and for synthetic rows.
+          Who made the payment: the requesting user for disbursements, the
+          creating user for transfers, else the cardholder who swiped. NULL
+          for synthetic rows.
       - name: ach_payment_for
         description: "The 'payment for' note on ACH transfers."
+      - name: card_last4
+        description: "Last 4 digits of the card, for card transactions."
+      - name: charge_method
+        description: "keyed_in / swipe / chip / contactless / online."
+      - name: charge_wallet
+        description: "apple_pay / google_pay / samsung_pay, when a wallet was used."
+      - name: merchant_country
+        description: "Card-network merchant country code (e.g. DE)."
+      - name: merchant_category
+        description: "Card-network merchant category slug (e.g. computer_software_stores)."
       - name: receipt_count
         description: "Receipts attached to the transaction's HCB page (via hcb_code_enrichment)."
       - name: receipt_marked_no_or_lost
