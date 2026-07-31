@@ -3219,6 +3219,9 @@ review_replication_config = {
     }
 }
 
+# NOTE 2026-07-31: this asset is NOT registered in definitions.py -- the source
+# DB is gone (see the config comment above). Kept for when/if a sanctioned
+# replacement endpoint exists.
 @dg.asset(
     name="review_warehouse_mirror",
     group_name="sling",

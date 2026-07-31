@@ -25,7 +25,12 @@ from .assets import (
     stardance_ahoy_warehouse_mirror,
     stardance_warehouse_mirror,
     hcb_warehouse_mirror,
-    review_warehouse_mirror,
+    # review_warehouse_mirror deliberately not imported: its source Postgres no
+    # longer exists (Shipwrights moved to MySQL on a third-party host, May
+    # 2026), so the asset failed every all-assets run for 2 months -- it was a
+    # big part of why materialize_all_assets_job had ZERO successful runs in
+    # the 14 days to 2026-07-31. Re-register it only once REVIEW_COOLIFY_URL
+    # points somewhere real; see the config comment in assets.py.
     joe_warehouse_mirror,
     auth_warehouse_mirror,  # absolute minimum permissions for monthly active stats
     sling_replication_resource,
@@ -58,7 +63,7 @@ defs = Definitions(
         stardance_ahoy_warehouse_mirror,
         stardance_warehouse_mirror,
         hcb_warehouse_mirror,
-        review_warehouse_mirror,
+        # review_warehouse_mirror: source DB gone, see import comment above.
         joe_warehouse_mirror,
         auth_warehouse_mirror,
     ],
