@@ -23,6 +23,32 @@ run_monitoring:
   start_timeout_seconds: 60  # Mark hung STARTING runs as FAILED within ~1 min
   cancel_timeout_seconds: 60  # Mark hung CANCELING runs as CANCELED within ~1 min
   max_resume_run_attempts: 0  # Run launcher doesn't support resuming, just mark as failed
+  # NOTE: per-job dagster/max_runtime tags (see orpheus_engine/schedules.py) rely
+  # on run monitoring being enabled here. They terminate hung runs (stuck locks,
+  # dead sources) so the skip-if-running schedules can't be starved forever.
+
+# One automatic retry for failed runs. Most scheduled-run failures here are
+# transient (source DB port flaps, brief connection exhaustion, API blips);
+# a single retry clears them without waiting for the next schedule tick.
+# Runs re-execute FROM_FAILURE by default, so successful steps don't repeat.
+run_retries:
+  enabled: true
+  max_retries: 1
+
+# Purge old schedule/sensor tick history. The instance DB reached 163 GB on
+# 2026-07-31 partly because nothing was ever purged (see also the
+# dagster_storage_janitor_job, which handles old runs + event logs).
+retention:
+  schedule:
+    purge_after_days:
+      skipped: 7
+      failure: 90
+      success: 30
+  sensor:
+    purge_after_days:
+      skipped: 7
+      failure: 90
+      success: 30
 
 telemetry:
   enabled: false
