@@ -16,6 +16,16 @@ run_coordinator:
   class: QueuedRunCoordinator
   config:
     max_concurrent_runs: 10
+    # At most one in-flight run per orpheus/serial-job tag value (each job
+    # tags itself with its own name -- see orpheus_engine/schedules.py). The
+    # skip-if-running schedules already stop scheduled ticks from overlapping,
+    # but they can't see manual UI runs; this queues those instead of letting
+    # them run over an in-progress sync (deadlocks, corrupted dlt/sling state).
+    tag_concurrency_limits:
+      - key: "orpheus/serial-job"
+        limit: 1
+        value:
+          applyLimitPerUniqueValue: true
 
 run_monitoring:
   enabled: true
