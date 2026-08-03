@@ -411,6 +411,206 @@ _HACKATIME_FULL_REFRESH_STREAMS = [
     "pghero_space_stats",
 ]
 
+# Hackatime's application indexes (hackclub/hackatime db/schema.rb @ 0af027e),
+# mirrored onto the warehouse copy so ad-hoc queries (hackatime-mcp, analytics)
+# get the same access paths as production - hackatime.heartbeats is tens of
+# millions of rows and unusable without them. Deliberate differences from
+# production, because the warehouse is an eventually-consistent mirror queried
+# with arbitrary SQL:
+#   - plain non-unique btrees only: uniqueness can't hold when soft-deletes
+#     land late, and partial WHERE / INCLUDE / DESC / gin-trgm variants are
+#     dropped - a plain btree on the same columns serves a superset of the
+#     queries those serve
+#   - prefix-redundant specs collapsed: (user_id, project) is served by
+#     (user_id, project, time, id)
+#   - PK / sync-cursor indexes already come from _replication_index_specs
+#   - expression indexes and indexes touching array columns skipped
+_HACKATIME_APP_INDEXES: dict[str, list[tuple[str, ...]]] = {
+    "active_storage_attachments": [
+        ("blob_id",),
+        ("record_type", "record_id", "name", "blob_id"),
+    ],
+    "active_storage_blobs": [
+        ("key",),
+    ],
+    "admin_api_keys": [
+        ("token",),
+        ("user_id", "name"),
+    ],
+    "api_keys": [
+        ("token",),
+        ("user_id", "name"),
+        ("user_id", "token"),
+    ],
+    "commits": [
+        ("repository_id",),
+        ("user_id", "created_at"),
+    ],
+    "dashboard_rollups": [
+        ("bucket_value",),
+        ("dimension",),
+        ("user_id", "dimension", "bucket_value_present", "bucket_value"),
+    ],
+    "deletion_requests": [
+        ("status",),
+        ("user_id", "status"),
+    ],
+    "email_addresses": [
+        ("email",),
+        ("user_id",),
+    ],
+    "email_verification_requests": [
+        ("email",),
+        ("user_id",),
+    ],
+    "flipper_features": [
+        ("key",),
+    ],
+    "flipper_gates": [
+        ("feature_key", "key", "value"),
+    ],
+    "goals": [
+        ("user_id",),
+    ],
+    "good_job_executions": [
+        ("active_job_id", "created_at"),
+        ("process_id", "created_at"),
+    ],
+    "good_job_settings": [
+        ("key",),
+    ],
+    "good_jobs": [
+        ("active_job_id", "created_at"),
+        ("batch_callback_id",),
+        ("batch_id",),
+        ("concurrency_key",),
+        ("cron_key", "created_at"),
+        ("cron_key", "cron_at"),
+        ("finished_at",),
+        ("locked_by_id",),
+        ("priority", "created_at"),
+        ("priority", "scheduled_at"),
+        ("queue_name", "scheduled_at"),
+        ("scheduled_at",),
+    ],
+    "heartbeat_import_runs": [
+        ("user_id", "created_at"),
+        ("user_id", "state"),
+    ],
+    "heartbeat_import_sources": [
+        ("user_id",),
+    ],
+    "heartbeats": [
+        ("category", "time"),
+        ("fields_hash",),
+        ("ip_address",),
+        ("ja4_id",),
+        ("machine",),
+        ("project", "time"),
+        ("source_type", "time", "user_id", "project"),
+        ("time", "source_type"),
+        ("time", "user_id"),
+        ("user_agent",),
+        ("user_id", "category", "time"),
+        ("user_id", "editor", "time"),
+        ("user_id", "id"),
+        ("user_id", "language", "time", "id"),
+        ("user_id", "operating_system", "time"),
+        ("user_id", "project", "time", "id"),
+        ("user_id", "source_type", "id"),
+        ("user_id", "time", "category"),
+        ("user_id", "time", "id"),
+        ("user_id", "time", "language"),
+        ("user_id", "time", "project"),
+    ],
+    "instance_import_sources": [
+        ("user_id",),
+    ],
+    "leaderboard_entries": [
+        ("leaderboard_id", "user_id"),
+    ],
+    "leaderboards": [
+        ("start_date", "period_type", "timezone_offset"),
+    ],
+    "mailkick_subscriptions": [
+        ("subscriber_type", "subscriber_id", "list"),
+    ],
+    "notable_requests": [
+        ("user_type", "user_id"),
+    ],
+    "oauth_access_grants": [
+        ("application_id",),
+        ("resource_owner_id",),
+        ("token",),
+    ],
+    "oauth_access_tokens": [
+        ("application_id",),
+        ("refresh_token",),
+        ("resource_owner_id",),
+        ("token",),
+    ],
+    "oauth_applications": [
+        ("owner_type", "owner_id"),
+        ("uid",),
+    ],
+    "project_labels": [
+        ("user_id", "project_key"),
+    ],
+    "project_repo_mappings": [
+        ("project_name",),
+        ("repository_id",),
+        ("user_id", "archived_at"),
+        ("user_id", "project_name"),
+    ],
+    "repo_host_events": [
+        ("provider",),
+        ("user_id", "provider", "created_at"),
+    ],
+    "repositories": [
+        ("url",),
+    ],
+    "sailors_log_notification_preferences": [
+        ("slack_uid", "slack_channel_id"),
+    ],
+    "sailors_logs": [
+        ("slack_uid",),
+    ],
+    "sign_in_tokens": [
+        ("token",),
+        ("user_id",),
+    ],
+    "trust_level_audit_logs": [
+        ("changed_by_id", "created_at"),
+        ("user_id", "created_at"),
+    ],
+    "users": [
+        # prod pairs this with github_access_token for token-auth lookups;
+        # no warehouse query needs a secrets column as an index key
+        ("github_uid",),
+        ("hca_id",),
+        ("leaderboard_shadowbanned",),
+        ("leaderboard_shadowbanned_by_id",),
+        ("slack_uid",),
+        ("timezone", "trust_level"),
+        ("username",),
+    ],
+    "versions": [
+        ("item_type", "item_id"),
+    ],
+    "wakatime_mirrors": [
+        ("user_id", "endpoint_url"),
+    ],
+}
+
+
+def _hackatime_app_index_specs() -> list[tuple[str, str, tuple[str, ...]]]:
+    """Target index specs for Hackatime's mirrored application indexes."""
+    return [
+        ("hackatime", table_name, columns)
+        for table_name, specs in _HACKATIME_APP_INDEXES.items()
+        for columns in specs
+    ]
+
 
 def _safe_index_name(*parts: str) -> str:
     raw_name = "_".join(["idx", *parts])
@@ -496,16 +696,16 @@ def _replication_index_specs(
     return specs
 
 
-def _ensure_incremental_target_indexes(
+def _ensure_target_indexes(
     context: AssetExecutionContext,
-    replication_config: Mapping[str, Any],
+    index_specs: list[tuple[str, str, tuple[str, ...]]],
 ) -> None:
-    """Keep Sling incremental cursor lookups and merges off full-table scans."""
+    """CREATE INDEX CONCURRENTLY IF NOT EXISTS for (schema, table, columns)
+    specs, skipping tables no sync has created yet."""
     warehouse_url = os.getenv("WAREHOUSE_COOLIFY_URL")
     if not warehouse_url:
         raise ValueError("WAREHOUSE_COOLIFY_URL is required for the target index preflight")
 
-    index_specs = _replication_index_specs(replication_config)
     if not index_specs:
         return
 
@@ -543,6 +743,15 @@ def _ensure_incremental_target_indexes(
                 )
     finally:
         conn.close()
+
+
+def _ensure_incremental_target_indexes(
+    context: AssetExecutionContext,
+    replication_config: Mapping[str, Any],
+) -> None:
+    """Keep Sling incremental cursor lookups and merges off full-table scans."""
+    _ensure_target_indexes(context, _replication_index_specs(replication_config))
+
 
 # --- Define Replication Configuration ---
 hcer_public_github_data_replication_config = {
@@ -2565,6 +2774,7 @@ def hackatime_warehouse_mirror(
     """Replicates the entire Hackatime DB → warehouse in a single shot."""
     context.log.info("Starting Hackatime → warehouse Sling replication")
     _ensure_incremental_target_indexes(context, hackatime_replication_config)
+    _ensure_target_indexes(context, _hackatime_app_index_specs())
 
     # Iterate through the generator **without yielding** its events.
     for _ in sling.replicate(
