@@ -197,6 +197,18 @@ class TestJobGuardrails:
             )
             assert int(job.tags["dagster/max_runtime"]) > 0
 
+    def test_every_scheduled_job_is_serialized(self):
+        # docker_deploy/dagster.yaml limits runs to 1 per orpheus/serial-job
+        # tag value. Schedules already skip while a run is in flight, but
+        # manual UI runs bypass that; the tag makes them queue instead of
+        # overlapping (overlaps deadlock on warehouse locks and corrupt
+        # shared dlt/sling state).
+        for job in schedule_defs.jobs:
+            assert job.tags.get("orpheus/serial-job") == job.name, (
+                f"{job.name} must tag itself orpheus/serial-job=<its name> "
+                "to get the run-queue concurrency limit"
+            )
+
     def test_schedule_names_unchanged(self):
         # Schedule on/off state in the instance DB is keyed by name; renaming
         # them would silently disable prod schedules on deploy.

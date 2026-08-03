@@ -201,7 +201,10 @@ materialize_all_assets_job = dg.define_asset_job(
         - FREQUENT_SELECTION
         - HACKATIME_DAU_SELECTION
     ),
-    tags={"dagster/max_runtime": "21600"},  # 6 h
+    tags={
+        "dagster/max_runtime": "21600",  # 6 h
+        "orpheus/serial-job": "materialize_all_assets_job",
+    },
 )
 
 # 2. Every 6 hours schedule (30 minutes past every 6 hours, NY time)
@@ -215,7 +218,10 @@ materialize_all_assets_schedule = _make_skip_if_running_schedule(
 materialize_unified_ysws_job = dg.define_asset_job(
     name="materialize_unified_ysws_job",
     selection=UNIFIED_YSWS_SELECTION,
-    tags={"dagster/max_runtime": "3600"},  # 60 min
+    tags={
+        "dagster/max_runtime": "3600",  # 60 min
+        "orpheus/serial-job": "materialize_unified_ysws_job",
+    },
 )
 
 # 4. Every 15 minutes schedule for unified YSWS assets
@@ -229,20 +235,31 @@ unified_ysws_15min_schedule = _make_skip_if_running_schedule(
 materialize_hackatime_dau_job = dg.define_asset_job(
     name="materialize_hackatime_dau_job",
     selection=HACKATIME_DAU_SELECTION,
-    tags={"dagster/max_runtime": "14400"},  # 4 h
+    tags={
+        "dagster/max_runtime": "14400",  # 4 h
+        "orpheus/serial-job": "materialize_hackatime_dau_job",
+    },
 )
 
 hackatime_dau_hourly_schedule = _make_skip_if_running_schedule(
     name="hackatime_dau_hourly_schedule",
     job=materialize_hackatime_dau_job,
-    cron_schedule="10 * * * *",                            # hourly, offset from all-assets :30 runs
+    # Every 2 hours: the run's p90 is ~2.2h, so hourly ticks mostly hit the
+    # skip-if-running guard anyway, and each extra run is another chance to
+    # deadlock against the 6-hourly all-assets job's warehouse-wide scans.
+    # (Schedule name stays "hourly" -- renaming would disable it on deploy,
+    # see test_schedule_names_unchanged.)
+    cron_schedule="10 */2 * * *",                          # offset from all-assets :30 runs
 )
 
 # 6. Frequent sync job and schedule (every 15 minutes)
 materialize_frequent_job = dg.define_asset_job(
     name="materialize_frequent_job",
     selection=FREQUENT_SELECTION,
-    tags={"dagster/max_runtime": "3600"},  # 60 min
+    tags={
+        "dagster/max_runtime": "3600",  # 60 min
+        "orpheus/serial-job": "materialize_frequent_job",
+    },
 )
 
 frequent_15min_schedule = _make_skip_if_running_schedule(
