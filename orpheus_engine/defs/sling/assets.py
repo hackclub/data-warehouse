@@ -696,6 +696,47 @@ def _replication_index_specs(
     return specs
 
 
+def _drop_invalid_indexes(
+    context: AssetExecutionContext,
+    schema_name: str,
+) -> None:
+    """Drop INVALID indexes left by failed CREATE INDEX CONCURRENTLY attempts.
+
+    A concurrent index build that is interrupted (timeout, deadlock, crash)
+    leaves a non-functional INVALID index behind. IF NOT EXISTS sees the name
+    and skips, so re-running the create is a no-op — the broken index is
+    permanent unless explicitly dropped.
+    """
+    warehouse_url = os.getenv("WAREHOUSE_COOLIFY_URL")
+    if not warehouse_url:
+        return
+
+    conn = psycopg2.connect(warehouse_url)
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT c.relname
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_index i ON i.indexrelid = c.oid
+                WHERE n.nspname = %s AND NOT i.indisvalid
+            """, (schema_name,))
+            invalid = [row[0] for row in cur.fetchall()]
+            if not invalid:
+                return
+            context.log.warning(
+                "Dropping %d INVALID indexes in %s: %s",
+                len(invalid), schema_name, ", ".join(invalid),
+            )
+            for idx_name in invalid:
+                cur.execute(sql.SQL("DROP INDEX IF EXISTS {}.{}").format(
+                    sql.Identifier(schema_name), sql.Identifier(idx_name),
+                ))
+    finally:
+        conn.close()
+
+
 def _ensure_target_indexes(
     context: AssetExecutionContext,
     index_specs: list[tuple[str, str, tuple[str, ...]]],
@@ -2774,7 +2815,6 @@ def hackatime_warehouse_mirror(
     """Replicates the entire Hackatime DB → warehouse in a single shot."""
     context.log.info("Starting Hackatime → warehouse Sling replication")
     _ensure_incremental_target_indexes(context, hackatime_replication_config)
-    _ensure_target_indexes(context, _hackatime_app_index_specs())
 
     # Iterate through the generator **without yielding** its events.
     for _ in sling.replicate(
@@ -2787,6 +2827,26 @@ def hackatime_warehouse_mirror(
     # Optionally attach run‑level metadata
     context.add_output_metadata({"replicated": True})
     return None
+
+
+@dg.asset(
+    name="hackatime_warehouse_app_indexes",
+    group_name="sling",
+    compute_kind="postgres",
+    deps=[dg.AssetKey("hackatime_warehouse_mirror")],
+)
+def hackatime_warehouse_app_indexes(
+    context: dg.AssetExecutionContext,
+) -> None:
+    """Creates Hackatime's application indexes on the warehouse copy.
+
+    Runs as a downstream dependency of hackatime_warehouse_mirror so that
+    index creation never blocks the Sling sync. If this asset fails or times
+    out, heartbeats keep flowing — queries are just slower until indexes land.
+    """
+    _drop_invalid_indexes(context, "hackatime")
+    _ensure_target_indexes(context, _hackatime_app_index_specs())
+
 
 @dg.asset(
     name="hcer_public_github_data_warehouse_mirror",
