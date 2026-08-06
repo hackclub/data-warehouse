@@ -1,6 +1,7 @@
 from dagster import Definitions
 from .assets import (
     hackatime_warehouse_mirror,
+    hackatime_warehouse_app_indexes,
     hcer_public_github_data_warehouse_mirror,
     journey_warehouse_mirror,
     shipwrecked_the_bay_warehouse_mirror,
@@ -39,6 +40,7 @@ from .assets import (
 defs = Definitions(
     assets=[
         hackatime_warehouse_mirror,
+        hackatime_warehouse_app_indexes,
         hcer_public_github_data_warehouse_mirror,
         journey_warehouse_mirror,
         shipwrecked_the_bay_warehouse_mirror,
