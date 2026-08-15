@@ -220,6 +220,16 @@ class TestJobGuardrails:
             "frequent_15min_schedule",
         }
 
+    def test_stardance_apm_telemetry_is_not_mirrored(self):
+        # These tables contain tens of millions of disposable request/job
+        # traces. A requests COPY wedged warehouse readers for hours on
+        # 2026-08-15, so keep them out of the frequent Stardance mirror.
+        from orpheus_engine.defs.sling.assets import stardance_replication_config
+
+        streams = stardance_replication_config["streams"]
+        assert streams["public.active_insights_requests"] == {"disabled": True}
+        assert streams["public.active_insights_jobs"] == {"disabled": True}
+
 
 # ---------------------------------------------------------------------------
 # Storage janitor

@@ -1289,6 +1289,16 @@ stardance_replication_config = {
         "public.pg_stat_statements": {"disabled": True},
         "public.pg_stat_statements_info": {"disabled": True},
 
+        # --- Disabled: ActiveInsights APM telemetry ---
+        # These tables are operational request/job traces rather than app data,
+        # and nothing in this repository consumes the warehouse copies. On
+        # 2026-08-15, copying the 55M-row requests table ran for nearly four
+        # hours and held locks that backed up 112 warehouse sessions, including
+        # readers of the unified YSWS NPS table. Keep the existing warehouse
+        # data, but do not refresh either high-volume telemetry table.
+        "public.active_insights_requests": {"disabled": True},
+        "public.active_insights_jobs": {"disabled": True},
+
         # --- Sensitive: explicit column allow-list (excludes ciphertext/bidx/token) ---
         "public.users": {
             "select": [
