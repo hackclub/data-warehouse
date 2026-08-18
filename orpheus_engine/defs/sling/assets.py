@@ -2488,10 +2488,12 @@ carnival_replication_config = {
 # --- Attend Database Replication Configuration ---
 # Attend (attend.hackclub.com) manages in-person attendees at HQ events: check-in
 # scans, waivers (DocuSeal), travel, rooming, guardian consents, boarding passes.
-# The Rails app + DB live on Coolify worker "a" (project leo-at-attend, database
-# m08k0woo8cwkk8oocoso4w8w), published by Coolify's DB proxy on host port 67. The
-# connection URL uses the worker's Tailscale IP (100.80.243.122) because the proxy
-# speaks unencrypted postgres (sslmode=disable is Tailscale-only here).
+# The Rails app + DB migrated off Coolify to Orchard in Aug 2026 (project
+# "attend", namespace ysws-attend, CNPG cluster pg-attend-db). Reach it on the
+# Orchard public endpoint with sslmode=require -- the old Coolify DB proxy on
+# worker "a" port 67 is gone, so the pre-migration Tailscale URL just gets
+# "connection refused". The env var is still named ATTEND_COOLIFY_URL for
+# historical reasons; only its value changed.
 #
 # This DB holds unusually sensitive PII for minors, so streams are an explicit
 # allow-list (NO public.* wildcard): a new table upstream stays out of the
@@ -2524,7 +2526,7 @@ attend_replication_config = {
                 "id", "created_at", "docuseal_consent_template_id",
                 "docuseal_participant_template_id", "docuseal_waiver_template_id",
                 "ends_at", "location_address", "location_city", "location_country",
-                "location_latitude", "location_longitude", "luma_event_id", "name",
+                "location_latitude", "location_longitude", "name",
                 "registration_close_at", "registration_open_at", "slug", "starts_at",
                 "support_email", "timezone", "updated_at",
                 "docuseal_minor_waiver_template_id", "docuseal_adult_waiver_template_id",
@@ -2533,6 +2535,8 @@ attend_replication_config = {
                 "airtable_sync_source_id", "airtable_sync_table_id", "airtable_synced_at",
                 "docuseal_host",
             ],  # Excludes api_key_digest, luma_api_key_encrypted, config (free-form jsonb)
+                # Dropped upstream (2026-08): luma_event_id -- Attend removed its
+                # Luma integration columns; do not re-add without a schema check.
         },
         "public.users": {
             "select": [
@@ -2548,11 +2552,13 @@ attend_replication_config = {
             "select": [
                 "id", "airtable_record_id",
                 "code_of_conduct_accepted_at", "created_at", "event_id",
-                "luma_guest_id", "luma_sync_error", "onboarding_step",
+                "onboarding_step",
                 "participant_id", "status", "updated_at", "onboarding_completed_at",
                 "slack_user_id", "nfc_badge_assigned_at", "nfc_badge_assigned_by_id",
             ],  # Excludes nfc_badge_token (badge auth), onboarding_payload
                 # (free-form answers), code_of_conduct_signature
+                # Dropped upstream (2026-08): luma_guest_id, luma_sync_error --
+                # Attend removed its Luma integration columns.
                 # Dropped upstream: checked_in_at. Attend replaced the denormalized
                 # check-in timestamp with the scans model -- derive check-in from
                 # attend.scans joined to attend.scan_contexts where checks_in IS TRUE
