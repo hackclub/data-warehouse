@@ -353,6 +353,13 @@ def test_freshness_is_shown_with_both_clocks():
     assert "30 minutes ago" in index
 
 
+def test_freshness_row_reads_label_age_description_date():
+    index = _render()["index.html"]
+    row = index.split("<tr><td>HCB data pulled</td>")[1].split("</tr>")[0]
+    assert row.index("5 hours ago") < row.index("last successful run")
+    assert row.index("last successful run") < row.index("2026-08-18 07:00 UTC")
+
+
 def test_stale_mirror_still_readable_from_the_clocks():
     """No prose warning any more; the pulled-at row has to carry the age."""
     data = _site_data()

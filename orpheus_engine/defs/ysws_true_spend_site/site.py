@@ -323,10 +323,13 @@ def _freshness_table(data: SiteData, generated_at: datetime) -> str:
          "last rebuild of the true-spend models"),
         ("This page built", generated_at, ""),
     ]
+    # Age first: how stale the number is matters more than the wall-clock
+    # stamp, which sits last for anyone who needs the exact moment.
     body = "".join(
-        f"<tr><td>{esc(label)}</td><td>{esc(fmt_stamp(value))}</td>"
+        f"<tr><td>{esc(label)}</td>"
         f"<td>{esc(ago(value, generated_at))}</td>"
-        f'<td class="note">{esc(note)}</td></tr>'
+        f'<td class="note">{esc(note)}</td>'
+        f"<td>{esc(fmt_stamp(value))}</td></tr>"
         for label, value, note in rows
     )
     return f"<table>{body}</table>"
