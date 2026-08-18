@@ -331,11 +331,6 @@ def build_index_document(
             "newest_hcb_record_held": _iso(fresh.hcb_data_through),
             "spend_recalculated": _iso(fresh.recalculated_at),
             "page_built": _iso(generated_at),
-            "mapping_contract": (
-                "A program owns the HCB organization its Unified YSWS DB record "
-                "links to, plus every HCB sub-organization beneath it. Nothing "
-                "else is matched; the gaps are listed in this document."
-            ),
             "transaction_detail": (
                 "Mirrors hcb.hackclub.com: names published, email addresses "
                 "removed, organizations outside HCB transparency mode summarised "

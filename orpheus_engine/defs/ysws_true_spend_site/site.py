@@ -666,7 +666,10 @@ files, no auth. Amounts are US dollars, dates ISO-8601, timestamps UTC.
 
 ## Mapping contract
 
-{meta["mapping_contract"]}
+A program owns the HCB organization its Unified YSWS DB record links to, plus
+every HCB sub-organization beneath it. Nothing else is matched; the gaps are in
+index.json under ysws_programs_with_no_linked_hcbs and
+hcb_orgs_no_program_claims.
 
 ## Transaction detail
 
