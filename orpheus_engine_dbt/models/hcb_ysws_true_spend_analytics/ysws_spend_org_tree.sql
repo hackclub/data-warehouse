@@ -9,10 +9,12 @@
     descended recursively from the program root.
 
     Descent rules:
-    - STOP at any org that is itself another program's root. This is what keeps
-      Outpost (= stardance-hardware) out of Stardance's tree and Campfire
-      Flagship (its own Airtable program) out of the campfire umbrella tree,
-      and it generalizes to any future program funded out of a sub-org.
+    - STOP at any org that is itself another canonical program root. Branded
+      satellites (campfire-flagship under campfire) have already been folded
+      into their umbrella by ysws_spend_programs, so they stay in the umbrella
+      tree rather than cutting a hole in it. Programs merely banked under
+      another program's org (Sleepover under Athena) are still their own roots
+      and so remain boundaries here, as do manual roots like distinct funds.
     - STOP at personal author/reviewer pots (ysws-budget-*, ysws-resolution-<x>,
       names containing budget/earnings). Transfers into them are category B in
       the ledger — money for a person's future events, not this program's spend.

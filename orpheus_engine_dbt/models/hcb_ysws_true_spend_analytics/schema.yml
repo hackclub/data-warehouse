@@ -3,9 +3,10 @@ version: 2
 models:
   - name: ysws_spend_programs
     description: >
-      YSWS spend program registry: one row per program root HCB org. Roots come
-      from Airtable ysws_programs HCB links plus manual entries (daydream,
-      campfire, Outpost = stardance-hardware).
+      YSWS spend program registry: one row per canonical program root HCB org.
+      Roots come from Airtable ysws_programs HCB links plus exceptional manual
+      entries. Nested Airtable roots roll up to their highest registered HCB
+      ancestor through hcb.events.parent_id.
     columns:
       - name: root_event_id
         tests: [unique, not_null]
@@ -15,8 +16,8 @@ models:
   - name: ysws_spend_org_tree
     description: >
       Every HCB org in each program's tree, discovered via hcb.events.parent_id
-      recursive descent. Descent stops at other programs' roots and at personal
-      author/reviewer pots. Grain: (root_event_id, event_id).
+      recursive descent. Descent stops at other canonical program roots and at
+      personal author/reviewer pots. Grain: (root_event_id, event_id).
     columns:
       - name: event_id
         description: "Belongs to exactly one program tree."
