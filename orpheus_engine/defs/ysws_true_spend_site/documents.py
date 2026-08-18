@@ -26,8 +26,6 @@ from .data import SiteData
 from .freshness import Freshness
 
 HCB_ORG_URL = "https://hcb.hackclub.com/{slug}"
-REPO_URL = "https://github.com/hackclub/ysws-true-spend"
-SOURCE_URL = "https://github.com/hackclub/data-warehouse"
 
 # See site.py's publication policy: HCB publishes names but never email
 # addresses, and publishes nothing at all for organizations outside
@@ -336,8 +334,6 @@ def build_index_document(
                 "removed, organizations outside HCB transparency mode summarised "
                 "rather than listed."
             ),
-            "site": REPO_URL,
-            "source": SOURCE_URL,
         },
         "ysws_programs_with_linked_hcbs": [s for s in summaries if s["is_ysws_program"]],
         "ysws_programs_with_no_linked_hcbs": [

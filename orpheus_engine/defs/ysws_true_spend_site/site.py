@@ -24,8 +24,6 @@ from .documents import (
     index_summary,
 )
 
-REPO_URL = "https://github.com/hackclub/ysws-true-spend"
-
 # Publication policy is enforced in documents.py (emails stripped, private orgs
 # summarised) so the JSON and the HTML are redacted identically. This flag only
 # controls whether the name columns are rendered at all.
@@ -675,8 +673,8 @@ hcb_orgs_no_program_claims.
 
 {meta["transaction_detail"]}
 
-Site: {meta["site"]}
-Source: {meta["source"]} (asset ysws_true_spend_site)
+Site: https://github.com/hackclub/ysws-true-spend
+Source: https://github.com/hackclub/data-warehouse (asset ysws_true_spend_site)
 """
 
 
