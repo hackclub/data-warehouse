@@ -372,7 +372,7 @@ def test_homepage_sections_are_collapsible_and_in_order():
     assert "<details><summary><h2>HCB orgs no program claims" in index
     # the content is all still there
     assert "som-sticker-shipments" in index
-    assert "A mapped program sent it money" in index
+    assert "took money from programs" in index
     assert "Outpost" in index
     assert "No HCB link on the Unified YSWS DB record" in index
 
@@ -396,10 +396,22 @@ def test_marketing_is_out_of_the_ysws_program_table():
     assert "YSWS Programs w/ Linked HCBs (1)" in index
 
 
+def test_unmatched_table_is_width_constrained():
+    """9 nowrap columns ran off the screen; it is a fixed-layout table now."""
+    index = _render()["index.html"]
+    section = index.split("HCB orgs no program claims")[1]
+    assert 'class="sortable fixed"' in section
+    assert "<colgroup>" in section
+    widths = [int(w.split("%")[0]) for w in section.split('style="width:')[1:9]]
+    assert sum(widths) == 100, widths
+
+
 def test_homepage_carries_no_explanatory_prose_blocks():
     """Zach stripped the intro, the sort hint and the totals table."""
     index = _render()["index.html"]
     for gone in (
+        "was sent from mapped programs into these orgs",
+        "usually correct as-is",
         "What each YSWS program actually spent",
         "Click a column heading to sort",
         "expand all",

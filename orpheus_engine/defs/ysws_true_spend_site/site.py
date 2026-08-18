@@ -54,6 +54,10 @@ th, td { padding: .1em .6em .1em 0; text-align: left; vertical-align: top;
 td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 td.memo { white-space: normal; max-width: 34rem; }
 td.wrap { white-space: normal; max-width: 26rem; }
+table.fixed { table-layout: fixed; width: 100%; max-width: 100%; }
+table.fixed th, table.fixed td { white-space: normal; overflow-wrap: anywhere;
+            padding: .15em .5em .15em 0; vertical-align: top; }
+table.fixed td.n, table.fixed th.n { white-space: nowrap; }
 tr.excluded td { color: #666; }
 thead th { border-bottom: 1px solid #999; }
 table.sortable thead th { cursor: pointer; user-select: none; }
@@ -472,10 +476,9 @@ def render_index(data: SiteData, generated_at: datetime) -> str:
 # --- unmatched --------------------------------------------------------------
 
 UNMATCHED_REASONS = {
-    "parent_of_mapped_root": "Its sub-org is a linked program, but it is not linked itself "
-                             "(the Unified YSWS DB link probably points one level too deep)",
-    "funded_by_mapped_program": "A mapped program sent it money, but no program claims it",
-    "funds_mapped_program": "It sent money into a mapped program while belonging to none",
+    "parent_of_mapped_root": "parent of a linked program",
+    "funded_by_mapped_program": "took money from programs",
+    "funds_mapped_program": "sent money into programs",
 }
 
 GAP_TYPES = {
@@ -486,7 +489,7 @@ GAP_TYPES = {
 }
 
 
-def _related(value: Any, limit: int = 4) -> str:
+def _related(value: Any, limit: int = 2) -> str:
     """Program lists can run to 200 names (the ysws umbrella); trim for reading."""
     names = [n.strip() for n in str(value or "").split(",") if n.strip()]
     if len(names) <= limit:
@@ -526,35 +529,41 @@ def render_unlinked_programs_section(data: SiteData) -> str:
 
 
 def render_unmatched_orgs_section(data: SiteData) -> str:
-    """HCB orgs that touch a mapped program but belong to none."""
+    """
+    HCB orgs that touch a mapped program but belong to none.
+
+    Laid out to fit a screen: fixed column widths that add to 100%, the org's
+    name and slug in one cell (the slug is the link), short reason tags instead
+    of sentences, and wrapping text everywhere except the money columns.
+    """
     rows = "".join(
         "<tr>"
-        f'<td>{_link(o["hcb_url"], o["org_slug"])}</td>'
-        f'<td>{esc(o["org_name"])}</td>'
-        f'<td>{esc(UNMATCHED_REASONS.get(o["reason"], o["reason"]))}</td>'
-        f'<td>{esc(o["parent_slug"] or "")}</td>'
-        f'{_num_cell(o["dollars_from_programs"], money)}'
-        f'{_num_cell(o["dollars_to_programs"], money)}'
-        f'{_num_cell(o["gross_outflow_dollars"], money)}'
-        f'{_num_cell(o["balance_dollars"], money)}'
+        f'<td class="wrap">{esc(o["org_name"] or o["org_slug"])}<br>'
+        f'{_link(o["hcb_url"], o["org_slug"])}</td>'
+        f'<td class="wrap">{esc(UNMATCHED_REASONS.get(o["reason"], o["reason"]))}</td>'
+        f'<td class="wrap">{esc(o["parent_slug"] or "")}</td>'
+        f'{_num_cell(o["dollars_from_programs"], money0)}'
+        f'{_num_cell(o["dollars_to_programs"], money0)}'
+        f'{_num_cell(o["gross_outflow_dollars"], money0)}'
+        f'{_num_cell(o["balance_dollars"], money0)}'
         f'<td class="wrap">{esc(_related(o["related_programs"]))}</td>'
         "</tr>"
         for o in data.unmatched_orgs
     )
-    received = sum(
-        (_dec(o["dollars_from_programs"]) for o in data.unmatched_orgs), Decimal(0)
-    )
     body = (
-        f'<p class="note">{money(received)} was sent from mapped programs into these '
-        "orgs. Fix = a Unified YSWS DB link, or an HCB parent organization. "
-        "Fiscal-host and HQ-operations orgs (hq, bank, fines, hq-usps-ops) are here "
-        "too and are usually correct as-is.</p>"
-        '<table class="sortable"><thead><tr>'
-        '<th data-type="text">Org</th><th data-type="text">Name</th>'
-        '<th data-type="text">Why it is here</th><th data-type="text">HCB parent</th>'
-        '<th class="n" data-type="num">$ from programs</th>'
-        '<th class="n" data-type="num">$ into programs</th>'
-        '<th class="n" data-type="num">Its own outflow</th>'
+        '<table class="sortable fixed">'
+        "<colgroup>"
+        '<col style="width:22%"><col style="width:13%"><col style="width:11%">'
+        '<col style="width:9%"><col style="width:9%"><col style="width:9%">'
+        '<col style="width:9%"><col style="width:18%">'
+        "</colgroup>"
+        "<thead><tr>"
+        '<th data-type="text">Org</th>'
+        '<th data-type="text">Why</th>'
+        '<th data-type="text">HCB parent</th>'
+        '<th class="n" data-type="num">From programs</th>'
+        '<th class="n" data-type="num">To programs</th>'
+        '<th class="n" data-type="num">Outflow</th>'
         '<th class="n" data-type="num">Balance</th>'
         '<th data-type="text">Related programs</th>'
         f"</tr></thead><tbody>{rows}</tbody></table>"
