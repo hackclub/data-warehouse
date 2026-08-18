@@ -339,15 +339,15 @@ def test_ago_formats_the_units_it_uses():
 
 
 def test_homepage_sections_are_collapsible_and_in_order():
-    """Linked programs, marketing, unlinked programs, orgs nobody claims."""
+    """Linked programs, unlinked programs, marketing, orgs nobody claims."""
     files = _render(_site_data_with_marketing())
     assert "unmatched.html" not in files
     index = files["index.html"]
     linked = index.index("YSWS Programs w/ Linked HCBs")
-    marketing = index.index("Marketing (HQ, not a YSWS program)")
     unlinked = index.index("YSWS Programs w/ No Linked HCBs")
+    marketing = index.index("<h2>YSWS - Marketing</h2>")
     orgs = index.index("HCB orgs no program claims")
-    assert linked < marketing < unlinked < orgs
+    assert linked < unlinked < marketing < orgs
     # every section header is a <summary>, and only the programs one starts open
     assert index.count("<summary><h2>") == 4
     assert "<details open><summary><h2>YSWS Programs w/ Linked HCBs" in index
@@ -370,7 +370,8 @@ def test_marketing_is_out_of_the_ysws_program_table():
 
     marketing_table = index.split('id="non-programs"')[1].split("</table>")[0]
     assert "Marketing (HQ)" in marketing_table
-    # the heading carries the caveat, so the row no longer repeats it
+    assert "<h2>YSWS - Marketing</h2>" in index
+    # the section note carries the caveat, so the row no longer repeats it
     assert "(not a YSWS program)</span>" not in index
 
     # a program count of 1 in the heading, marketing excluded

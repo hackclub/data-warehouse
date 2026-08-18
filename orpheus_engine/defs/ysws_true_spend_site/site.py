@@ -428,18 +428,18 @@ def render_index(data: SiteData, generated_at: datetime) -> str:
             open_by_default=True,
         ),
     ]
+    out.append(render_unlinked_programs_section(data))
     if other:
         out.append(
             _section(
-                "Marketing (HQ, not a YSWS program)",
-                '<p class="note">HQ marketing spend, tracked here because budget it '
-                "sends into a program is netted out of that program's true spend so "
-                "the two are not counted twice.</p>"
+                "YSWS - Marketing",
+                '<p class="note">HQ marketing spend. Not a YSWS program: it is tracked '
+                "here because budget it sends into a program is netted out of that "
+                "program's true spend so the two are not counted twice.</p>"
                 + _programs_table(other, data, "non-programs"),
             )
         )
     out += [
-        render_unlinked_programs_section(data),
         render_unmatched_orgs_section(data),
         f'<p class="note">{_link("data/programs.json", "programs.json")} '
         "has the same numbers as JSON.</p>",
