@@ -577,12 +577,26 @@ def test_llms_txt_points_at_the_json_without_restating_it():
     assert "spend_transactions" not in llms.split("## Data")[0]  # no field dump
 
 
-def test_index_links_the_json_without_dumping_its_fields():
-    index = _render()["index.html"]
-    assert 'href="llms.txt"' in index
-    assert 'href="index.json"' in index
+def test_data_pointer_is_prose_and_repeated_in_the_footer():
+    """
+    Summarisers keep sentences and drop link bars, so the pointer to the JSON
+    has to be a sentence -- and appear twice, since we do not control the
+    extractor.
+    """
+    files = _render()
+    index = files["index.html"]
+    sentence = "Every figure on this page is rendered from"
+    assert index.count(sentence) == 2
+    assert index.index(sentence) < index.index("<details")          # top
+    assert index.rindex(sentence) > index.rindex("</details>")      # and footer
+    assert "Machine-readable:" not in index                         # not a link bar
+    assert 'href="llms.txt"' in index and 'href="index.json"' in index
     assert "<pre>" not in index
-    assert "spend_transactions" not in index
+
+    # program pages point at their own document the same way
+    page = files["programs/fallout.html"]
+    assert sentence in page
+    assert 'href="../programs/fallout.json"' in page
 
 
 def test_documents_hold_what_their_page_holds_and_no_more():

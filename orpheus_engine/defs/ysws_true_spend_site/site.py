@@ -465,7 +465,7 @@ def render_index(index_document: Dict[str, Any]) -> str:
 
     out = [
         "<h1>YSWS true spend</h1>",
-        _machine_readable_line(),
+        _data_sentence(),
         _freshness_table(index_document["metadata"]),
         _section(f"YSWS Programs w/ Linked HCBs ({len(linked):,})",
                  _programs_table(linked, "programs"), open_by_default=True),
@@ -482,6 +482,7 @@ def render_index(index_document: Dict[str, Any]) -> str:
         ))
     out.append(_section(f"HCB orgs no program claims ({len(unmatched):,})",
                         _unmatched_table(unmatched)))
+    out.append(_data_sentence())
     return _page("YSWS true spend", "\n".join(out), script=True)
 
 
@@ -660,6 +661,7 @@ def render_program_page(document: Dict[str, Any]) -> str:
             _revenue_table(document["intra_tree_transactions"]),
             "</details>",
         ]
+    out.append(_data_sentence(document["json"], base="../"))
     return _page(f'{document["name"]} — YSWS true spend', "\n".join(out), script=True)
 
 
@@ -685,25 +687,23 @@ files, no auth. Amounts are US dollars, dates ISO-8601, timestamps UTC.
 
 ## Data
 
-/index.json
-    Metadata (when HCB was last pulled, when spend was last recalculated) plus
-    the four sections of the site: ysws_programs_with_linked_hcbs,
-    ysws_programs_with_no_linked_hcbs, ysws_marketing, and
-    hcb_orgs_no_program_claims. Each program carries its totals and its nested
-    HCB org tree, and links to its own document.
+The home page is rendered from /index.json, which holds the metadata (when HCB
+was last pulled, when the spend was last recalculated) and the four sections of
+the site: ysws_programs_with_linked_hcbs, ysws_programs_with_no_linked_hcbs,
+ysws_marketing, and hcb_orgs_no_program_claims. Each program there carries its
+totals and its nested HCB org tree, and points at its own document.
 
-/programs/{{program_name}}.json   e.g. /programs/{example_slug}.json
-    One program: totals, category breakdown, HCB org tree, and every
-    transaction counted -- the whole of its HTML page.
+Each program page is rendered from /programs/{{program_name}}.json, for example
+/programs/{example_slug}.json, which holds that program's totals, category
+breakdown, HCB org tree, and every transaction counted.
 
-/{DUCKDB_FILENAME}
-    The same data as a DuckDB database, for querying rather than walking the
-    JSON. Tables: programs, program_orgs, spend_transactions,
-    revenue_transactions, withheld_orgs, unmatched_orgs, unlinked_programs,
-    metadata.
+The same data is also published as a DuckDB database at /{DUCKDB_FILENAME}, for
+querying rather than walking the JSON, with tables programs, program_orgs,
+spend_transactions, revenue_transactions, withheld_orgs, unmatched_orgs,
+unlinked_programs and metadata:
 
-        duckdb {DUCKDB_FILENAME}
-        SELECT name, true_spend_dollars FROM programs ORDER BY 2 DESC LIMIT 10;
+    duckdb {DUCKDB_FILENAME}
+    SELECT name, true_spend_dollars FROM programs ORDER BY 2 DESC LIMIT 10;
 
 ## Mapping contract
 
@@ -721,10 +721,22 @@ Source: https://github.com/hackclub/data-warehouse (asset ysws_true_spend_site)
 """
 
 
-def _machine_readable_line() -> str:
-    return (f'<p>Machine-readable: {_link("llms.txt", "llms.txt")} · '
-            f'{_link("index.json", "index.json")} · '
-            f'{_link(DUCKDB_FILENAME, "duckdb")}</p>')
+def _data_sentence(json_path: str = "index.json", base: str = "") -> str:
+    """
+    The pointer to the machine-readable data, as a sentence rather than a row of
+    links. Extractors that summarise a page keep sentences and drop link bars,
+    so the links have to sit inside prose to survive -- the per-program "· json"
+    link came through for exactly that reason, sitting in a line of other text.
+    Repeated in the footer as well: when you do not control the extractor,
+    redundancy beats prominence.
+    """
+    return (
+        '<p class="note">Every figure on this page is rendered from '
+        f'{_link(base + json_path, json_path)}; '
+        f'{_link(base + "llms.txt", "llms.txt")} describes the schema and the '
+        "classification rules, and the same data is in "
+        f'{_link(base + DUCKDB_FILENAME, DUCKDB_FILENAME)} for querying with SQL.</p>'
+    )
 
 
 def render_readme(index_document: Dict[str, Any]) -> str:
