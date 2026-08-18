@@ -64,6 +64,8 @@ button.tg { font: inherit; border: 0; background: none; cursor: pointer;
             padding: 0 .3em 0 0; color: #333; }
 details { margin: .1em 0 .1em 1.1em; }
 summary { cursor: pointer; }
+summary h2 { display: inline; margin: 0; }
+details > summary { margin: 1.2em 0 .3em; }
 ul { list-style: none; padding-left: 1.1em; margin: .1em 0; }
 .tot { border-top: 1px solid #999; font-weight: bold; }
 .note { color: #555; max-width: 46rem; }
@@ -115,12 +117,12 @@ SCRIPT = """
     });
     group.forEach(function (rows) { rows.forEach(function (r) { tb.appendChild(r); }); });
   }
-  function toggle(btn, force) {
+  function toggle(btn) {
     var row = btn.closest('tr');
     if (!row) return;
     var detail = row.nextElementSibling;
     if (!detail || !detail.classList.contains('detail')) return;
-    var open = force === undefined ? detail.hasAttribute('hidden') : force;
+    var open = detail.hasAttribute('hidden');
     if (open) detail.removeAttribute('hidden'); else detail.setAttribute('hidden', '');
     btn.textContent = open ? '\u25be' : '\u25b8';
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -128,17 +130,6 @@ SCRIPT = """
   document.addEventListener('click', function (e) {
     var th = e.target.closest('table.sortable thead th');
     if (th) { sort(th.closest('table'), th); return; }
-    var all = e.target.closest('[data-expand-all]');
-    if (all) {
-      var open = all.dataset.open !== 'true';
-      all.dataset.open = open ? 'true' : 'false';
-      all.textContent = open ? 'collapse all' : 'expand all';
-      var table = document.getElementById(all.dataset.expandAll);
-      Array.prototype.forEach.call(table.querySelectorAll('button.tg'), function (b) {
-        toggle(b, open);
-      });
-      return;
-    }
     var btn = e.target.closest('button.tg');
     if (btn) { toggle(btn); }
   });
@@ -322,35 +313,7 @@ def _freshness_table(data: SiteData, generated_at: datetime) -> str:
         f'<td class="note">{esc(note)}</td></tr>'
         for label, value, note in rows
     )
-    out = [f"<table>{body}</table>"]
-
-    # A mirror that has not run in over a day makes every number on the site
-    # that old, however recently the models rebuilt. Say so, loudly.
-    pulled = fresh.hcb_pulled_at or fresh.hcb_data_through
-    if pulled is not None and (generated_at - pulled).total_seconds() > 36 * 3600:
-        out.append(
-            f'<p class="stale">Every number below is as of '
-            f"{esc(fmt_stamp(pulled))} ({esc(ago(pulled, generated_at))}): the HCB "
-            "mirror has not succeeded since then, so newer HCB activity is missing "
-            "no matter when the spend was last recalculated.</p>"
-        )
-    return "\n".join(out)
-
-
-def _mapping_gap_note(data: SiteData) -> str:
-    """One line on what is NOT attributed, linking to the fix-it page."""
-    orgs = data.unmatched_orgs
-    programs = data.unlinked_programs
-    if not orgs and not programs:
-        return ""
-    received = sum((_dec(o["dollars_from_programs"]) for o in orgs), Decimal(0))
-    return (
-        f'<p class="note">{len(orgs):,} HCB org(s) exchange money with mapped '
-        f"programs but belong to none ({money0(received)} sent to them), and "
-        f"{len(programs):,} Unified YSWS DB program(s) have no usable HCB link, so "
-        f'their spend is not attributed here. {_link("#unmatched", "See what is unmatched")}'
-        " at the bottom of this page.</p>"
-    )
+    return f"<table>{body}</table>"
 
 
 def _program_row(program: Dict[str, Any], page: str, tree: List[Dict[str, Any]]) -> str:
@@ -421,12 +384,6 @@ def _org_subtable(orgs: List[Dict[str, Any]], page: str) -> str:
 
 
 def render_index(data: SiteData, generated_at: datetime) -> str:
-    programs = data.programs
-    total_spend = sum((_dec(p["true_spend_dollars"]) for p in programs), Decimal(0))
-    total_balance = sum((_dec(p["balance_dollars"]) for p in programs), Decimal(0))
-    total_stated = sum((_dec(p["stated_outflow_dollars"]) for p in programs), Decimal(0))
-    total_projects = sum((_dec(p["weighted_projects"]) for p in programs), Decimal(0))
-
     headers = [
         ("Program", "text"),
         ("Orgs", "num"),
@@ -447,37 +404,25 @@ def render_index(data: SiteData, generated_at: datetime) -> str:
             f"programs/{page_slug(program['root_slug'], program['root_event_id'])}.html",
             data.orgs_by_program.get(program["root_slug"], []),
         )
-        for program in programs
+        for program in data.programs
+    )
+    programs_table = (
+        f'<table class="sortable" id="programs"><thead><tr>{head}</tr></thead>'
+        f"<tbody>{body}</tbody></table>"
     )
 
     out = [
         "<h1>YSWS true spend</h1>",
-        '<p class="note">What each YSWS program actually spent. HCB reports a '
-        "program's spend as money that left its account, which counts transfers to "
-        "reviewer budget orgs, author funds and the fiscal host as spend. This site "
-        "walks each program's HCB organization tree — the org its Unified YSWS DB "
-        "record links to, plus every sub-org of it — classifies every outflow, and "
-        "counts only the dollars that left for the outside world.</p>",
         _freshness_table(data, generated_at),
-        "<h2>Totals</h2>",
-        "<table>",
-        f'<tr><td>Programs</td><td class="n">{len(programs):,}</td></tr>',
-        f'<tr><td>Weighted projects</td><td class="n">{total_projects:,.1f}</td></tr>',
-        f'<tr><td>True spend</td><td class="n">{money(total_spend)}</td></tr>',
-        f'<tr><td>Balance still held</td><td class="n">{money(total_balance)}</td></tr>',
-        f'<tr><td>Spend as HCB states it (gross outflow)</td>'
-        f'<td class="n">{money(total_stated)}</td></tr>',
-        "</table>",
-        _mapping_gap_note(data),
-        "<h2>Programs</h2>",
-        '<p class="note">Click a column heading to sort. Click the arrow to see a '
-        "program's HCB org tree, or its name for every transaction counted. "
-        '<button data-expand-all="programs" data-open="false" class="tg">expand all</button></p>',
-        f'<table class="sortable" id="programs"><thead><tr>{head}</tr></thead>',
-        f"<tbody>{body}</tbody></table>",
+        _section(
+            f"YSWS Programs w/ Linked HCBs ({len(data.programs):,})",
+            programs_table,
+            open_by_default=True,
+        ),
+        render_unlinked_programs_section(data),
+        render_unmatched_orgs_section(data),
         f'<p class="note">{_link("data/programs.json", "programs.json")} '
         "has the same numbers as JSON.</p>",
-        render_unmatched_section(data),
     ]
     return _page("YSWS true spend", "\n".join(out), script=True)
 
@@ -507,14 +452,40 @@ def _related(value: Any, limit: int = 4) -> str:
     return ", ".join(names[:limit]) + f", +{len(names) - limit} more"
 
 
-def render_unmatched_section(data: SiteData) -> str:
-    """
-    The fix-it list, at the bottom of the homepage: every HCB org that touches a
-    mapped program without belonging to one, and every Unified YSWS DB program
-    whose HCB link cannot be used. Shown rather than attributed, because the
-    only fix is a corrected Airtable link or a corrected HCB parent org.
-    """
-    org_rows = "".join(
+def _section(title: str, body: str, open_by_default: bool = False) -> str:
+    """A collapsible top-level section. Native <details>, so it survives with JS off."""
+    return (
+        f"<details{' open' if open_by_default else ''}>"
+        f"<summary><h2>{title}</h2></summary>\n{body}\n</details>"
+    )
+
+
+def render_unlinked_programs_section(data: SiteData) -> str:
+    """YSWS programs whose Unified YSWS DB record has no usable HCB link."""
+    rows = "".join(
+        "<tr>"
+        f'<td>{esc(g["program_name"])}</td>'
+        f'<td>{esc(GAP_TYPES.get(g["gap_type"], g["gap_type"]))}</td>'
+        f'<td class="wrap">{esc(g["hcb_field"] or "")}</td>'
+        "</tr>"
+        for g in data.unlinked_programs
+    )
+    body = (
+        '<p class="note">No spend can be attributed to these until the link is '
+        "fixed in the Unified YSWS DB.</p>"
+        '<table class="sortable"><thead><tr>'
+        '<th data-type="text">Program</th><th data-type="text">Problem</th>'
+        '<th data-type="text">hcb field</th>'
+        f"</tr></thead><tbody>{rows}</tbody></table>"
+    )
+    return _section(
+        f"YSWS Programs w/ No Linked HCBs ({len(data.unlinked_programs):,})", body
+    )
+
+
+def render_unmatched_orgs_section(data: SiteData) -> str:
+    """HCB orgs that touch a mapped program but belong to none."""
+    rows = "".join(
         "<tr>"
         f'<td>{_link(o["hcb_url"], o["org_slug"])}</td>'
         f'<td>{esc(o["org_name"])}</td>'
@@ -528,50 +499,27 @@ def render_unmatched_section(data: SiteData) -> str:
         "</tr>"
         for o in data.unmatched_orgs
     )
-    program_rows = "".join(
-        "<tr>"
-        f'<td>{esc(g["program_name"])}</td>'
-        f'<td>{esc(GAP_TYPES.get(g["gap_type"], g["gap_type"]))}</td>'
-        f'<td class="wrap">{esc(g["hcb_field"] or "")}</td>'
-        "</tr>"
-        for g in data.unlinked_programs
-    )
     received = sum(
         (_dec(o["dollars_from_programs"]) for o in data.unmatched_orgs), Decimal(0)
     )
-
-    return f"""
-<h2 id="unmatched">Unmatched</h2>
-<p class="note">An HCB org counts as a program's money in exactly one way: the
-program's Unified YSWS DB record links to that org, and every sub-org beneath it
-comes along. Nothing else — no name matching, no guessing from who paid whom.
-Everything outside that rule is listed here instead of attributed, so the fix is
-either a corrected Unified YSWS DB link or a corrected HCB parent organization.</p>
-
-<h3>HCB orgs no program claims ({len(data.unmatched_orgs):,})</h3>
-<p class="note">Listed because they are structurally or financially attached to a
-mapped program: {money(received)} was sent from mapped programs into these orgs.
-Fiscal-host and HQ-operations orgs (hq, bank, fines, hq-usps-ops) appear here too
-and are usually correct as-is — they are shown rather than filtered because
-deciding which orgs "count" would be exactly the kind of guess this list exists
-to avoid.</p>
-<table class="sortable"><thead><tr>
-<th data-type="text">Org</th><th data-type="text">Name</th>
-<th data-type="text">Why it is here</th><th data-type="text">HCB parent</th>
-<th class="n" data-type="num">$ from programs</th>
-<th class="n" data-type="num">$ into programs</th>
-<th class="n" data-type="num">Its own outflow</th>
-<th class="n" data-type="num">Balance</th>
-<th data-type="text">Related programs</th>
-</tr></thead><tbody>{org_rows}</tbody></table>
-
-<h3>Unified YSWS DB programs with no usable HCB link ({len(data.unlinked_programs):,})</h3>
-<p class="note">None of their spend can be attributed until the link is fixed.</p>
-<table class="sortable"><thead><tr>
-<th data-type="text">Program</th><th data-type="text">Problem</th>
-<th data-type="text">hcb field</th>
-</tr></thead><tbody>{program_rows}</tbody></table>
-"""
+    body = (
+        f'<p class="note">{money(received)} was sent from mapped programs into these '
+        "orgs. Fix = a Unified YSWS DB link, or an HCB parent organization. "
+        "Fiscal-host and HQ-operations orgs (hq, bank, fines, hq-usps-ops) are here "
+        "too and are usually correct as-is.</p>"
+        '<table class="sortable"><thead><tr>'
+        '<th data-type="text">Org</th><th data-type="text">Name</th>'
+        '<th data-type="text">Why it is here</th><th data-type="text">HCB parent</th>'
+        '<th class="n" data-type="num">$ from programs</th>'
+        '<th class="n" data-type="num">$ into programs</th>'
+        '<th class="n" data-type="num">Its own outflow</th>'
+        '<th class="n" data-type="num">Balance</th>'
+        '<th data-type="text">Related programs</th>'
+        f"</tr></thead><tbody>{rows}</tbody></table>"
+    )
+    return _section(
+        f"HCB orgs no program claims ({len(data.unmatched_orgs):,})", body
+    )
 
 
 # --- program page -----------------------------------------------------------

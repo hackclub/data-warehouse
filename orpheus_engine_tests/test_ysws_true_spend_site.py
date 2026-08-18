@@ -299,16 +299,12 @@ def test_freshness_is_shown_with_both_clocks():
     assert "30 minutes ago" in index
 
 
-def test_stale_hcb_mirror_is_called_out():
-    """A mirror that has not run in days makes every number that old."""
+def test_stale_mirror_still_readable_from_the_clocks():
+    """No prose warning any more; the pulled-at row has to carry the age."""
     data = _site_data()
     data.freshness.hcb_pulled_at = GENERATED_AT - timedelta(days=12)
     index = render_site(data, GENERATED_AT)["index.html"]
     assert "12 days ago" in index
-    assert "has not succeeded since then" in index
-
-    fresh = _site_data()
-    assert "has not succeeded since then" not in render_site(fresh, GENERATED_AT)["index.html"]
 
 
 def test_ago_formats_the_units_it_uses():
@@ -319,17 +315,37 @@ def test_ago_formats_the_units_it_uses():
     assert ago(None, now) == ""
 
 
-def test_unmatched_lives_at_the_bottom_of_the_homepage():
+def test_homepage_sections_are_collapsible_and_in_order():
+    """Linked programs, then unlinked programs, then orgs nobody claims."""
     files = _render()
     assert "unmatched.html" not in files
     index = files["index.html"]
+    linked = index.index("YSWS Programs w/ Linked HCBs")
+    unlinked = index.index("YSWS Programs w/ No Linked HCBs")
+    orgs = index.index("HCB orgs no program claims")
+    assert linked < unlinked < orgs
+    # every section header is a <summary>, and only the programs one starts open
+    assert index.count("<summary><h2>") == 3
+    assert "<details open><summary><h2>YSWS Programs w/ Linked HCBs" in index
+    assert "<details><summary><h2>HCB orgs no program claims" in index
+    # the content is all still there
     assert "som-sticker-shipments" in index
     assert "A mapped program sent it money" in index
     assert "Outpost" in index
     assert "No HCB link on the Unified YSWS DB record" in index
-    # summary line up top jumps to it, and it really is last
-    assert 'href="#unmatched"' in index
-    assert index.index('id="unmatched"') > index.index('id="programs"')
+
+
+def test_homepage_carries_no_explanatory_prose_blocks():
+    """Zach stripped the intro, the sort hint and the totals table."""
+    index = _render()["index.html"]
+    for gone in (
+        "What each YSWS program actually spent",
+        "Click a column heading to sort",
+        "expand all",
+        "<h2>Totals</h2>",
+        "Spend as HCB states it",
+    ):
+        assert gone not in index, gone
 
 
 def test_no_methodology_page_anywhere():
