@@ -18,6 +18,7 @@ from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional
 
 from .data import SiteData
+from .freshness import Freshness
 
 REPO_URL = "https://github.com/hackclub/ysws-true-spend"
 HCB_ORG_URL = "https://hcb.hackclub.com/{slug}"
@@ -50,15 +51,98 @@ h1, h2, h3 { font-size: 1.1em; margin: 1.4em 0 .4em; }
 table { border-collapse: collapse; margin: .4em 0 1em; }
 th, td { padding: .1em .6em .1em 0; text-align: left; vertical-align: top;
          white-space: nowrap; }
-td.n, th.n { text-align: right; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 td.memo { white-space: normal; max-width: 34rem; }
+td.wrap { white-space: normal; max-width: 26rem; }
 tr.excluded td { color: #666; }
 thead th { border-bottom: 1px solid #999; }
+table.sortable thead th { cursor: pointer; user-select: none; }
+table.sortable thead th:hover { text-decoration: underline; }
+tr.detail > td { padding: .2em 0 .8em 1.4em; }
+tr.prog:hover { background: #f4f4f4; }
+button.tg { font: inherit; border: 0; background: none; cursor: pointer;
+            padding: 0 .3em 0 0; color: #333; }
 details { margin: .1em 0 .1em 1.1em; }
 summary { cursor: pointer; }
 ul { list-style: none; padding-left: 1.1em; margin: .1em 0; }
 .tot { border-top: 1px solid #999; font-weight: bold; }
 .note { color: #555; max-width: 46rem; }
+.stale { font-weight: bold; }
+.sub td { color: #333; }
+"""
+
+# Sorting and row expansion. Vanilla, ~40 lines, no dependencies: the site is
+# static files that must work from any host or a file:// path.
+SCRIPT = """
+(function () {
+  function pairs(tb) {
+    var out = [], rows = Array.prototype.slice.call(tb.rows);
+    rows.forEach(function (r) {
+      if (r.classList.contains('detail') && out.length) out[out.length - 1].push(r);
+      else out.push([r]);
+    });
+    return out;
+  }
+  function value(row, i, type) {
+    var cell = row.cells[i];
+    if (!cell) return type === 'num' ? null : '';
+    var raw = cell.dataset.v;
+    if (type === 'num') {
+      if (raw === undefined || raw === '') return null;
+      var n = parseFloat(raw);
+      return isNaN(n) ? null : n;
+    }
+    return (raw !== undefined ? raw : cell.textContent).trim().toLowerCase();
+  }
+  function sort(table, th) {
+    var head = Array.prototype.slice.call(th.parentNode.cells);
+    var i = head.indexOf(th), type = th.dataset.type || 'text';
+    var dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
+    head.forEach(function (h) {
+      delete h.dataset.dir;
+      h.textContent = h.textContent.replace(/ [\u25b2\u25bc]$/, '');
+    });
+    th.dataset.dir = dir;
+    th.textContent = th.textContent + (dir === 'asc' ? ' \u25b2' : ' \u25bc');
+    var tb = table.tBodies[0], group = pairs(tb);
+    group.sort(function (a, b) {
+      var x = value(a[0], i, type), y = value(b[0], i, type);
+      if (x === null && y === null) return 0;
+      if (x === null) return 1;   // blanks always last
+      if (y === null) return -1;
+      var c = x < y ? -1 : x > y ? 1 : 0;
+      return dir === 'asc' ? c : -c;
+    });
+    group.forEach(function (rows) { rows.forEach(function (r) { tb.appendChild(r); }); });
+  }
+  function toggle(btn, force) {
+    var row = btn.closest('tr');
+    if (!row) return;
+    var detail = row.nextElementSibling;
+    if (!detail || !detail.classList.contains('detail')) return;
+    var open = force === undefined ? detail.hasAttribute('hidden') : force;
+    if (open) detail.removeAttribute('hidden'); else detail.setAttribute('hidden', '');
+    btn.textContent = open ? '\u25be' : '\u25b8';
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  document.addEventListener('click', function (e) {
+    var th = e.target.closest('table.sortable thead th');
+    if (th) { sort(th.closest('table'), th); return; }
+    var all = e.target.closest('[data-expand-all]');
+    if (all) {
+      var open = all.dataset.open !== 'true';
+      all.dataset.open = open ? 'true' : 'false';
+      all.textContent = open ? 'collapse all' : 'expand all';
+      var table = document.getElementById(all.dataset.expandAll);
+      Array.prototype.forEach.call(table.querySelectorAll('button.tg'), function (b) {
+        toggle(b, open);
+      });
+      return;
+    }
+    var btn = e.target.closest('button.tg');
+    if (btn) { toggle(btn); }
+  });
+})();
 """
 
 
@@ -119,14 +203,36 @@ def _json_default(value: Any) -> Any:
     return str(value)
 
 
-def _page(title: str, body: str) -> str:
+def _page(title: str, body: str, script: bool = False) -> str:
     return (
         "<!doctype html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{esc(title)}</title>\n<style>{STYLE}</style>\n</head>\n<body>\n"
-        f"{body}\n</body>\n</html>\n"
+        f"{body}\n"
+        + (f"<script>{SCRIPT}</script>\n" if script else "")
+        + "</body>\n</html>\n"
     )
+
+
+def ago(then: Optional[datetime], now: datetime) -> str:
+    """'12 days ago' / '18 hours ago' / '4 minutes ago' / 'just now'."""
+    if then is None:
+        return ""
+    seconds = (now - then).total_seconds()
+    if seconds < 0:
+        return "just now"
+    for unit, size in (("day", 86400), ("hour", 3600), ("minute", 60)):
+        count = int(seconds // size)
+        if count >= 1:
+            return f"{count} {unit}{'s' if count != 1 else ''} ago"
+    return "just now"
+
+
+def fmt_stamp(value: Optional[datetime]) -> str:
+    if value is None:
+        return "unknown"
+    return value.strftime("%Y-%m-%d %H:%M UTC")
 
 
 # --- org tree ---------------------------------------------------------------
@@ -194,66 +300,273 @@ def render_org_tree(orgs: List[Dict[str, Any]], page: Optional[str] = None) -> s
 
 # --- index ------------------------------------------------------------------
 
-def _program_summary_line(program: Dict[str, Any], page: str) -> str:
-    return " ".join(
-        [
-            f"<strong>{esc(program['program_name'])}</strong>",
-            f"— spend {money0(program['true_spend_dollars'])}",
-            f"· revenue {money0(program['external_revenue_dollars'])}",
-            f"· balance {money0(program['balance_dollars'])}",
-            f"· {int(program['org_count'] or 0)} org{'s' if int(program['org_count'] or 0) != 1 else ''}",
-        ]
+def _freshness_table(data: SiteData, generated_at: datetime) -> str:
+    """
+    How old the numbers are, in two clocks: when we last pulled HCB, and when
+    the spend was last recalculated from that pull. Either can be the reason a
+    number looks wrong, so both are at the top of the page rather than buried.
+    """
+    fresh = data.freshness or Freshness()
+    rows = [
+        ("HCB data pulled", fresh.hcb_pulled_at,
+         "last successful run of the HCB → warehouse mirror"),
+        ("Newest HCB record held", fresh.hcb_data_through,
+         "most recent HCB row in the warehouse"),
+        ("Spend recalculated", fresh.recalculated_at,
+         "last rebuild of the true-spend models"),
+        ("This page built", generated_at, ""),
+    ]
+    body = "".join(
+        f"<tr><td>{esc(label)}</td><td>{esc(fmt_stamp(value))}</td>"
+        f"<td>{esc(ago(value, generated_at))}</td>"
+        f'<td class="note">{esc(note)}</td></tr>'
+        for label, value, note in rows
+    )
+    out = [f"<table>{body}</table>"]
+
+    # A mirror that has not run in over a day makes every number on the site
+    # that old, however recently the models rebuilt. Say so, loudly.
+    pulled = fresh.hcb_pulled_at or fresh.hcb_data_through
+    if pulled is not None and (generated_at - pulled).total_seconds() > 36 * 3600:
+        out.append(
+            f'<p class="stale">Every number below is as of '
+            f"{esc(fmt_stamp(pulled))} ({esc(ago(pulled, generated_at))}): the HCB "
+            "mirror has not succeeded since then, so newer HCB activity is missing "
+            "no matter when the spend was last recalculated.</p>"
+        )
+    return "\n".join(out)
+
+
+def _mapping_gap_note(data: SiteData) -> str:
+    """One line on what is NOT attributed, linking to the fix-it page."""
+    orgs = data.unmatched_orgs
+    programs = data.unlinked_programs
+    if not orgs and not programs:
+        return ""
+    received = sum((_dec(o["dollars_from_programs"]) for o in orgs), Decimal(0))
+    return (
+        f'<p class="note">{len(orgs):,} HCB org(s) exchange money with mapped '
+        f"programs but belong to none ({money0(received)} sent to them), and "
+        f"{len(programs):,} Unified YSWS DB program(s) have no usable HCB link, so "
+        f'their spend is not attributed here. {_link("unmatched.html", "See what is unmatched")}.</p>'
+    )
+
+
+def _program_row(program: Dict[str, Any], page: str, tree: List[Dict[str, Any]]) -> str:
+    """A program's table row, plus the hidden row holding its HCB org tree."""
+    org_count = int(program["org_count"] or 0)
+    name = esc(program["program_name"])
+    if not program.get("is_ysws_program", True):
+        name += ' <span class="note">(not a YSWS program)</span>'
+    cells = [
+        '<td><button class="tg" aria-expanded="false">\u25b8</button> '
+        + f'<a href="{esc(page)}">{name}</a></td>',
+        f'<td class="n" data-v="{org_count}">{org_count:,}</td>',
+        _num_cell(program["weighted_projects"], "{:,.1f}"),
+        _num_cell(program["true_spend_dollars"], money),
+        _num_cell(program["cost_per_weighted_hour"], money),
+        _num_cell(program["balance_dollars"], money),
+        f'<td>{_hcb_org_link(program["root_slug"])}</td>',
+    ]
+    detail = (
+        '<tr class="detail" hidden><td colspan="7">'
+        + _org_subtable(tree, page)
+        + "</td></tr>"
+    )
+    return f'<tr class="prog">' + "".join(cells) + "</tr>" + detail
+
+
+def _num_cell(value: Any, fmt) -> str:
+    """Right-aligned numeric cell carrying its raw value for sorting."""
+    if value is None:
+        return '<td class="n"></td>'
+    text = fmt(value) if callable(fmt) else fmt.format(float(value))
+    return f'<td class="n" data-v="{_dec(value)}">{esc(text)}</td>'
+
+
+def _org_subtable(orgs: List[Dict[str, Any]], page: str) -> str:
+    """
+    The program's HCB org tree, indented by depth, numbers still aligned.
+    Ordered by walking the tree so parents sit above their children.
+    """
+    if not orgs:
+        return '<span class="note">No orgs.</span>'
+    children = _tree_children(orgs)
+    ordered: List[Dict[str, Any]] = []
+
+    def walk(parent, depth):
+        for org in children.get(parent, []):
+            ordered.append((org, depth))
+            walk(org["event_id"], depth + 1)
+
+    walk(None, 0)
+    rows = "".join(
+        f'<tr class="sub">'
+        f'<td>{"&nbsp;" * 3 * depth}{esc(org["org_name"] or org["org_slug"])} '
+        f'<span class="note">({esc(org["org_slug"])})</span></td>'
+        f'<td class="n">{money(org["true_spend_dollars"])}</td>'
+        f'<td class="n">{money(org["balance_dollars"])}</td>'
+        f'<td class="n">{int(org["transaction_count"] or 0):,}</td>'
+        f'<td>{_hcb_org_link(org["org_slug"])}</td>'
+        f'<td>{_link(page + "#org-" + str(org["org_slug"]), "transactions")}</td>'
+        "</tr>"
+        for org, depth in ordered
+    )
+    return (
+        '<table><thead><tr><th>HCB org</th><th class="n">True spend</th>'
+        '<th class="n">Balance</th><th class="n">Txns</th><th></th><th></th>'
+        f"</tr></thead><tbody>{rows}</tbody></table>"
     )
 
 
 def render_index(data: SiteData, generated_at: datetime) -> str:
     programs = data.programs
     total_spend = sum((_dec(p["true_spend_dollars"]) for p in programs), Decimal(0))
-    total_revenue = sum((_dec(p["external_revenue_dollars"]) for p in programs), Decimal(0))
     total_balance = sum((_dec(p["balance_dollars"]) for p in programs), Decimal(0))
     total_stated = sum((_dec(p["stated_outflow_dollars"]) for p in programs), Decimal(0))
+    total_projects = sum((_dec(p["weighted_projects"]) for p in programs), Decimal(0))
+
+    headers = [
+        ("Program", "text"),
+        ("Orgs", "num"),
+        ("Weighted projects", "num"),
+        ("True spend", "num"),
+        ("$ / weighted hour", "num"),
+        ("Balance", "num"),
+        ("HCB", "text"),
+    ]
+    head = "".join(
+        f'<th class="n" data-type="{t}">{esc(h)}</th>' if t == "num"
+        else f'<th data-type="{t}">{esc(h)}</th>'
+        for h, t in headers
+    )
+    body = "".join(
+        _program_row(
+            program,
+            f"programs/{page_slug(program['root_slug'], program['root_event_id'])}.html",
+            data.orgs_by_program.get(program["root_slug"], []),
+        )
+        for program in programs
+    )
 
     out = [
         "<h1>YSWS true spend</h1>",
-        '<p class="note">What each YSWS program actually spent. HCB reports a program\'s '
-        "spend as money that left its account, which counts transfers to reviewer "
-        "budget orgs, author funds and the fiscal host as spend. This site walks each "
-        "program's real HCB sub-organization tree, classifies every outflow, and counts "
-        "only the dollars that left for the outside world. "
-        f'See {_link("methodology.html", "methodology")} for the category rules.</p>',
+        '<p class="note">What each YSWS program actually spent. HCB reports a '
+        "program's spend as money that left its account, which counts transfers to "
+        "reviewer budget orgs, author funds and the fiscal host as spend. This site "
+        "walks each program's HCB organization tree — the org its Unified YSWS DB "
+        "record links to, plus every sub-org of it — classifies every outflow, and "
+        "counts only the dollars that left for the outside world.</p>",
+        _freshness_table(data, generated_at),
+        "<h2>Totals</h2>",
         "<table>",
-        f'<tr><td>Programs</td><td class="n">{len(programs)}</td></tr>',
-        f'<tr><td>Total revenue (in from outside each tree)</td><td class="n">{money(total_revenue)}</td></tr>',
-        f'<tr><td>Total true spend</td><td class="n">{money(total_spend)}</td></tr>',
-        f'<tr><td>Total balance still held</td><td class="n">{money(total_balance)}</td></tr>',
-        f'<tr><td>Spend as HCB states it (gross outflow)</td><td class="n">{money(total_stated)}</td></tr>',
+        f'<tr><td>Programs</td><td class="n">{len(programs):,}</td></tr>',
+        f'<tr><td>Weighted projects</td><td class="n">{total_projects:,.1f}</td></tr>',
+        f'<tr><td>True spend</td><td class="n">{money(total_spend)}</td></tr>',
+        f'<tr><td>Balance still held</td><td class="n">{money(total_balance)}</td></tr>',
+        f'<tr><td>Spend as HCB states it (gross outflow)</td>'
+        f'<td class="n">{money(total_stated)}</td></tr>',
         "</table>",
-        f'<p class="note">Generated {esc(generated_at.strftime("%Y-%m-%d %H:%M UTC"))} '
-        f'from the Hack Club data warehouse. Source: {_link(REPO_URL, "this repo")}.</p>',
+        _mapping_gap_note(data),
         "<h2>Programs</h2>",
-        '<p class="note">Click a program to expand its HCB org tree; click its name '
-        "for every transaction counted.</p>",
+        '<p class="note">Click a column heading to sort. Click the arrow to see a '
+        "program's HCB org tree, or its name for every transaction counted. "
+        '<button data-expand-all="programs" data-open="false" class="tg">expand all</button></p>',
+        f'<table class="sortable" id="programs"><thead><tr>{head}</tr></thead>',
+        f"<tbody>{body}</tbody></table>",
+        f'<p class="note">{_link("data/programs.json", "programs.json")} '
+        "has the same numbers as JSON.</p>",
     ]
+    return _page("YSWS true spend", "\n".join(out), script=True)
 
-    for program in programs:
-        page = f"programs/{page_slug(program['root_slug'], program['root_event_id'])}.html"
-        tree = data.orgs_by_program.get(program["root_slug"], [])
-        out.append(
-            "<details><summary>"
-            + _program_summary_line(program, page)
-            + "</summary>"
-            + "<p>"
-            + f"[{_link(page, 'all transactions')}] "
-            + f"[{_hcb_org_link(program['root_slug'])}]"
-            + (" · marketing" if program["bucket"] == "marketing" else "")
-            + "</p>"
-            + render_org_tree(tree, page)
-            + "</details>"
-        )
 
-    out.append(f'<p class="note">{_link("data/programs.json", "programs.json")} '
-               "has the same numbers as JSON.</p>")
-    return _page("YSWS true spend", "\n".join(out))
+# --- unmatched --------------------------------------------------------------
+
+UNMATCHED_REASONS = {
+    "parent_of_mapped_root": "Its sub-org is a linked program, but it is not linked itself "
+                             "(the Unified YSWS DB link probably points one level too deep)",
+    "funded_by_mapped_program": "A mapped program sent it money, but no program claims it",
+    "funds_mapped_program": "It sent money into a mapped program while belonging to none",
+}
+
+GAP_TYPES = {
+    "no_hcb_link": "No HCB link on the Unified YSWS DB record",
+    "unparseable_hcb": "The hcb field is not an hcb.hackclub.com org URL",
+    "org_not_found": "The linked slug matches no HCB org",
+    "org_deleted": "The linked HCB org is deleted",
+}
+
+
+def _related(value: Any, limit: int = 4) -> str:
+    """Program lists can run to 200 names (the ysws umbrella); trim for reading."""
+    names = [n.strip() for n in str(value or "").split(",") if n.strip()]
+    if len(names) <= limit:
+        return ", ".join(names)
+    return ", ".join(names[:limit]) + f", +{len(names) - limit} more"
+
+
+def render_unmatched(data: SiteData, generated_at: datetime) -> str:
+    org_rows = "".join(
+        "<tr>"
+        f'<td>{_link(o["hcb_url"], o["org_slug"])}</td>'
+        f'<td>{esc(o["org_name"])}</td>'
+        f'<td>{esc(UNMATCHED_REASONS.get(o["reason"], o["reason"]))}</td>'
+        f'<td>{esc(o["parent_slug"] or "")}</td>'
+        f'{_num_cell(o["dollars_from_programs"], money)}'
+        f'{_num_cell(o["dollars_to_programs"], money)}'
+        f'{_num_cell(o["gross_outflow_dollars"], money)}'
+        f'{_num_cell(o["balance_dollars"], money)}'
+        f'<td class="wrap">{esc(_related(o["related_programs"]))}</td>'
+        "</tr>"
+        for o in data.unmatched_orgs
+    )
+    program_rows = "".join(
+        "<tr>"
+        f'<td>{esc(g["program_name"])}</td>'
+        f'<td>{esc(GAP_TYPES.get(g["gap_type"], g["gap_type"]))}</td>'
+        f'<td class="wrap">{esc(g["hcb_field"] or "")}</td>'
+        "</tr>"
+        for g in data.unlinked_programs
+    )
+    received = sum(
+        (_dec(o["dollars_from_programs"]) for o in data.unmatched_orgs), Decimal(0)
+    )
+
+    body = f"""
+<p>{_link("index.html", "← all programs")}</p>
+<h1>Unmatched</h1>
+<p class="note">An HCB org counts as a program's money in exactly one way: the
+program's Unified YSWS DB record links to that org, and every sub-org beneath it
+comes along. Nothing else — no name matching, no guessing from who paid whom.
+Everything that falls outside that rule is listed here rather than attributed,
+so the fix is either a corrected Unified YSWS DB link or a corrected HCB parent
+organization.</p>
+
+<h2>HCB orgs no program claims ({len(data.unmatched_orgs):,})</h2>
+<p class="note">Listed because they are structurally or financially attached to a
+mapped program: {money(received)} was sent from mapped programs into these orgs.
+Fiscal-host and HQ-operations orgs (hq, bank, fines, hq-usps-ops) appear here
+too and are usually correct as-is — they are shown rather than filtered because
+deciding which orgs "count" would be exactly the kind of guess this page
+exists to avoid.</p>
+<table class="sortable"><thead><tr>
+<th data-type="text">Org</th><th data-type="text">Name</th>
+<th data-type="text">Why it is here</th><th data-type="text">HCB parent</th>
+<th class="n" data-type="num">$ from programs</th>
+<th class="n" data-type="num">$ into programs</th>
+<th class="n" data-type="num">Its own outflow</th>
+<th class="n" data-type="num">Balance</th>
+<th data-type="text">Related programs</th>
+</tr></thead><tbody>{org_rows}</tbody></table>
+
+<h2>Unified YSWS DB programs with no usable HCB link ({len(data.unlinked_programs):,})</h2>
+<p class="note">None of their spend can be attributed until the link is fixed.</p>
+<table class="sortable"><thead><tr>
+<th data-type="text">Program</th><th data-type="text">Problem</th>
+<th data-type="text">hcb field</th>
+</tr></thead><tbody>{program_rows}</tbody></table>
+"""
+    return _page("Unmatched — YSWS true spend", body, script=True)
 
 
 # --- program page -----------------------------------------------------------
@@ -287,6 +600,7 @@ def _summary_table(program: Dict[str, Any]) -> str:
     if program.get("weighted_hours"):
         rows += [
             ("", ""),
+            ("Weighted projects", f"{_dec(program['weighted_projects']):,.2f}"),
             ("Weighted hours shipped", f"{_dec(program['weighted_hours']):,.0f}"),
             ("Approved projects", f"{int(program['approved_project_count'] or 0):,}"),
             ("True spend per weighted hour", money(program["cost_per_weighted_hour"])),
@@ -427,6 +741,19 @@ def render_program_page(
     )
     hcb_link = _link(HCB_ORG_URL.format(slug=slug), "hcb.hackclub.com/" + str(slug))
 
+    # Which Airtable record(s) this program's projects and hours come from, and
+    # how the HCB orgs were matched — the whole mapping in one line.
+    if program.get("is_ysws_program", True):
+        match_note = (
+            "Mapped from this program's Unified YSWS DB record HCB link, plus every "
+            "HCB sub-org beneath it."
+        )
+    else:
+        match_note = (
+            "Not a YSWS program: tracked separately (HQ marketing) so that "
+            "marketing-funded program budget is not counted twice."
+        )
+
     out = [
         f'<p>{_link("../index.html", "← all programs")}</p>',
         f"<h1>{esc(program['program_name'])}</h1>",
@@ -434,11 +761,11 @@ def render_program_page(
         f" · {int(program['org_count'] or 0)} org(s) in tree"
         f" · outflows {fmt_date(program['first_outflow_date'])} to {fmt_date(program['last_outflow_date'])}"
         f" · {json_link}</p>",
+        f'<p class="note">{esc(match_note)}</p>',
         "<h2>Totals</h2>",
         _summary_table(program),
         "<h2>Where the money went</h2>",
         _category_table(spend_txns),
-        f'<p class="note">{_link("../methodology.html", "How these categories are decided")}</p>',
         "<h2>HCB org tree</h2>",
         _org_table(orgs),
         "<details><summary>Same tree, nested</summary>",
@@ -469,58 +796,6 @@ def render_program_page(
     return _page(f"{program['program_name']} — YSWS true spend", "\n".join(out))
 
 
-# --- methodology ------------------------------------------------------------
-
-def render_methodology() -> str:
-    categories = "".join(
-        f"<tr><td>{esc(CATEGORY_LABELS[c])}</td>"
-        f'<td>{"counted as spend" if c in TRUE_SPEND_CATEGORIES else "not spend"}</td></tr>'
-        for c in CATEGORY_ORDER
-    )
-    body = f"""
-<p>{_link("index.html", "← all programs")}</p>
-<h1>Methodology</h1>
-<p class="note">HCB tells you what left an organization's bank account. For a YSWS
-program that is not the same as what the program spent: a program routes money to
-reviewer budget orgs, to authors' personal funds, to its own sub-organizations and
-back to the fiscal host. Counting those as spend overstates per-program cost, and
-double counts when you sum programs.</p>
-
-<h2>Program trees</h2>
-<p class="note">Each program is anchored to one canonical HCB organization, taken from
-the YSWS programs Airtable record's HCB link. Its tree is every descendant
-organization found through HCB's real sub-organization relationship, stopping at
-another program's root and at personal author/reviewer pots. Revenue and spend are
-summed over the whole tree, so a program with 250 city sub-organizations reports one
-number.</p>
-
-<h2>Spend categories</h2>
-<p class="note">Every main-ledger outflow of every org in a tree lands in exactly one
-category, and the categories add up to gross outflow.</p>
-<table><thead><tr><th>Category</th><th>Treatment</th></tr></thead><tbody>{categories}</tbody></table>
-<p class="note"><strong>True spend = A + C</strong>, plus negative M offsets so that a
-program's marketing-funded budget is not counted twice when program and marketing
-totals are added together. Card-grant funding counts the moment the card is funded,
-including money still sitting unspent on the card; the individual card swipes are
-therefore excluded to avoid double counting.</p>
-
-<h2>Revenue</h2>
-<p class="note">Revenue is every inflow to any org in the tree whose source is outside
-that tree — HQ funding, donations, refunds, transfers from other programs. Inflows whose
-source is inside the same tree (a sub-org transfer, or an organization funding its own
-grant cards) are listed separately and never counted, for the same reason intra-tree
-outflows are netted out of spend.</p>
-
-<h2>Source</h2>
-<p class="note">Generated from the Hack Club data warehouse
-(<code>public_hcb_ysws_true_spend_analytics</code> dbt models, built from HCB's
-database) by a Dagster asset in
-{_link("https://github.com/hackclub/data-warehouse", "hackclub/data-warehouse")}, and
-committed here.</p>
-"""
-    return _page("Methodology — YSWS true spend", body)
-
-
 # --- README + JSON ----------------------------------------------------------
 
 def render_readme(data: SiteData, generated_at: datetime) -> str:
@@ -539,7 +814,8 @@ sub-organizations and the fiscal host).
   revenue and true spend.
 - `programs/<slug>.html` — one page per program: category breakdown, org tree, and
   every transaction counted (and every one deliberately not counted).
-- `methodology.html` — the classification rules.
+- `unmatched.html` — HCB orgs no program claims, and Unified YSWS DB programs
+  whose HCB link cannot be used, with the dollars at stake.
 - `data/programs.json`, `data/programs/<slug>.json` — program totals and org
   trees as JSON (transaction-level detail is on the HTML pages).
 
@@ -564,8 +840,9 @@ def _program_json(program: Dict[str, Any], orgs: List[Dict[str, Any]]) -> Dict[s
         "other_internal_dollars", "intra_tree_dollars", "gross_outflow_dollars",
         "stated_outflow_dollars", "stated_overstatement_pct",
         "funded_by_marketing_dollars", "balance_dollars", "card_grants_funded_dollars",
-        "card_grants_unspent_dollars", "weighted_hours", "approved_project_count",
-        "cost_per_weighted_hour",
+        "card_grants_unspent_dollars", "weighted_projects", "weighted_hours",
+        "approved_project_count", "cost_per_weighted_hour", "is_ysws_program",
+        "match_source",
     ]
     out = {k: program.get(k) for k in keys}
     out["hcb_url"] = HCB_ORG_URL.format(slug=program["root_slug"])
@@ -596,7 +873,7 @@ def render_site(data: SiteData, generated_at: datetime) -> Dict[str, str]:
         ".nojekyll": "",
         "README.md": render_readme(data, generated_at),
         "index.html": render_index(data, generated_at),
-        "methodology.html": render_methodology(),
+        "unmatched.html": render_unmatched(data, generated_at),
     }
 
     summaries = []
@@ -627,9 +904,23 @@ def render_site(data: SiteData, generated_at: datetime) -> Dict[str, str]:
         summary["org_count"] = program["org_count"]
         summaries.append(summary)
 
+    fresh = data.freshness or Freshness()
+    files["data/unmatched.json"] = _dump(
+        {
+            "generated_at": generated_at.isoformat(timespec="seconds"),
+            "unmatched_orgs": data.unmatched_orgs,
+            "unlinked_programs": data.unlinked_programs,
+        },
+        indent=1,
+    )
     files["data/programs.json"] = _dump(
         {
             "generated_at": generated_at.isoformat(timespec="seconds"),
+            "hcb_pulled_at": fresh.hcb_pulled_at,
+            "hcb_data_through": fresh.hcb_data_through,
+            "recalculated_at": fresh.recalculated_at,
+            "unmatched_org_count": len(data.unmatched_orgs),
+            "unlinked_program_count": len(data.unlinked_programs),
             "program_count": len(summaries),
             "total_external_revenue_dollars": sum(
                 (_dec(p["external_revenue_dollars"]) for p in data.programs), Decimal(0)

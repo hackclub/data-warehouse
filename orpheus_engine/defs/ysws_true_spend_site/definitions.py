@@ -35,6 +35,7 @@ from dagster import (
 )
 
 from .data import fetch_site_data
+from .freshness import dagster_times_from_db, dagster_times_from_instance
 from .site import render_site
 
 DEFAULT_REPO = "hackclub/ysws-true-spend"
@@ -188,14 +189,35 @@ def publish_site(
         }
 
 
-def build_site_files(generated_at: Optional[datetime] = None) -> Dict[str, Any]:
-    """Query the warehouse and render the site. Returns files + counts."""
+def build_site_files(
+    generated_at: Optional[datetime] = None,
+    dagster_instance: Any = None,
+    dagster_db_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Query the warehouse and render the site. Returns files + counts.
+
+    The two freshness timestamps the site shows are Dagster materialization
+    facts, so pass the running instance (in the asset) or a Dagster database URL
+    (when rendering a preview outside Dagster). With neither, the site says the
+    pull and recalculation times are unknown rather than inventing them.
+    """
     generated_at = generated_at or datetime.now(timezone.utc)
     conn = _get_db_connection()
     try:
         data = fetch_site_data(conn)
     finally:
         conn.close()
+
+    if data.freshness is not None:
+        if dagster_instance is not None:
+            pulled, recalculated = dagster_times_from_instance(dagster_instance)
+        elif dagster_db_url:
+            pulled, recalculated = dagster_times_from_db(dagster_db_url)
+        else:
+            pulled, recalculated = None, None
+        data.freshness.hcb_pulled_at = pulled
+        data.freshness.recalculated_at = recalculated
 
     files = render_site(data, generated_at)
     total_spend = sum(
@@ -217,6 +239,9 @@ def build_site_files(generated_at: Optional[datetime] = None) -> Dict[str, Any]:
         "total_true_spend_dollars": total_spend,
         "total_external_revenue_dollars": total_revenue,
         "bytes": sum(len(c.encode("utf-8")) for c in files.values()),
+        "unmatched_orgs": len(data.unmatched_orgs),
+        "unlinked_programs": len(data.unlinked_programs),
+        "freshness": data.freshness,
     }
 
 
@@ -234,7 +259,7 @@ def build_site_files(generated_at: Optional[datetime] = None) -> Dict[str, Any]:
 def ysws_true_spend_site(
     context: AssetExecutionContext, config: YswsTrueSpendSiteConfig
 ) -> Output[None]:
-    built = build_site_files()
+    built = build_site_files(dagster_instance=context.instance)
     files = built["files"]
     context.log.info(
         f"Rendered {len(files)} files ({built['bytes'] / 1_000_000:.1f} MB) for "
@@ -242,6 +267,16 @@ def ysws_true_spend_site(
         f"{built['spend_transaction_count']} spend and "
         f"{built['revenue_transaction_count']} revenue transactions."
     )
+
+    fresh = built["freshness"]
+    if fresh is not None and fresh.hcb_pulled_at is not None:
+        stale_hours = (built["generated_at"] - fresh.hcb_pulled_at).total_seconds() / 3600
+        if stale_hours > 36:
+            context.log.warning(
+                f"HCB mirror last succeeded {stale_hours / 24:.1f} days ago "
+                f"({fresh.hcb_pulled_at:%Y-%m-%d %H:%M UTC}); every published number "
+                "is that old. The site says so on its front page."
+            )
 
     metadata: Dict[str, Any] = {
         "programs": MetadataValue.int(built["program_count"]),
@@ -252,6 +287,8 @@ def ysws_true_spend_site(
         "total_external_revenue": MetadataValue.float(
             float(built["total_external_revenue_dollars"])
         ),
+        "unmatched_orgs": MetadataValue.int(built["unmatched_orgs"]),
+        "unlinked_programs": MetadataValue.int(built["unlinked_programs"]),
         "files": MetadataValue.int(len(files)),
         "size_mb": MetadataValue.float(round(built["bytes"] / 1_000_000, 2)),
         "site_url": MetadataValue.url(PAGES_URL),

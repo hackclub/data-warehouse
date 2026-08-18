@@ -15,7 +15,9 @@ isn't credited twice for its own internal plumbing.
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from .freshness import Freshness, hcb_data_through
 
 SPEND_SCHEMA = "public_hcb_ysws_true_spend_analytics"
 HCB_SCHEMA = "public_hcb_analytics"
@@ -25,6 +27,8 @@ PROGRAMS_SQL = f"""
 SELECT
     program_name,
     bucket,
+    is_ysws_program,
+    match_source,
     root_event_id,
     root_slug,
     org_count,
@@ -44,6 +48,7 @@ SELECT
     balance_dollars,
     card_grants_funded_dollars,
     card_grants_unspent_dollars,
+    weighted_projects,
     weighted_hours,
     approved_project_count,
     cost_per_weighted_hour
@@ -197,6 +202,35 @@ ORDER BY t.root_slug, l.transaction_date DESC NULLS LAST, l.hcb_code
 """
 
 
+# The fix-it lists behind the mapping contract: HCB orgs no YSWS program
+# claims, and Unified YSWS DB programs whose HCB link cannot be used.
+UNMATCHED_ORGS_SQL = f"""
+SELECT
+    event_id,
+    org_slug,
+    org_name,
+    reason,
+    related_programs,
+    parent_slug,
+    parent_is_mapped,
+    is_hq,
+    plan_category,
+    dollars_from_programs,
+    dollars_to_programs,
+    gross_outflow_dollars,
+    balance_dollars,
+    hcb_url
+FROM {SPEND_SCHEMA}.ysws_unmatched_orgs
+ORDER BY GREATEST(dollars_from_programs, dollars_to_programs) DESC, org_slug
+"""
+
+UNLINKED_PROGRAMS_SQL = f"""
+SELECT program_id, program_name, hcb_field, linked_slug, gap_type
+FROM {SPEND_SCHEMA}.ysws_unlinked_programs
+ORDER BY gap_type, program_name
+"""
+
+
 @dataclass
 class SiteData:
     """Everything the renderer needs, already grouped by program root slug."""
@@ -205,6 +239,11 @@ class SiteData:
     orgs_by_program: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     spend_by_program: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     revenue_by_program: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    unmatched_orgs: List[Dict[str, Any]] = field(default_factory=list)
+    unlinked_programs: List[Dict[str, Any]] = field(default_factory=list)
+    # Filled by the caller: the asset reads the Dagster instance, the preview
+    # script reads the prod Dagster database. See freshness.py.
+    freshness: Optional["Freshness"] = None
 
     @property
     def transaction_count(self) -> int:
@@ -238,6 +277,8 @@ def fetch_site_data(conn) -> SiteData:
     orgs = _rows(conn, TREE_SQL)
     spend_txns = _rows(conn, SPEND_TRANSACTIONS_SQL)
     revenue_txns = _rows(conn, REVENUE_TRANSACTIONS_SQL)
+    unmatched_orgs = _rows(conn, UNMATCHED_ORGS_SQL)
+    unlinked_programs = _rows(conn, UNLINKED_PROGRAMS_SQL)
 
     orgs_by_program = _group(orgs, "root_slug")
 
@@ -262,4 +303,7 @@ def fetch_site_data(conn) -> SiteData:
         orgs_by_program=orgs_by_program,
         spend_by_program=_group(spend_txns, "root_slug"),
         revenue_by_program=_group(revenue_txns, "root_slug"),
+        unmatched_orgs=unmatched_orgs,
+        unlinked_programs=unlinked_programs,
+        freshness=Freshness(hcb_data_through=hcb_data_through(conn)),
     )

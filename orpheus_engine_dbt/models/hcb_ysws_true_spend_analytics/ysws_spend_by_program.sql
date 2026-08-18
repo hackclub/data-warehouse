@@ -15,9 +15,12 @@
     for comparison. balance_dollars is money still sitting in the tree — not
     yet spend, will become spend as it is used.
 
-    cost_per_weighted_hour joins approved_projects weighted hours by exact
-    program name; NULL where the program has no approved projects (yet) or is
-    tracked app-natively (e.g. Stardance hours live in stardance.projects).
+    weighted_projects / weighted_hours / cost_per_weighted_hour join
+    approved_projects through the Airtable program RECORD IDs carried on
+    ysws_spend_programs.member_ids, so the match survives program renames;
+    NULL where the program has no approved projects (yet), has no Airtable
+    record (manual roots), or is tracked app-natively (e.g. Stardance hours
+    live in stardance.projects).
 */
 
 WITH spend AS (
@@ -55,23 +58,36 @@ tree_stats AS (
 ),
 
 hours AS (
-    -- Weighted hours joined through each root's constituent Airtable program
-    -- names (an org can back several program versions).
+    -- Approved-project attribution, joined on the Airtable RECORD ID of each
+    -- root's constituent programs (an org can back several program versions,
+    -- e.g. Jumpstart V1/V2/V3).
+    --
+    -- Record ids, not names: a name match silently drops a program the moment
+    -- Airtable renames it or spells it differently in the linked-record
+    -- lookup, and it double counts programs whose names differ only in
+    -- punctuation. The link table approved_projects__ysws holds the record ids
+    -- of the programs each project was approved under, so the match is exact
+    -- and deterministic.
     SELECT
         p.root_event_id,
+        SUM(ap.ysws_weighted_project_contribution::numeric) AS weighted_projects,
+        -- A weighted project is defined as 10 weighted hours.
         SUM(ap.ysws_weighted_project_contribution::numeric) * 10 AS weighted_hours,
         COUNT(*) AS approved_project_count
     FROM {{ ref('ysws_spend_programs') }} p
-    JOIN {{ source('unified_ysws', 'approved_projects__ysws_name') }} yn
-        ON yn.value = ANY(p.member_names)
+    JOIN {{ source('unified_ysws', 'approved_projects__ysws') }} yl
+        ON yl.value = ANY(p.member_ids)
     JOIN {{ source('unified_ysws', 'approved_projects') }} ap
-        ON yn._dlt_parent_id = ap._dlt_id
+        ON yl._dlt_parent_id = ap._dlt_id
     GROUP BY 1
 )
 
 SELECT
     p.program_name,
     p.bucket,
+    p.is_ysws_program,
+    p.match_source,
+    p.member_ids,
     p.root_event_id,
     p.root_slug,
     ts.org_count,
@@ -99,6 +115,7 @@ SELECT
     ts.card_grants_funded_dollars,
     ts.card_grants_unspent_dollars,
 
+    ROUND(h.weighted_projects::numeric, 2) AS weighted_projects,
     h.weighted_hours,
     h.approved_project_count,
     CASE WHEN h.weighted_hours > 0

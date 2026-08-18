@@ -32,6 +32,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+# The dbt models behind the site. Rebuilt into the warehouse with --dbt, which
+# is needed after editing a model (and after the scheduled prod dbt run rebuilds
+# them from main, dropping any column this branch added).
+TRUE_SPEND_MODELS = [
+    "ysws_spend_programs",
+    "ysws_spend_org_tree",
+    "marketing_videos_db_payments",
+    "ysws_spend_ledger",
+    "ysws_spend_by_program",
+    "ysws_spend_monthly",
+    "ysws_unmatched_orgs",
+    "ysws_unlinked_programs",
+]
+
 DEFAULT_ROOT = Path.home() / "previews" / "ysws-true-spend-site"
 DEFAULT_PORT = 8899
 # Tailnet hostname of this machine; the preview is tailnet-only (no funnel).
@@ -48,8 +62,9 @@ ROOT_INDEX = """<!doctype html>
 
 
 def _load_env() -> None:
-    if os.getenv("WAREHOUSE_COOLIFY_URL"):
+    if os.getenv("WAREHOUSE_COOLIFY_URL") and os.getenv("PROD_DAGSTER_DB_URL"):
         return
+    wanted = ("WAREHOUSE_COOLIFY_URL", "PROD_DAGSTER_DB_URL")
     for candidate in (
         REPO_ROOT / ".env",
         Path.home() / "dev" / "hackclub" / "data-warehouse" / ".env",
@@ -58,13 +73,43 @@ def _load_env() -> None:
             continue
         for line in candidate.read_text().splitlines():
             line = line.strip()
-            if line.startswith("WAREHOUSE_COOLIFY_URL="):
-                os.environ["WAREHOUSE_COOLIFY_URL"] = line.split("=", 1)[1].strip()
-                return
+            for key in wanted:
+                if line.startswith(key + "="):
+                    os.environ.setdefault(key, line.split("=", 1)[1].strip())
+        if os.getenv("WAREHOUSE_COOLIFY_URL"):
+            return
+
+
+def run_dbt(models=TRUE_SPEND_MODELS) -> None:
+    """Rebuild the true-spend models in the warehouse (target: prod)."""
+    _load_env()
+    for line in (Path.home() / "dev" / "hackclub" / "data-warehouse" / ".env").read_text().splitlines():
+        if line.startswith("HACK_CLUBBERS_LOCATION_SALT="):
+            os.environ.setdefault("HACK_CLUBBERS_LOCATION_SALT", line.split("=", 1)[1].strip())
+    from orpheus_engine.defs.dbt.definitions import DBT_PROFILES_DIR_PATH
+
+    dbt_bin = REPO_ROOT / ".venv" / "bin" / "dbt"
+    started = time.time()
+    result = subprocess.run(
+        [
+            str(dbt_bin) if dbt_bin.exists() else "dbt", "run",
+            "--select", *models,
+            "--project-dir", str(REPO_ROOT / "orpheus_engine_dbt"),
+            "--profiles-dir", str(DBT_PROFILES_DIR_PATH),
+            "--target", "prod",
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        tail = "\n".join((result.stdout or result.stderr).splitlines()[-25:])
+        sys.exit(f"dbt run failed:\n{tail}")
+    built = [l for l in result.stdout.splitlines() if "OK created" in l]
+    print(f"dbt: rebuilt {len(built)} models in {time.time() - started:.0f}s")
 
 
 def _fetch_data():
     from orpheus_engine.defs.ysws_true_spend_site.data import fetch_site_data
+    from orpheus_engine.defs.ysws_true_spend_site.freshness import dagster_times_from_db
     import psycopg2
 
     _load_env()
@@ -73,9 +118,21 @@ def _fetch_data():
         sys.exit("WAREHOUSE_COOLIFY_URL not found (env or .env)")
     conn = psycopg2.connect(url)
     try:
-        return fetch_site_data(conn)
+        data = fetch_site_data(conn)
     finally:
         conn.close()
+
+    # In production the asset reads these off its own Dagster instance; here the
+    # prod Dagster database is the only place that knows when the HCB mirror and
+    # the dbt models last succeeded.
+    dagster_url = os.getenv("PROD_DAGSTER_DB_URL")
+    if dagster_url and data.freshness is not None:
+        pulled, recalculated = dagster_times_from_db(dagster_url)
+        data.freshness.hcb_pulled_at = pulled
+        data.freshness.recalculated_at = recalculated
+    elif not dagster_url:
+        print("note: PROD_DAGSTER_DB_URL not set - pull/recalc times will show as unknown")
+    return data
 
 
 def load_data(root: Path, refresh: bool, max_age: float):
@@ -188,6 +245,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--refresh-data", action="store_true",
                         help="re-query the warehouse even if the cache is fresh")
+    parser.add_argument("--dbt", action="store_true",
+                        help="rebuild the true-spend dbt models first (implies --refresh-data)")
     parser.add_argument("--max-data-age", type=float, default=1800,
                         help="seconds before the cached warehouse rows are refetched")
     parser.add_argument("--keep", type=int, default=KEEP_BUILDS)
@@ -203,7 +262,9 @@ def main() -> None:
         serve_forever(root, args.port)
         return
 
-    data, age = load_data(root, args.refresh_data, args.max_data_age)
+    if args.dbt:
+        run_dbt()
+    data, age = load_data(root, args.refresh_data or args.dbt, args.max_data_age)
     build_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     build_dir = write_build(root, data, build_id)
     swap_current(root, build_dir)

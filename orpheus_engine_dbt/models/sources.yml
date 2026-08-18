@@ -552,6 +552,12 @@ sources:
       - name: approved_projects__ysws_name
         description: "dlt child table: per-project YSWS program name(s) for approved_projects."
         meta: { dagster: { asset_key: ['unified_ysws_approved_projects_warehouse'] } }
+      - name: approved_projects__ysws
+        description: >
+          dlt child table: per-project linked YSWS program Airtable RECORD IDs
+          for approved_projects. The stable join key for attributing projects
+          and weighted hours to a program (names get renamed).
+        meta: { dagster: { asset_key: ['unified_ysws_approved_projects_warehouse'] } }
 
   # Absolute minimum permissions - only columns needed to generate events for monthly active stats
   - name: auth

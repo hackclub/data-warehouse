@@ -4,54 +4,37 @@
 ) }}
 
 /*
-    YSWS spend org tree — every HCB org belonging to each program, discovered
-    through HCB's real sub-organization relationship (hcb.events.parent_id),
-    descended recursively from the program root.
+    YSWS spend org tree — every HCB org belonging to each program: the org the
+    Unified YSWS DB links to, plus every descendant of it through HCB's real
+    sub-organization relationship (hcb.events.parent_id), recursively.
 
-    Descent rules:
-    - STOP at any org that is itself another canonical program root. Branded
-      satellites (campfire-flagship under campfire) have already been folded
-      into their umbrella by ysws_spend_programs, so they stay in the umbrella
-      tree rather than cutting a hole in it. Programs merely banked under
-      another program's org (Sleepover under Athena) are still their own roots
-      and so remain boundaries here, as do manual roots like distinct funds.
-    - STOP at personal author/reviewer pots (ysws-budget-*, ysws-resolution-<x>,
-      names containing budget/earnings). Transfers into them are category B in
-      the ledger — money for a person's future events, not this program's spend.
-    - Soft-deleted events are excluded.
+    See ysws_spend_programs for the mapping contract. This model adds no
+    matching rules of its own. Descent stops only where it must:
+    - at another program's root, so every org belongs to exactly one program
+      (HCB's parent_id is single-parent, and the roots come from Airtable);
+    - at soft-deleted events.
 
-    manual_members rows join a program's tree without a parent_id link
-    (fulfillment orgs funded directly by HQ).
+    Personal author/reviewer pots are NOT special here: a pot that is a sub-org
+    of a linked program is part of that program (per Zach, 2026-08-18). Pots
+    that hang off the `ysws` umbrella or another unlinked org are simply not in
+    any tree, and transfers into them stay category B in the ledger.
 
-    Grain: (root_event_id, event_id). An org appears in at most one program's
-    tree because parent_id is single-parent and descent stops at other roots.
+    Orgs that no tree reaches are unmatched by definition — see
+    ysws_unmatched_orgs, which lists the ones that exchange money with a mapped
+    program or parent one, with the dollars at stake, so the Airtable link or
+    the HCB parent relationship can be fixed.
+
+    Grain: (root_event_id, event_id).
 */
 
-WITH RECURSIVE manual_members (member_slug, root_slug) AS (
-    VALUES
-        ('som-sticker-shipments', 'summer')
-),
-
-roots AS (
-    SELECT root_event_id, root_slug, program_name, bucket
+WITH RECURSIVE roots AS (
+    SELECT root_event_id, root_slug, program_name, bucket, is_ysws_program
     FROM {{ ref('ysws_spend_programs') }}
 ),
 
-seed AS (
-    -- Program roots...
-    SELECT r.root_event_id, r.root_event_id AS event_id
-    FROM roots r
-    UNION ALL
-    -- ...plus manually attached members.
-    SELECT r.root_event_id, o.event_id
-    FROM manual_members m
-    JOIN roots r ON r.root_slug = m.root_slug
-    JOIN {{ ref('orgs') }} o ON o.slug = m.member_slug
-),
-
 tree AS (
-    SELECT s.root_event_id, s.event_id, 0 AS depth
-    FROM seed s
+    SELECT r.root_event_id, r.root_event_id AS event_id, 0 AS depth
+    FROM roots r
 
     UNION ALL
 
@@ -61,18 +44,12 @@ tree AS (
     WHERE e.deleted_at IS NULL
       -- stop at another program's root (its spend is its own program's)
       AND e.id NOT IN (SELECT root_event_id FROM roots)
-      -- stop at personal author/reviewer pots (transfers to them stay category B)
-      AND e.slug NOT LIKE 'ysws-budget-%'
-      AND e.slug NOT LIKE 'ysws-resolution-%'
-      AND e.slug NOT LIKE '%-earnings'
-      AND e.slug NOT LIKE '%-jemoney'
-      AND COALESCE(e.name, '') NOT ILIKE '%budget%'
-      AND COALESCE(e.name, '') NOT ILIKE '%earnings%'
 )
 
 SELECT
     r.program_name,
     r.bucket,
+    r.is_ysws_program,
     t.root_event_id,
     r.root_slug,
     t.event_id,
