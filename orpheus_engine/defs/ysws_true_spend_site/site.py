@@ -18,6 +18,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from .data import SiteData
+from .database import DUCKDB_FILENAME, build_duckdb
 from .documents import build_documents
 
 # Publication policy is enforced in documents.py (emails stripped, private orgs
@@ -130,6 +131,30 @@ SCRIPT = """
       if (row.dataset.collapsed === 'true') hideDepth = depth;
     });
   }
+  // Relative ages are recomputed in the browser from each <time> element's
+  // ISO timestamp. Baking them at build time made a page that had not rebuilt
+  // in a week still claim it was built "just now" -- which is exactly when the
+  // number matters. Text rendered server-side stays as the fallback if this
+  // never runs.
+  function ago(then, now) {
+    var seconds = (now - then) / 1000;
+    if (seconds < 0) return 'just now';
+    var units = [['day', 86400], ['hour', 3600], ['minute', 60]];
+    for (var i = 0; i < units.length; i++) {
+      var count = Math.floor(seconds / units[i][1]);
+      if (count >= 1) return count + ' ' + units[i][0] + (count !== 1 ? 's' : '') + ' ago';
+    }
+    return 'just now';
+  }
+  function refreshAges() {
+    var now = new Date();
+    Array.prototype.forEach.call(document.querySelectorAll('time[data-ago]'), function (el) {
+      var then = new Date(el.getAttribute('datetime'));
+      if (!isNaN(then.getTime())) el.textContent = ago(then, now);
+    });
+  }
+  refreshAges();
+  setInterval(refreshAges, 60000);
   document.addEventListener('click', function (e) {
     var th = e.target.closest('table.sortable thead th');
     if (th) { sort(th.closest('table'), th); return; }
@@ -306,6 +331,19 @@ def _org_tree_table(
 
 # --- index ------------------------------------------------------------------
 
+def _age_cell(stamp: Optional[str], built: Optional[datetime]) -> str:
+    """
+    An age the browser keeps current. The ISO timestamp rides in the datetime
+    attribute; the server-rendered text is the age at build time, which is what
+    a reader without JavaScript sees.
+    """
+    parsed = _parse(stamp)
+    if parsed is None:
+        return ""
+    return (f'<time datetime="{esc(parsed.isoformat())}" data-ago>'
+            f"{esc(ago(parsed, built))}</time>")
+
+
 def _freshness_table(metadata: Dict[str, Any]) -> str:
     """
     How stale the numbers are, in two clocks: when HCB was last pulled and when
@@ -324,7 +362,7 @@ def _freshness_table(metadata: Dict[str, Any]) -> str:
     ]
     body = "".join(
         f"<tr><td>{esc(label)}</td>"
-        f"<td>{esc(ago(_parse(stamp), built))}</td>"
+        f"<td>{_age_cell(stamp, built)}</td>"
         f'<td class="note">{esc(note)}</td>'
         f"<td>{esc(fmt_stamp(_parse(stamp)))}</td></tr>"
         for label, stamp, note in rows
@@ -658,6 +696,15 @@ files, no auth. Amounts are US dollars, dates ISO-8601, timestamps UTC.
     One program: totals, category breakdown, HCB org tree, and every
     transaction counted -- the whole of its HTML page.
 
+/{DUCKDB_FILENAME}
+    The same data as a DuckDB database, for querying rather than walking the
+    JSON. Tables: programs, program_orgs, spend_transactions,
+    revenue_transactions, withheld_orgs, unmatched_orgs, unlinked_programs,
+    metadata.
+
+        duckdb {DUCKDB_FILENAME}
+        SELECT name, true_spend_dollars FROM programs ORDER BY 2 DESC LIMIT 10;
+
 ## Mapping contract
 
 A program owns the HCB organization its Unified YSWS DB record links to, plus
@@ -676,7 +723,8 @@ Source: https://github.com/hackclub/data-warehouse (asset ysws_true_spend_site)
 
 def _machine_readable_line() -> str:
     return (f'<p>Machine-readable: {_link("llms.txt", "llms.txt")} · '
-            f'{_link("index.json", "index.json")}</p>')
+            f'{_link("index.json", "index.json")} · '
+            f'{_link(DUCKDB_FILENAME, "duckdb")}</p>')
 
 
 def render_readme(index_document: Dict[str, Any]) -> str:
@@ -714,7 +762,7 @@ def _dump(value: Any) -> str:
     return json.dumps(value, indent=1, sort_keys=False, default=str) + "\n"
 
 
-def render_site(data: SiteData, generated_at: datetime) -> Dict[str, str]:
+def render_site(data: SiteData, generated_at: datetime) -> Dict[str, Any]:
     """
     Build every file of the site: JSON documents first, then the HTML rendered
     from those documents.
@@ -728,6 +776,8 @@ def render_site(data: SiteData, generated_at: datetime) -> Dict[str, str]:
         files[path] = _dump(document)
     for document in program_documents:
         files[document["page"]] = render_program_page(document)
+
+    files[DUCKDB_FILENAME] = build_duckdb(index_document, program_documents)
 
     example = program_documents[0]["root_slug"] if program_documents else "flavortown"
     files["llms.txt"] = render_llms_txt(index_document, example)

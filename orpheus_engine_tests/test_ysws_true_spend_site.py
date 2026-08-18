@@ -282,7 +282,7 @@ def test_every_internal_link_points_at_an_emitted_file():
 
     files = _render()
     for path, content in files.items():
-        if not path.endswith(".html"):
+        if not path.endswith(".html") or isinstance(content, bytes):
             continue
         base = posixpath.dirname(path)
         for href in re.findall(r'href="([^"]+)"', content):
@@ -354,6 +354,18 @@ def test_freshness_is_shown_with_both_clocks():
     assert "Spend recalculated" in index
     assert "5 hours ago" in index
     assert "30 minutes ago" in index
+
+
+def test_ages_are_recomputed_in_the_browser():
+    """
+    A static page can sit for days; an age baked at build time would still read
+    "just now" a week later, exactly when it matters most.
+    """
+    index = _render()["index.html"]
+    assert '<time datetime="2026-08-18T07:00:00+00:00" data-ago>' in index
+    assert "setInterval(refreshAges" in index
+    # the server-rendered text stays as the no-JavaScript fallback
+    assert ">5 hours ago</time>" in index
 
 
 def test_freshness_row_reads_label_age_description_date():
@@ -448,6 +460,8 @@ def test_no_methodology_page_anywhere():
     files = _render()
     assert "methodology.html" not in files
     for path, content in files.items():
+        if isinstance(content, bytes):
+            continue
         assert "methodology.html" not in content, path
 
 
@@ -512,6 +526,45 @@ def test_grant_cards_are_labelled_as_committed_spend_not_leftovers():
     assert "Card grants unspent" not in page
 
 
+def test_duckdb_file_holds_the_same_rows_as_the_documents():
+    """A third rendering of the documents, so it must agree with them."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    import duckdb
+
+    files = _render(_site_data_with_marketing())
+    assert "ysws-true-spend.duckdb" in files
+    blob = files["ysws-true-spend.duckdb"]
+    assert isinstance(blob, bytes)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "site.duckdb"
+        path.write_bytes(blob)
+        con = duckdb.connect(str(path), read_only=True)
+        tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
+        assert {"programs", "program_orgs", "spend_transactions",
+                "revenue_transactions", "unmatched_orgs", "unlinked_programs",
+                "metadata"} <= tables
+
+        index = json.loads(files["index.json"])
+        document = json.loads(files["programs/fallout.json"])
+        programs = index["ysws_programs_with_linked_hcbs"] + index["ysws_marketing"]
+
+        assert con.execute("SELECT count(*) FROM programs").fetchone()[0] == len(programs)
+        assert con.execute(
+            "SELECT true_spend_dollars FROM programs WHERE root_slug = 'fallout'"
+        ).fetchone()[0] == document["totals"]["true_spend_dollars"]
+        assert con.execute(
+            "SELECT count(*) FROM spend_transactions WHERE root_slug = 'fallout'"
+        ).fetchone()[0] == len(document["spend_transactions"])
+        assert con.execute("SELECT count(*) FROM unmatched_orgs").fetchone()[0] == len(
+            index["hcb_orgs_no_program_claims"]
+        )
+        con.close()
+
+
 def test_llms_txt_points_at_the_json_without_restating_it():
     """Barebones: the JSON is self-describing, a field list here would drift."""
     files = _render()
@@ -520,7 +573,8 @@ def test_llms_txt_points_at_the_json_without_restating_it():
     assert "/index.json" in llms
     assert "/programs/{program_name}.json" in llms
     assert "/programs/fallout.json" in llms          # a real example path
-    assert "spend_transactions" not in llms          # no field dump
+    assert "ysws-true-spend.duckdb" in llms          # and the database
+    assert "spend_transactions" not in llms.split("## Data")[0]  # no field dump
 
 
 def test_index_links_the_json_without_dumping_its_fields():

@@ -165,7 +165,10 @@ def write_build(root: Path, data, build_id: str) -> Path:
         shutil.rmtree(build_dir)
     build_dir.mkdir(parents=True)
     _write_files(build_dir, files)
-    size = sum(len(c.encode("utf-8")) for c in files.values())
+    size = sum(
+        len(c) if isinstance(c, bytes) else len(c.encode("utf-8"))
+        for c in files.values()
+    )
     print(
         f"build {build_id}: {len(files)} files, {size / 1_000_000:.1f} MB "
         f"in {time.time() - started:.1f}s"

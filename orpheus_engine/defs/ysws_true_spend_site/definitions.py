@@ -107,11 +107,15 @@ def _git(
     return result
 
 
-def _write_files(root: Path, files: Dict[str, str]) -> None:
+def _write_files(root: Path, files: Dict[str, Any]) -> None:
+    """Text files as UTF-8; the DuckDB database is bytes."""
     for rel_path, content in files.items():
         target = root / rel_path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        if isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_text(content, encoding="utf-8")
 
 
 def _clear_worktree(root: Path) -> None:
@@ -239,7 +243,10 @@ def build_site_files(
         ),
         "total_true_spend_dollars": total_spend,
         "total_external_revenue_dollars": total_revenue,
-        "bytes": sum(len(c.encode("utf-8")) for c in files.values()),
+        "bytes": sum(
+            len(c) if isinstance(c, bytes) else len(c.encode("utf-8"))
+            for c in files.values()
+        ),
         "unmatched_orgs": len(data.unmatched_orgs),
         "unlinked_programs": len(data.unlinked_programs),
         "freshness": data.freshness,
