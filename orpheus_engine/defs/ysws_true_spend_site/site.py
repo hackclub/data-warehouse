@@ -320,8 +320,6 @@ def _program_row(program: Dict[str, Any], page: str, tree: List[Dict[str, Any]])
     """A program's table row, plus the hidden row holding its HCB org tree."""
     org_count = int(program["org_count"] or 0)
     name = esc(program["program_name"])
-    if not program.get("is_ysws_program", True):
-        name += ' <span class="note">(not a YSWS program)</span>'
     cells = [
         '<td><button class="tg" aria-expanded="false">\u25b8</button> '
         + f'<a href="{esc(page)}">{name}</a></td>',
@@ -383,7 +381,9 @@ def _org_subtable(orgs: List[Dict[str, Any]], page: str) -> str:
     )
 
 
-def render_index(data: SiteData, generated_at: datetime) -> str:
+def _programs_table(
+    programs: List[Dict[str, Any]], data: SiteData, table_id: str
+) -> str:
     headers = [
         ("Program", "text"),
         ("Orgs", "num"),
@@ -404,21 +404,41 @@ def render_index(data: SiteData, generated_at: datetime) -> str:
             f"programs/{page_slug(program['root_slug'], program['root_event_id'])}.html",
             data.orgs_by_program.get(program["root_slug"], []),
         )
-        for program in data.programs
+        for program in programs
     )
-    programs_table = (
-        f'<table class="sortable" id="programs"><thead><tr>{head}</tr></thead>'
+    return (
+        f'<table class="sortable" id="{esc(table_id)}"><thead><tr>{head}</tr></thead>'
         f"<tbody>{body}</tbody></table>"
     )
+
+
+def render_index(data: SiteData, generated_at: datetime) -> str:
+    # HQ marketing is tracked in the same models so its spend can be netted out
+    # of the programs it funds, but it is not a YSWS program and does not belong
+    # in a table of them.
+    ysws = [p for p in data.programs if p.get("is_ysws_program", True)]
+    other = [p for p in data.programs if not p.get("is_ysws_program", True)]
 
     out = [
         "<h1>YSWS true spend</h1>",
         _freshness_table(data, generated_at),
         _section(
-            f"YSWS Programs w/ Linked HCBs ({len(data.programs):,})",
-            programs_table,
+            f"YSWS Programs w/ Linked HCBs ({len(ysws):,})",
+            _programs_table(ysws, data, "programs"),
             open_by_default=True,
         ),
+    ]
+    if other:
+        out.append(
+            _section(
+                "Marketing (HQ, not a YSWS program)",
+                '<p class="note">HQ marketing spend, tracked here because budget it '
+                "sends into a program is netted out of that program's true spend so "
+                "the two are not counted twice.</p>"
+                + _programs_table(other, data, "non-programs"),
+            )
+        )
+    out += [
         render_unlinked_programs_section(data),
         render_unmatched_orgs_section(data),
         f'<p class="note">{_link("data/programs.json", "programs.json")} '

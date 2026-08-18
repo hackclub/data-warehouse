@@ -213,6 +213,27 @@ def _render(data=None):
     return render_site(data or _site_data(), GENERATED_AT)
 
 
+def _site_data_with_marketing() -> SiteData:
+    """The real data always carries the HQ marketing row alongside the programs."""
+    data = _site_data()
+    data.programs = data.programs + [
+        _program(
+            program_name="Marketing (HQ)",
+            root_slug="ysws-marketing",
+            root_event_id=2,
+            is_ysws_program=False,
+            match_source="manual_non_program",
+            weighted_projects=None,
+            weighted_hours=None,
+            cost_per_weighted_hour=None,
+        )
+    ]
+    data.orgs_by_program["ysws-marketing"] = [
+        _org("ysws-marketing", 20, None, 0, "100.00", "0.00")
+    ]
+    return data
+
+
 def test_money_formats_negatives_and_thousands():
     assert money(Decimal("1234.5")) == "$1,234.50"
     assert money(Decimal("-1234.5")) == "-$1,234.50"
@@ -318,16 +339,17 @@ def test_ago_formats_the_units_it_uses():
 
 
 def test_homepage_sections_are_collapsible_and_in_order():
-    """Linked programs, then unlinked programs, then orgs nobody claims."""
-    files = _render()
+    """Linked programs, marketing, unlinked programs, orgs nobody claims."""
+    files = _render(_site_data_with_marketing())
     assert "unmatched.html" not in files
     index = files["index.html"]
     linked = index.index("YSWS Programs w/ Linked HCBs")
+    marketing = index.index("Marketing (HQ, not a YSWS program)")
     unlinked = index.index("YSWS Programs w/ No Linked HCBs")
     orgs = index.index("HCB orgs no program claims")
-    assert linked < unlinked < orgs
+    assert linked < marketing < unlinked < orgs
     # every section header is a <summary>, and only the programs one starts open
-    assert index.count("<summary><h2>") == 3
+    assert index.count("<summary><h2>") == 4
     assert "<details open><summary><h2>YSWS Programs w/ Linked HCBs" in index
     assert "<details><summary><h2>HCB orgs no program claims" in index
     # the content is all still there
@@ -335,6 +357,24 @@ def test_homepage_sections_are_collapsible_and_in_order():
     assert "A mapped program sent it money" in index
     assert "Outpost" in index
     assert "No HCB link on the Unified YSWS DB record" in index
+
+
+def test_marketing_is_out_of_the_ysws_program_table():
+    """It is not a YSWS program, so it does not sit in a table of them."""
+    index = render_site(_site_data_with_marketing(), GENERATED_AT)["index.html"]
+
+    programs_table = index.split('id="programs"')[1].split("</table>")[0]
+    assert "Fallout" in programs_table
+    assert "ysws-marketing" not in programs_table
+    assert "Marketing (HQ)" not in programs_table
+
+    marketing_table = index.split('id="non-programs"')[1].split("</table>")[0]
+    assert "Marketing (HQ)" in marketing_table
+    # the heading carries the caveat, so the row no longer repeats it
+    assert "(not a YSWS program)</span>" not in index
+
+    # a program count of 1 in the heading, marketing excluded
+    assert "YSWS Programs w/ Linked HCBs (1)" in index
 
 
 def test_homepage_carries_no_explanatory_prose_blocks():
