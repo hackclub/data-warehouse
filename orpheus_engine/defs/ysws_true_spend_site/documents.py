@@ -105,30 +105,35 @@ def page_slug(root_slug: str, root_event_id: Any) -> str:
 
 # --- org tree ---------------------------------------------------------------
 
-def _org_node(org: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+def _org_node(org: Dict[str, Any], include_revenue: bool) -> Dict[str, Any]:
+    """
+    One org, carrying the columns its page shows. The index tree shows spend,
+    balance and transaction count; the program page's tree adds revenue.
+    """
+    node = {
         "name": org["org_name"] or org["org_slug"],
         "slug": org["org_slug"],
-        "event_id": org["event_id"],
-        "depth": org["depth"],
-        "is_public": bool(org.get("is_public", True)),
         "hcb_url": HCB_ORG_URL.format(slug=org["org_slug"]),
-        "external_revenue_dollars": _money(org["external_revenue_dollars"]),
+    }
+    if include_revenue:
+        node["external_revenue_dollars"] = _money(org["external_revenue_dollars"])
+    node.update({
         "true_spend_dollars": _money(org["true_spend_dollars"]),
         "balance_dollars": _money(org["balance_dollars"]),
         "transaction_count": int(org["transaction_count"] or 0),
         "children": [],
-    }
+    })
+    return node
 
 
-def _org_tree(orgs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _org_tree(orgs: List[Dict[str, Any]], include_revenue: bool = True) -> List[Dict[str, Any]]:
     """
     The program's orgs as HCB nests them. Any org whose parent is outside this
     program's tree (the root itself, or a manually attached org) sits at the top
     level. Children are ordered by spend so the biggest branch reads first.
     """
     ids = {o["event_id"] for o in orgs}
-    nodes = {o["event_id"]: _org_node(o) for o in orgs}
+    nodes = {o["event_id"]: _org_node(o, include_revenue) for o in orgs}
     roots: List[Dict[str, Any]] = []
     for org in orgs:
         parent = org["parent_id"] if org["parent_id"] in ids else None
@@ -255,9 +260,7 @@ def build_program_document(
     return {
         "name": program["program_name"],
         "root_slug": program["root_slug"],
-        "root_event_id": program["root_event_id"],
         "is_ysws_program": bool(program.get("is_ysws_program", True)),
-        "match_source": program.get("match_source"),
         "hcb_url": HCB_ORG_URL.format(slug=program["root_slug"]),
         "page": f"programs/{name}.html",
         "json": f"programs/{name}.json",
@@ -301,16 +304,25 @@ def build_program_document(
     }
 
 
-# Transaction arrays live only in the per-program document; the index carries
-# each program's totals and tree.
-_INDEX_DROPS = (
-    "spend_transactions", "revenue_transactions", "intra_tree_transactions",
-    "category_breakdown", "withheld_orgs",
-)
-
-
-def index_summary(document: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: v for k, v in document.items() if k not in _INDEX_DROPS}
+def index_summary(document: Dict[str, Any], orgs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    A program as the home page shows it: the row's columns, and the org tree the
+    row expands to. Everything else — the category breakdown, the full totals,
+    the transactions — is on the program's own page, and so in its own document.
+    """
+    return {
+        "name": document["name"],
+        "root_slug": document["root_slug"],
+        "hcb_url": document["hcb_url"],
+        "page": document["page"],
+        "json": document["json"],
+        "hcb_org_count": document["hcb_org_count"],
+        "weighted_projects": document["weighted_projects"],
+        "true_spend_dollars": document["totals"]["true_spend_dollars"],
+        "cost_per_weighted_hour": document["cost_per_weighted_hour"],
+        "balance_dollars": document["totals"]["balance_dollars"],
+        "orgs": _org_tree(orgs, include_revenue=False),
+    }
 
 
 def build_index_document(
@@ -320,7 +332,16 @@ def build_index_document(
 ) -> Dict[str, Any]:
     """The home page: metadata, then its four sections, in page order."""
     fresh = data.freshness or Freshness()
-    summaries = [index_summary(d) for d in program_documents]
+    summaries = [
+        index_summary(d, data.orgs_by_program.get(d["root_slug"], []))
+        for d in program_documents
+    ]
+    linked = [
+        s for s, d in zip(summaries, program_documents) if d["is_ysws_program"]
+    ]
+    marketing = [
+        s for s, d in zip(summaries, program_documents) if not d["is_ysws_program"]
+    ]
 
     return {
         "metadata": {
@@ -335,25 +356,22 @@ def build_index_document(
                 "rather than listed."
             ),
         },
-        "ysws_programs_with_linked_hcbs": [s for s in summaries if s["is_ysws_program"]],
+        "ysws_programs_with_linked_hcbs": linked,
         "ysws_programs_with_no_linked_hcbs": [
             {
                 "name": g["program_name"],
-                "program_id": g["program_id"],
                 "problem": GAP_TYPES.get(g["gap_type"], g["gap_type"]),
-                "gap_type": g["gap_type"],
                 "hcb_field": g["hcb_field"],
             }
             for g in data.unlinked_programs
         ],
-        "ysws_marketing": [s for s in summaries if not s["is_ysws_program"]],
+        "ysws_marketing": marketing,
         "hcb_orgs_no_program_claims": [
             {
                 "name": o["org_name"] or o["org_slug"],
                 "slug": o["org_slug"],
                 "hcb_url": o["hcb_url"],
                 "why": UNMATCHED_REASONS.get(o["reason"], o["reason"]),
-                "reason": o["reason"],
                 "hcb_parent_slug": o["parent_slug"],
                 "dollars_from_programs": _money(o["dollars_from_programs"]),
                 "dollars_to_programs": _money(o["dollars_to_programs"]),

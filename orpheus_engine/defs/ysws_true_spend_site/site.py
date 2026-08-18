@@ -18,11 +18,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from .data import SiteData
-from .documents import (
-    CATEGORY_LABELS,
-    build_documents,
-    index_summary,
-)
+from .documents import build_documents
 
 # Publication policy is enforced in documents.py (emails stripped, private orgs
 # summarised) so the JSON and the HTML are redacted identically. This flag only
@@ -343,9 +339,9 @@ def _program_row(summary: Dict[str, Any]) -> str:
         + f'<a href="{esc(summary["page"])}">{esc(summary["name"])}</a></td>',
         f'<td class="n" data-v="{summary["hcb_org_count"]}">{summary["hcb_org_count"]:,}</td>',
         _num_cell(summary["weighted_projects"], lambda v: f"{_dec(v):,.1f}"),
-        _num_cell(summary["totals"]["true_spend_dollars"]),
+        _num_cell(summary["true_spend_dollars"]),
         _num_cell(summary["cost_per_weighted_hour"]),
-        _num_cell(summary["totals"]["balance_dollars"]),
+        _num_cell(summary["balance_dollars"]),
         f'<td>{_link(summary["hcb_url"], "hcb")}</td>',
         f'<td>{_link(summary["json"], "json")}</td>',
     ]
@@ -685,7 +681,7 @@ def _machine_readable_line() -> str:
 
 def render_readme(index_document: Dict[str, Any]) -> str:
     linked = index_document["ysws_programs_with_linked_hcbs"]
-    spend = sum((_dec(p["totals"]["true_spend_dollars"]) for p in linked), Decimal(0))
+    spend = sum((_dec(p["true_spend_dollars"]) for p in linked), Decimal(0))
     return f"""# ysws-true-spend
 
 Static site showing the **true spend** of each Hack Club YSWS program: what the

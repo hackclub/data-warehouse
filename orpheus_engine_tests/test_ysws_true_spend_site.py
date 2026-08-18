@@ -531,13 +531,33 @@ def test_index_links_the_json_without_dumping_its_fields():
     assert "spend_transactions" not in index
 
 
-def test_program_json_carries_the_match_provenance():
+def test_documents_hold_what_their_page_holds_and_no_more():
+    """
+    The JSON mirrors the page: the index carries the row's columns and the tree
+    it expands to, the program document carries everything on its own page.
+    """
     import json
 
-    detail = json.loads(_render()["programs/fallout.json"])
-    assert detail["match_source"] == "unified_ysws_hcb_link"
+    files = _render()
+    index = json.loads(files["index.json"])
+    summary = index["ysws_programs_with_linked_hcbs"][0]
+    assert sorted(summary) == [
+        "balance_dollars", "cost_per_weighted_hour", "hcb_org_count", "hcb_url",
+        "json", "name", "orgs", "page", "root_slug", "true_spend_dollars",
+        "weighted_projects",
+    ]
+    # the index tree shows spend / balance / txns, not revenue (its page does not)
+    org = summary["orgs"][0]
+    assert sorted(org) == [
+        "balance_dollars", "children", "hcb_url", "name", "slug",
+        "transaction_count", "true_spend_dollars",
+    ]
+
+    detail = json.loads(files["programs/fallout.json"])
     assert detail["is_ysws_program"] is True
     assert detail["weighted_projects"] == 4.0
+    # the program page's tree does show revenue, so its document carries it
+    assert "external_revenue_dollars" in detail["orgs"][0]
 
 
 def test_index_json_mirrors_the_page_sections():
@@ -559,11 +579,12 @@ def test_index_json_mirrors_the_page_sections():
     assert program["name"] == "Fallout"
     assert program["hcb_org_count"] == 2
     assert program["weighted_projects"] == 4.0
-    assert program["totals"]["true_spend_dollars"] == 300.0
+    assert program["true_spend_dollars"] == 300.0
     # the tree, nested, with its details
     assert program["orgs"][0]["slug"] == "fallout"
     assert program["orgs"][0]["children"][0]["slug"] == "fallout-sub"
-    assert index["ysws_marketing"][0]["is_ysws_program"] is False
+    # marketing is its own section rather than a flag on the row
+    assert index["ysws_marketing"][0]["name"] == "Marketing (HQ)"
     assert index["hcb_orgs_no_program_claims"][0]["slug"] == "som-sticker-shipments"
 
 
