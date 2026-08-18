@@ -512,27 +512,23 @@ def test_grant_cards_are_labelled_as_committed_spend_not_leftovers():
     assert "Card grants unspent" not in page
 
 
-def test_llms_txt_documents_the_real_json_fields():
-    """Derived from the documents written, so it cannot drift from the data."""
-    import json
-
+def test_llms_txt_points_at_the_json_without_restating_it():
+    """Barebones: the JSON is self-describing, a field list here would drift."""
     files = _render()
     llms = files["llms.txt"]
     assert llms.startswith("# YSWS true spend")
-    for path in ("index.json", "programs/<root_slug>.json"):
-        assert path in llms, path
-    document = json.loads(files["programs/fallout.json"])
-    for field in ("spend_transactions", "category_breakdown", "match_source"):
-        assert field in document and field in llms, field
+    assert "/index.json" in llms
+    assert "/programs/{program_name}.json" in llms
+    assert "/programs/fallout.json" in llms          # a real example path
+    assert "spend_transactions" not in llms          # no field dump
 
 
-def test_index_shows_the_json_layout_and_links_llms_txt():
+def test_index_links_the_json_without_dumping_its_fields():
     index = _render()["index.html"]
     assert 'href="llms.txt"' in index
     assert 'href="index.json"' in index
-    assert "<pre>" in index
-    # the layout block sits above the section headers
-    assert index.index("<pre>") < index.index("YSWS Programs w/ Linked HCBs")
+    assert "<pre>" not in index
+    assert "spend_transactions" not in index
 
 
 def test_program_json_carries_the_match_provenance():

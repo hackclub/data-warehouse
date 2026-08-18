@@ -425,7 +425,7 @@ def _unmatched_table(rows: List[Dict[str, Any]]) -> str:
             f"</tr></thead><tbody>{body}</tbody></table>")
 
 
-def render_index(index_document: Dict[str, Any], json_layout: str = "") -> str:
+def render_index(index_document: Dict[str, Any]) -> str:
     linked = index_document["ysws_programs_with_linked_hcbs"]
     unlinked = index_document["ysws_programs_with_no_linked_hcbs"]
     marketing = index_document["ysws_marketing"]
@@ -433,7 +433,7 @@ def render_index(index_document: Dict[str, Any], json_layout: str = "") -> str:
 
     out = [
         "<h1>YSWS true spend</h1>",
-        json_layout,
+        _machine_readable_line(),
         _freshness_table(index_document["metadata"]),
         _section(f"YSWS Programs w/ Linked HCBs ({len(linked):,})",
                  _programs_table(linked, "programs"), open_by_default=True),
@@ -633,50 +633,12 @@ def render_program_page(document: Dict[str, Any]) -> str:
 
 # --- llms.txt, README, assembly ---------------------------------------------
 
-def _layout(index_document: Dict[str, Any], program_document: Dict[str, Any]) -> List[Any]:
+def render_llms_txt(index_document: Dict[str, Any], example_slug: str) -> str:
     """
-    The JSON shape, read off the documents actually written this run, so a
-    renamed or added field updates the documentation instead of quietly making
-    it wrong.
+    Barebones map for machines, per the llms.txt convention: what this is, and
+    where the JSON is. The JSON is self-describing, so this does not restate its
+    fields -- a field list here would be one more thing to drift.
     """
-    org = program_document["orgs"][0] if program_document.get("orgs") else {}
-    spend = (program_document.get("spend_transactions") or [{}])[0]
-    revenue = (program_document.get("revenue_transactions") or [{}])[0]
-    section = (index_document["hcb_orgs_no_program_claims"] or [{}])[0]
-    unlinked = (index_document["ysws_programs_with_no_linked_hcbs"] or [{}])[0]
-    summary = (index_document["ysws_programs_with_linked_hcbs"] or [{}])[0]
-    return [
-        ("index.json", "the home page: metadata and its four sections", [
-            ("top level", list(index_document)),
-            ("metadata", list(index_document["metadata"])),
-            ("ysws_programs_with_linked_hcbs[] / ysws_marketing[]", sorted(summary)),
-            ("...[].totals", sorted(summary.get("totals", {}))),
-            ("...[].orgs[] (nested via children[])", sorted(org)),
-            ("ysws_programs_with_no_linked_hcbs[]", sorted(unlinked)),
-            ("hcb_orgs_no_program_claims[]", sorted(section)),
-        ]),
-        ("programs/<root_slug>.json", "one program, everything on its page", [
-            ("top level", sorted(program_document)),
-            ("category_breakdown[]",
-             sorted((program_document.get("category_breakdown") or [{}])[0])),
-            ("spend_transactions[]", sorted(spend)),
-            ("revenue_transactions[] / intra_tree_transactions[]", sorted(revenue)),
-            ("withheld_orgs[]", sorted((program_document.get("withheld_orgs") or [{}])[0])),
-        ]),
-    ]
-
-
-def _layout_lines(layout: List[Any]) -> List[str]:
-    lines = []
-    for path, description, groups in layout:
-        lines.append(f"{path}  — {description}")
-        for name, fields in groups:
-            lines.append(f"    {name}: {', '.join(str(f) for f in fields)}")
-    return lines
-
-
-def render_llms_txt(layout: List[Any], index_document: Dict[str, Any]) -> str:
-    """Barebones map of the machine-readable side, per the llms.txt convention."""
     meta = index_document["metadata"]
     return f"""# YSWS true spend
 
@@ -686,57 +648,38 @@ account, which counts transfers to reviewer budgets, author funds and the fiscal
 host; this site classifies every outflow and counts only what left for the
 outside world.
 
-Static files, no auth, no rate limit. Amounts are US dollars, dates ISO-8601,
-timestamps UTC. Every page is rendered from the JSON below, so the two never
-disagree.
+Every page is rendered from the JSON below, so the two never disagree. Static
+files, no auth. Amounts are US dollars, dates ISO-8601, timestamps UTC.
+
+## Data
+
+/index.json
+    Metadata (when HCB was last pulled, when spend was last recalculated) plus
+    the four sections of the site: ysws_programs_with_linked_hcbs,
+    ysws_programs_with_no_linked_hcbs, ysws_marketing, and
+    hcb_orgs_no_program_claims. Each program carries its totals and its nested
+    HCB org tree, and links to its own document.
+
+/programs/{{program_name}}.json   e.g. /programs/{example_slug}.json
+    One program: totals, category breakdown, HCB org tree, and every
+    transaction counted -- the whole of its HTML page.
 
 ## Mapping contract
 
 {meta["mapping_contract"]}
 
-## JSON
-
-{chr(10).join(_layout_lines(layout))}
-
-## Freshness (index.json metadata)
-
-hcb_data_pulled          last successful HCB -> warehouse mirror run
-newest_hcb_record_held   newest HCB record in the warehouse
-spend_recalculated       last rebuild of the true-spend models
-page_built               when these files were written ({meta["page_built"]})
-
-## Reading the numbers
-
-true_spend_dollars             what the program spent on the outside world
-                               (categories A + C, net of marketing-funded budget)
-external_revenue_dollars       money into the program's org tree from outside it
-balance_dollars                cash still in the tree; excludes money on grant cards
-card_grants_funded_dollars     grant cards funded, already inside true_spend_dollars
-card_grants_remaining_dollars  how much of that is still on the cards
-stated_outflow_dollars         HCB's own figure, for comparison
-weighted_projects              approved projects, weighted; x10 gives weighted hours
-
 ## Transaction detail
 
 {meta["transaction_detail"]}
-
-## Human pages
-
-/index.html                  the four sections above
-/programs/<root_slug>.html   one program, rendered from programs/<root_slug>.json
 
 Site: {meta["site"]}
 Source: {meta["source"]} (asset ysws_true_spend_site)
 """
 
 
-def _layout_block(layout: List[Any]) -> str:
-    lines = "\n".join(_layout_lines(layout))
-    # No link to programs/ itself: a directory has no index on a static host.
-    # The per-program JSON is linked from each row of the table below.
+def _machine_readable_line() -> str:
     return (f'<p>Machine-readable: {_link("llms.txt", "llms.txt")} · '
-            f'{_link("index.json", "index.json")}</p>'
-            f"<pre>{esc(lines)}</pre>")
+            f'{_link("index.json", "index.json")}</p>')
 
 
 def render_readme(index_document: Dict[str, Any]) -> str:
@@ -789,8 +732,8 @@ def render_site(data: SiteData, generated_at: datetime) -> Dict[str, str]:
     for document in program_documents:
         files[document["page"]] = render_program_page(document)
 
-    layout = _layout(index_document, program_documents[0] if program_documents else {})
-    files["llms.txt"] = render_llms_txt(layout, index_document)
-    files["index.html"] = render_index(index_document, _layout_block(layout))
+    example = program_documents[0]["root_slug"] if program_documents else "flavortown"
+    files["llms.txt"] = render_llms_txt(index_document, example)
+    files["index.html"] = render_index(index_document)
     files["README.md"] = render_readme(index_document)
     return files
