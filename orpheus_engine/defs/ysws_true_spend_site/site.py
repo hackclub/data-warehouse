@@ -470,7 +470,9 @@ def _programs_table(
     )
 
 
-def render_index(data: SiteData, generated_at: datetime) -> str:
+def render_index(
+    data: SiteData, generated_at: datetime, json_layout: Optional[str] = None
+) -> str:
     # HQ marketing is tracked in the same models so its spend can be netted out
     # of the programs it funds, but it is not a YSWS program and does not belong
     # in a table of them.
@@ -479,6 +481,7 @@ def render_index(data: SiteData, generated_at: datetime) -> str:
 
     out = [
         "<h1>YSWS true spend</h1>",
+        json_layout or "",
         _freshness_table(data, generated_at),
         _section(
             f"YSWS Programs w/ Linked HCBs ({len(ysws):,})",
@@ -875,8 +878,10 @@ sub-organizations and the fiscal host).
   every transaction counted (and every one deliberately not counted).
 - The bottom of `index.html` — HCB orgs no program claims, and Unified YSWS DB
   programs whose HCB link cannot be used, with the dollars at stake.
-- `data/programs.json`, `data/programs/<slug>.json` — program totals and org
-  trees as JSON (transaction-level detail is on the HTML pages).
+- `data/programs.json`, `data/programs/<slug>.json`, `data/unmatched.json` —
+  program totals, org trees and mapping gaps as JSON (transaction-level detail
+  is on the HTML pages).
+- `llms.txt` — the JSON layout and what the numbers mean, for machines.
 
 {len(data.programs)} programs · revenue {money(total_revenue)} · true spend
 {money(total_spend)} · generated {generated_at.strftime('%Y-%m-%d %H:%M UTC')}.
@@ -923,17 +928,122 @@ def _program_json(program: Dict[str, Any], orgs: List[Dict[str, Any]]) -> Dict[s
     return out
 
 
+def _json_layout(
+    summary: Dict[str, Any],
+    detail: Dict[str, Any],
+    org: Dict[str, Any],
+    unmatched: Dict[str, Any],
+    unlinked: Dict[str, Any],
+) -> List[Any]:
+    """
+    The site's JSON shape, read off the objects actually written this run.
+
+    Derived rather than hand-written: a field added or renamed upstream shows up
+    here automatically instead of silently making the documentation wrong.
+    """
+    return [
+        ("data/programs.json", "every program, totals only", [
+            ("top level", ["generated_at", "hcb_pulled_at", "hcb_data_through",
+                           "recalculated_at", "program_count", "unmatched_org_count",
+                           "unlinked_program_count", "total_true_spend_dollars",
+                           "total_external_revenue_dollars", "programs[]"]),
+            ("programs[]", sorted(summary)),
+        ]),
+        ("data/programs/<root_slug>.json", "one program, plus its HCB org tree", [
+            ("top level", sorted(k for k in detail if k != "orgs")),
+            ("orgs[]", sorted(org)),
+        ]),
+        ("data/unmatched.json", "what is not attributed, and why", [
+            ("unmatched_orgs[]", sorted(unmatched)),
+            ("unlinked_programs[]", sorted(unlinked)),
+        ]),
+    ]
+
+
+def _layout_lines(layout: List[Any]) -> List[str]:
+    lines = []
+    for path, description, groups in layout:
+        lines.append(f"{path}  — {description}")
+        for name, fields in groups:
+            lines.append(f"    {name}: {', '.join(fields)}")
+    return lines
+
+
+def render_llms_txt(layout: List[Any], data: SiteData, generated_at: datetime) -> str:
+    """Barebones map of the machine-readable side, per the llms.txt convention."""
+    fresh = data.freshness or Freshness()
+    body = "\n".join(_layout_lines(layout))
+    return f"""# YSWS true spend
+
+What each Hack Club YSWS program actually spent, published from the Hack Club
+data warehouse. HCB reports a program's spend as everything that left its
+account, which counts transfers to reviewer budgets, author funds and the fiscal
+host; this site classifies every outflow and counts only what left for the
+outside world.
+
+Static files, no auth, no rate limit. Amounts are US dollars, dates ISO-8601,
+timestamps UTC.
+
+## Mapping contract
+
+A program owns the HCB organization its Unified YSWS DB (Airtable) record links
+to, plus every HCB sub-organization beneath it. That is the only way an
+organization is matched to a program: no name matching, no inference from who
+paid whom. Everything unattributed is listed in data/unmatched.json.
+
+## JSON
+
+{body}
+
+## Freshness (in data/programs.json)
+
+hcb_pulled_at       last successful HCB -> warehouse mirror run
+hcb_data_through    newest HCB record held
+recalculated_at     last rebuild of the true-spend models
+generated_at        when these files were written ({generated_at:%Y-%m-%d %H:%M UTC})
+
+## Reading the numbers
+
+true_spend_dollars      what the program spent on the outside world (categories A + C,
+                        net of marketing-funded budget)
+external_revenue_dollars money into the program's org tree from outside it
+balance_dollars         cash still in the tree; excludes money on grant cards
+card_grants_funded_dollars     grant cards funded, already inside true_spend_dollars
+card_grants_remaining_dollars  how much of that is still on the cards
+stated_outflow_dollars  HCB's own figure, for comparison
+weighted_projects       approved projects, weighted; x10 gives weighted hours
+
+## Human pages
+
+/index.html                     programs, unlinked programs, marketing, unmatched orgs
+/programs/<root_slug>.html      one program: category breakdown, org tree, and every
+                                transaction counted (transaction detail is HTML only)
+
+Transaction detail mirrors what hcb.hackclub.com publishes: names yes, email
+addresses no, and organizations outside HCB's transparency mode are summarised
+rather than listed.
+
+Source: https://github.com/hackclub/data-warehouse (asset ysws_true_spend_site)
+"""
+
+
+def _json_layout_block(layout: List[Any]) -> str:
+    lines = "\n".join(_layout_lines(layout))
+    return (
+        f'<p>Machine-readable: {_link("llms.txt", "llms.txt")} · '
+        f'{_link("data/programs.json", "data/programs.json")} · '
+        f'{_link("data/unmatched.json", "data/unmatched.json")}</p>'
+        f"<pre>{esc(lines)}</pre>"
+    )
+
+
 def _dump(value: Any, indent: Optional[int] = None) -> str:
     return json.dumps(value, default=_json_default, indent=indent, sort_keys=False) + "\n"
 
 
 def render_site(data: SiteData, generated_at: datetime) -> Dict[str, str]:
     """Build every file of the site, keyed by repo-relative path."""
-    files: Dict[str, str] = {
-        ".nojekyll": "",
-        "README.md": render_readme(data, generated_at),
-        "index.html": render_index(data, generated_at),
-    }
+    files: Dict[str, str] = {".nojekyll": ""}
 
     summaries = []
     for program in data.programs:
@@ -962,6 +1072,26 @@ def render_site(data: SiteData, generated_at: datetime) -> Dict[str, str]:
         summary["page"] = f"programs/{name}.html"
         summary["org_count"] = program["org_count"]
         summaries.append(summary)
+
+    # Documented from the objects just built, then shown to humans (top of the
+    # index) and to machines (llms.txt) from the same source.
+    example_detail = _program_json(data.programs[0], []) if data.programs else {}
+    example_org = next(
+        (o for orgs in data.orgs_by_program.values() for o in orgs), {}
+    )
+    layout = _json_layout(
+        summaries[0] if summaries else {},
+        example_detail,
+        {k: v for k, v in example_org.items()
+         if k in ("org_slug", "org_name", "event_id", "parent_id", "depth",
+                  "external_revenue_dollars", "true_spend_dollars",
+                  "balance_dollars", "transaction_count")},
+        data.unmatched_orgs[0] if data.unmatched_orgs else {},
+        data.unlinked_programs[0] if data.unlinked_programs else {},
+    )
+    files["llms.txt"] = render_llms_txt(layout, data, generated_at)
+    files["README.md"] = render_readme(data, generated_at)
+    files["index.html"] = render_index(data, generated_at, _json_layout_block(layout))
 
     fresh = data.freshness or Freshness()
     files["data/unmatched.json"] = _dump(

@@ -266,6 +266,7 @@ def test_expected_files_are_emitted():
         "data/programs.json",
         "data/programs/fallout.json",
         "data/unmatched.json",
+        "llms.txt",
         ".nojekyll",
         "README.md",
     ):
@@ -495,6 +496,32 @@ def test_grant_cards_are_labelled_as_committed_spend_not_leftovers():
     assert "Grant cards funded (counted as spend above)" in page
     assert "Still sitting on those cards" in page
     assert "Card grants unspent" not in page
+
+
+def test_llms_txt_documents_the_real_json_fields():
+    """Derived from the objects written, so it cannot drift from the data."""
+    files = _render()
+    llms = files["llms.txt"]
+    assert llms.startswith("# YSWS true spend")
+    for path in ("data/programs.json", "data/programs/<root_slug>.json",
+                 "data/unmatched.json"):
+        assert path in llms, path
+    # fields listed are the fields actually emitted
+    import json
+
+    summary = json.loads(files["data/programs.json"])["programs"][0]
+    for field in ("true_spend_dollars", "root_slug", "page"):
+        assert field in summary and field in llms, field
+    assert "match_source" in llms
+
+
+def test_index_shows_the_json_layout_and_links_llms_txt():
+    index = _render()["index.html"]
+    assert 'href="llms.txt"' in index
+    assert 'href="data/programs.json"' in index
+    assert "<pre>" in index
+    # the layout block sits above the section headers
+    assert index.index("<pre>") < index.index("YSWS Programs w/ Linked HCBs")
 
 
 def test_program_json_carries_the_match_provenance():
