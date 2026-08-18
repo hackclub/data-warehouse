@@ -465,7 +465,7 @@ def _unmatched_table(rows: List[Dict[str, Any]]) -> str:
 
 def _budgets_table(rows: List[Dict[str, Any]], table_id: str) -> str:
     """
-    Every personal budget pot. Personal spend leads, because that is the
+    Every individual budget. Personal spend leads, because that is the
     question the section answers: what did this person spend YSWS money on.
     """
     headers = [("Budget", "text"), ("Person", "text"), ("Personal spend", "num"),
@@ -606,10 +606,10 @@ def _budget_txn_table(txns: List[Dict[str, Any]], counted_column: bool) -> str:
 
 
 def render_budget_page(document: Dict[str, Any]) -> str:
-    """One person's budget pot: where the money came from, and where it went."""
+    """One person's individual budget: where the money came from, and where it went."""
     who = (f'{esc(document["person_name"])}' if document["person_name"]
            else '<span class="note">no YSWS Authors record links to this pot</span>')
-    notes = ['<p class="note">A personal YSWS budget: programs grant money into '
+    notes = ['<p class="note">A YSWS individual budget: programs grant money into '
              "it, and it is spent across whatever its holder reviews. Money sent "
              "back to an HCB org is not counted here, because that org's own "
              "ledger counts it.</p>"]
@@ -652,9 +652,9 @@ def render_index(index_document: Dict[str, Any]) -> str:
     unlinked = index_document["ysws_programs_with_no_linked_hcbs"]
     marketing = index_document["ysws_marketing"]
     unmatched = index_document["hcb_orgs_no_program_claims"]
-    budgets = index_document["ysws_budgets"]
-    budgets_no_person = index_document["ysws_budgets_with_no_linked_person"]
-    people_no_budget = index_document["ysws_people_with_no_linked_budget"]
+    budgets = index_document["ysws_individual_budgets"]
+    budgets_no_person = index_document["ysws_individual_budgets_with_no_linked_person"]
+    people_no_budget = index_document["ysws_people_with_no_linked_individual_budget"]
 
     out = [
         "<h1>YSWS true spend</h1>",
@@ -667,7 +667,7 @@ def render_index(index_document: Dict[str, Any]) -> str:
     ]
     if budgets:
         out.append(_section(
-            f"YSWS Budgets ({len(budgets):,})",
+            f"YSWS Individual Budgets ({len(budgets):,})",
             '<p class="note">One HCB org per person. Programs grant money into '
             "these, so a program funding a budget is not that program's spend — "
             "it is spend here, once it leaves for the outside world. The two are "
@@ -675,11 +675,11 @@ def render_index(index_document: Dict[str, Any]) -> str:
             + _budgets_table(budgets, "budgets"),
         ))
     out.append(_section(
-        f"YSWS Budgets w/ No Linked Person ({len(budgets_no_person):,})",
+        f"YSWS Individual Budgets w/ No Linked Person ({len(budgets_no_person):,})",
         _budgets_without_person_note() + _budgets_table(budgets_no_person, "budgets-no-person"),
     ))
     out.append(_section(
-        f"People w/ No Linked Budget ({len(people_no_budget):,})",
+        f"People w/ No Linked Individual Budget ({len(people_no_budget):,})",
         _people_without_budget_table(people_no_budget),
     ))
     if marketing:
@@ -900,8 +900,8 @@ files, no auth. Amounts are US dollars, dates ISO-8601, timestamps UTC.
 The home page is rendered from /index.json, which holds the metadata (when HCB
 was last pulled, when the spend was last recalculated) and the sections of the
 site: ysws_programs_with_linked_hcbs, ysws_programs_with_no_linked_hcbs,
-ysws_budgets, ysws_budgets_with_no_linked_person,
-ysws_people_with_no_linked_budget, ysws_marketing, and
+ysws_individual_budgets, ysws_individual_budgets_with_no_linked_person,
+ysws_people_with_no_linked_individual_budget, ysws_marketing, and
 hcb_orgs_no_program_claims. Each program there carries its totals and its
 nested HCB org tree, and points at its own document.
 
@@ -909,8 +909,8 @@ Each program page is rendered from /programs/{{program_name}}.json, for example
 /programs/{example_slug}.json, which holds that program's totals, category
 breakdown, HCB org tree, and every transaction counted.
 
-Each budget page is rendered from /budgets/{{budget_slug}}.json. A YSWS budget
-is one person's own HCB org: programs grant money into it, and it is spent
+Each individual-budget page is rendered from /budgets/{{budget_slug}}.json. A
+YSWS individual budget is one person's own HCB org: programs grant money into it, and it is spent
 across whatever that person reviews. A program funding a budget is therefore
 NOT the program's spend, and the two sets of dollars must never be added
 together. Money a budget sends back to an HCB org is likewise not counted as
@@ -970,16 +970,16 @@ Built as JSON first, then rendered to HTML from that JSON, so the two cannot
 disagree.
 
 - `index.json` / `index.html` — metadata, programs with linked HCBs, programs
-  without, personal YSWS budgets, the two budget-link gap lists, marketing, and
+  without, YSWS individual budgets, the two budget-link gap lists, marketing, and
   HCB orgs no program claims.
 - `programs/<root_slug>.json` / `.html` — one program: totals, category
   breakdown, HCB org tree, and every transaction counted.
-- `budgets/<slug>.json` / `.html` — one person's YSWS budget: totals, bucket
-  breakdown, and every transaction behind them.
+- `budgets/<slug>.json` / `.html` — one person's YSWS individual budget:
+  totals, bucket breakdown, and every transaction behind them.
 - `llms.txt` — the JSON layout and what the numbers mean.
 
 {len(linked)} programs · true spend {money(spend)} ·
-{len(index_document["ysws_budgets"])} personal budgets · built
+{len(index_document["ysws_individual_budgets"])} personal budgets · built
 {index_document["metadata"]["page_built"]}.
 
 ## Do not edit by hand

@@ -148,7 +148,7 @@ def build_duckdb(index_document: Dict[str, Any],
         "unlinked_programs": index_document["ysws_programs_with_no_linked_hcbs"],
         "budgets": _flat_budgets(list(budget_documents)),
         "budget_transactions": _flat_budget_transactions(list(budget_documents)),
-        "people_without_budget": index_document["ysws_people_with_no_linked_budget"],
+        "people_without_budget": index_document["ysws_people_with_no_linked_individual_budget"],
     }
 
     with tempfile.TemporaryDirectory(prefix="ysws-duckdb-") as tmp:

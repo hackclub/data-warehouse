@@ -11,8 +11,8 @@ Three documents, mirroring the three kinds of page:
   index.json                 metadata + the sections of the home page
   programs/<root_slug>.json  one program: totals, category breakdown, HCB org
                              tree, and every transaction listed on its page
-  budgets/<slug>.json        one person's budget pot: totals, bucket breakdown,
-                             and every transaction behind them
+  budgets/<slug>.json        one person's individual budget: totals, bucket
+                             breakdown, and every transaction behind them
 
 Redaction happens here rather than in the renderer, so the JSON is publishable
 under the same rules as the HTML: email addresses stripped, and transactions of
@@ -336,7 +336,7 @@ def _budget_bucket_breakdown(txns: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 def build_budget_document(
     budget: Dict[str, Any], txns: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
-    """One person's budget pot, with every transaction behind its total."""
+    """One person's individual budget, with every transaction behind its total."""
     name = page_slug(budget["budget_slug"], budget["budget_event_id"])
     outflows = [t for t in txns if t["flow_direction"] == "outflow"]
     inflows = [t for t in txns if t["flow_direction"] != "outflow"]
@@ -369,7 +369,7 @@ def build_budget_document(
 
 
 def budget_index_summary(document: Dict[str, Any]) -> Dict[str, Any]:
-    """A pot as the home page lists it."""
+    """An individual budget as the home page lists it."""
     return {
         "budget_name": document["budget_name"],
         "person_name": document["person_name"],
@@ -529,9 +529,9 @@ def build_index_document(
             }
             for g in data.unlinked_programs
         ],
-        "ysws_budgets": budgets,
-        "ysws_budgets_with_no_linked_person": budgets_without_person,
-        "ysws_people_with_no_linked_budget": people_without_budget,
+        "ysws_individual_budgets": budgets,
+        "ysws_individual_budgets_with_no_linked_person": budgets_without_person,
+        "ysws_people_with_no_linked_individual_budget": people_without_budget,
         "ysws_marketing": marketing,
         "hcb_orgs_no_program_claims": [
             {

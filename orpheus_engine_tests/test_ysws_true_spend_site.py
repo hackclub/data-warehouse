@@ -535,9 +535,9 @@ def test_homepage_sections_are_collapsible_and_in_order():
     index = files["index.html"]
     linked = index.index("YSWS Programs w/ Linked HCBs")
     unlinked = index.index("YSWS Programs w/ No Linked HCBs")
-    budgets = index.index("YSWS Budgets (")
-    no_person = index.index("YSWS Budgets w/ No Linked Person")
-    no_budget = index.index("People w/ No Linked Budget")
+    budgets = index.index("YSWS Individual Budgets (")
+    no_person = index.index("YSWS Individual Budgets w/ No Linked Person")
+    no_budget = index.index("People w/ No Linked Individual Budget")
     marketing = index.index("<h2>YSWS - Marketing</h2>")
     orgs = index.index("HCB orgs no program claims")
     assert linked < unlinked < budgets < no_person < no_budget < marketing < orgs
@@ -810,9 +810,9 @@ def test_index_json_mirrors_the_page_sections():
         "metadata",
         "ysws_programs_with_linked_hcbs",
         "ysws_programs_with_no_linked_hcbs",
-        "ysws_budgets",
-        "ysws_budgets_with_no_linked_person",
-        "ysws_people_with_no_linked_budget",
+        "ysws_individual_budgets",
+        "ysws_individual_budgets_with_no_linked_person",
+        "ysws_people_with_no_linked_individual_budget",
         "ysws_marketing",
         "hcb_orgs_no_program_claims",
     ]
@@ -860,7 +860,7 @@ def test_every_budget_gets_a_page_and_a_document():
         assert f"budgets/{slug}.json" in files
     index = files["index.html"]
     assert 'href="budgets/ysws-budget-robin.html"' in index
-    assert "YSWS Budgets (2)" in index
+    assert "YSWS Individual Budgets (2)" in index
 
 
 def test_budget_page_totals_match_its_transactions():
@@ -913,15 +913,15 @@ def test_both_sides_of_a_broken_budget_link_are_published():
 
     files = _render()
     index = files["index.html"]
-    assert "YSWS Budgets w/ No Linked Person (1)" in index
-    assert "People w/ No Linked Budget (2)" in index      # blank + unparseable
+    assert "YSWS Individual Budgets w/ No Linked Person (1)" in index
+    assert "People w/ No Linked Individual Budget (2)" in index      # blank + unparseable
 
     document = json.loads(files["index.json"])
-    orphans = document["ysws_budgets_with_no_linked_person"]
+    orphans = document["ysws_individual_budgets_with_no_linked_person"]
     assert [b["slug"] for b in orphans] == ["ysws-budget-orphan"]
     assert orphans[0]["person_name"] is None
 
-    people = document["ysws_people_with_no_linked_budget"]
+    people = document["ysws_people_with_no_linked_individual_budget"]
     assert {p["name"] for p in people} == {"Sam Reviewer", "Tay Poe"}
     assert {p["problem"] for p in people} == {
         "No HCB Budget Fund on the YSWS Authors record",

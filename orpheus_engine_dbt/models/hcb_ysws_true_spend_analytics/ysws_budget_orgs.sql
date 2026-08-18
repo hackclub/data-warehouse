@@ -4,7 +4,7 @@
 ) }}
 
 /*
-    Every personal YSWS budget pot, and whose it is.
+    Every YSWS individual budget, and whose it is.
 
     The universe used to be `slug LIKE 'ysws-budget-%'`, which silently dropped
     six real pots whose slug never followed the convention — dhamari,

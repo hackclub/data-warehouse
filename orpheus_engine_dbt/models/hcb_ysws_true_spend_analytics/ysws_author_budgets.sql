@@ -4,7 +4,7 @@
 ) }}
 
 /*
-    Individual YSWS budget pots — one row per pot in ysws_budget_orgs, with the
+    YSWS individual budgets — one row per budget in ysws_budget_orgs, with the
     person it belongs to already attached (roster link; NULL when the roster's
     "HCB Budget Fund" field was never filled in).
 
