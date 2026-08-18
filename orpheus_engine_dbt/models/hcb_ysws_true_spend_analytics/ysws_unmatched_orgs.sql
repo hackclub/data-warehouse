@@ -30,6 +30,9 @@
     Deliberately NOT a reason: name or slug resemblance. If nothing structural
     or financial connects an org to a program, it does not belong here.
 
+    Scope: HQ-owned orgs only (see the unmatched CTE). Grant recipients that are
+    fiscally sponsored organisations of their own are payees, not mapping gaps.
+
     Grain: (event_id, reason) — an org can appear for several reasons.
 */
 
@@ -47,6 +50,13 @@ unmatched AS (
     FROM {{ ref('orgs') }} o
     WHERE NOT o.is_deleted
       AND NOT EXISTS (SELECT 1 FROM tree t WHERE t.event_id = o.event_id)
+      -- HQ-owned orgs only. A fiscally sponsored organisation that received a
+      -- grant from a program (a hack club, an FLL team, a nonprofit) is a
+      -- payee, not a missing mapping, and there are hundreds of them; they
+      -- would bury the orgs that actually need an Airtable link or an HCB
+      -- parent. Note is_hq is false for Salary-plan orgs, so personal earnings
+      -- orgs on that plan drop out here too.
+      AND o.is_hq
 ),
 
 -- (a) structural: its child is a mapped root, it is not mapped
