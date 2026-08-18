@@ -296,6 +296,24 @@ def test_index_shows_every_program_and_its_org_nesting():
     assert "fallout-sub" in index
 
 
+def test_org_trees_collapse_at_every_level():
+    """A 3-deep, 256-org program needs each layer foldable, open by default."""
+    files = _render()
+    index = files["index.html"]
+    # depth is what the script folds on, and nothing starts collapsed
+    assert 'data-depth="0" data-collapsed="false"' in index
+    assert 'data-depth="1" data-collapsed="false"' in index
+    # the parent gets a toggle and a child count; the leaf gets a spacer
+    assert 'button class="tgo"' in index
+    assert "(1 sub-org)" in index
+    assert "tgo-spacer" in index
+
+    # the program page shows the same tree, with the anchors the index links to
+    page = files["programs/fallout.html"]
+    assert 'id="org-fallout-sub"' in page
+    assert 'data-collapsed="false"' in page
+
+
 def test_program_table_is_sortable_and_numbers_carry_raw_values():
     """Sorting is client-side on data-v, so every numeric cell needs one."""
     index = _render()["index.html"]

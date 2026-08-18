@@ -60,8 +60,9 @@ table.sortable thead th { cursor: pointer; user-select: none; }
 table.sortable thead th:hover { text-decoration: underline; }
 tr.detail > td { padding: .2em 0 .8em 1.4em; }
 tr.prog:hover { background: #f4f4f4; }
-button.tg { font: inherit; border: 0; background: none; cursor: pointer;
-            padding: 0 .3em 0 0; color: #333; }
+button.tg, button.tgo { font: inherit; border: 0; background: none;
+            cursor: pointer; padding: 0 .3em 0 0; color: #333; }
+.tgo-spacer { display: inline-block; width: 1.1em; }
 details { margin: .1em 0 .1em 1.1em; }
 summary { cursor: pointer; }
 summary h2 { display: inline; margin: 0; }
@@ -127,9 +128,32 @@ SCRIPT = """
     btn.textContent = open ? '\u25be' : '\u25b8';
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
+  // Org trees: collapsing a node hides its whole subtree. Rows are emitted in
+  // depth-first order and carry their depth, so visibility is one linear pass:
+  // skip everything deeper than a collapsed row until the depth comes back up.
+  function refreshTree(table) {
+    var hideDepth = null;
+    Array.prototype.forEach.call(table.querySelectorAll('tr.sub'), function (row) {
+      var depth = parseInt(row.dataset.depth, 10);
+      if (hideDepth !== null && depth > hideDepth) { row.setAttribute('hidden', ''); return; }
+      hideDepth = null;
+      row.removeAttribute('hidden');
+      if (row.dataset.collapsed === 'true') hideDepth = depth;
+    });
+  }
   document.addEventListener('click', function (e) {
     var th = e.target.closest('table.sortable thead th');
     if (th) { sort(th.closest('table'), th); return; }
+    var org = e.target.closest('button.tgo');
+    if (org) {
+      var row = org.closest('tr');
+      var collapsed = row.dataset.collapsed !== 'true';
+      row.dataset.collapsed = collapsed ? 'true' : 'false';
+      org.textContent = collapsed ? '\u25b8' : '\u25be';
+      org.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      refreshTree(row.closest('table'));
+      return;
+    }
     var btn = e.target.closest('button.tg');
     if (btn) { toggle(btn); }
   });
@@ -245,50 +269,6 @@ def _tree_children(orgs: List[Dict[str, Any]]) -> Dict[Optional[int], List[Dict[
     return children
 
 
-def _org_line(org: Dict[str, Any], page: Optional[str]) -> str:
-    bits = [
-        f"<strong>{esc(org['org_name'] or org['org_slug'])}</strong>",
-        f"({esc(org['org_slug'])})",
-        f"spend {money0(org['true_spend_dollars'])}",
-        f"· revenue {money0(org['external_revenue_dollars'])}",
-        f"· balance {money0(org['balance_dollars'])}",
-        f"· [{_hcb_org_link(org['org_slug'])}]",
-    ]
-    if page:
-        anchor = "{}#org-{}".format(page, org["org_slug"])
-        bits.append("· [" + _link(anchor, "transactions") + "]")
-    return " ".join(bits)
-
-
-def _render_org_nodes(
-    children: Dict[Optional[int], List[Dict[str, Any]]],
-    parent: Optional[int],
-    page: Optional[str],
-) -> str:
-    nodes = children.get(parent, [])
-    if not nodes:
-        return ""
-    out = ["<ul>"]
-    for org in nodes:
-        kids = children.get(org["event_id"], [])
-        line = _org_line(org, page)
-        if kids:
-            out.append(
-                f"<li><details><summary>{line} · {len(kids)} sub-org"
-                f"{'s' if len(kids) != 1 else ''}</summary>"
-                f"{_render_org_nodes(children, org['event_id'], page)}</details></li>"
-            )
-        else:
-            out.append(f"<li>{line}</li>")
-    out.append("</ul>")
-    return "".join(out)
-
-
-def render_org_tree(orgs: List[Dict[str, Any]], page: Optional[str] = None) -> str:
-    children = _tree_children(orgs)
-    return _render_org_nodes(children, None, page)
-
-
 # --- index ------------------------------------------------------------------
 
 def _freshness_table(data: SiteData, generated_at: datetime) -> str:
@@ -332,7 +312,7 @@ def _program_row(program: Dict[str, Any], page: str, tree: List[Dict[str, Any]])
     ]
     detail = (
         '<tr class="detail" hidden><td colspan="7">'
-        + _org_subtable(tree, page)
+        + _org_tree_table(tree, page=page)
         + "</td></tr>"
     )
     return f'<tr class="prog">' + "".join(cells) + "</tr>" + detail
@@ -346,38 +326,80 @@ def _num_cell(value: Any, fmt) -> str:
     return f'<td class="n" data-v="{_dec(value)}">{esc(text)}</td>'
 
 
-def _org_subtable(orgs: List[Dict[str, Any]], page: str) -> str:
+def _org_tree_table(
+    orgs: List[Dict[str, Any]],
+    page: Optional[str] = None,
+    show_revenue: bool = False,
+    anchor_ids: bool = False,
+) -> str:
     """
-    The program's HCB org tree, indented by depth, numbers still aligned.
-    Ordered by walking the tree so parents sit above their children.
+    A program's HCB org tree: depth-first, indented, numbers aligned, and
+    collapsible at every level (a program like Campfire is three layers deep and
+    256 orgs wide). Expanded by default -- collapsing is for getting a big tree
+    out of the way, so the tree has to be readable before anyone touches it.
+
+    Rows carry their depth; the script hides everything deeper than a collapsed
+    row until the depth comes back up, which is what makes an arbitrarily deep
+    subtree fold with one click.
     """
     if not orgs:
         return '<span class="note">No orgs.</span>'
     children = _tree_children(orgs)
-    ordered: List[Dict[str, Any]] = []
+    ordered: List[Any] = []
 
     def walk(parent, depth):
         for org in children.get(parent, []):
-            ordered.append((org, depth))
+            kids = children.get(org["event_id"], [])
+            ordered.append((org, depth, len(kids)))
             walk(org["event_id"], depth + 1)
 
     walk(None, 0)
-    rows = "".join(
-        f'<tr class="sub">'
-        f'<td>{"&nbsp;" * 3 * depth}{esc(org["org_name"] or org["org_slug"])} '
-        f'<span class="note">({esc(org["org_slug"])})</span></td>'
-        f'<td class="n">{money(org["true_spend_dollars"])}</td>'
-        f'<td class="n">{money(org["balance_dollars"])}</td>'
-        f'<td class="n">{int(org["transaction_count"] or 0):,}</td>'
-        f'<td>{_hcb_org_link(org["org_slug"])}</td>'
-        f'<td>{_link(page + "#org-" + str(org["org_slug"]), "transactions")}</td>'
-        "</tr>"
-        for org, depth in ordered
-    )
+
+    rows = []
+    for org, depth, kid_count in ordered:
+        if kid_count:
+            control = (
+                '<button class="tgo" aria-expanded="true">\u25be</button> '
+            )
+            suffix = f' <span class="note">({kid_count} sub-org' \
+                     f"{'s' if kid_count != 1 else ''})</span>"
+        else:
+            control = '<span class="tgo-spacer"></span> '
+            suffix = ""
+        cells = [
+            f'<td>{"&nbsp;" * 3 * depth}{control}'
+            f'{esc(org["org_name"] or org["org_slug"])} '
+            f'<span class="note">({esc(org["org_slug"])})</span>{suffix}</td>'
+        ]
+        if show_revenue:
+            cells.append(f'<td class="n">{money(org["external_revenue_dollars"])}</td>')
+        cells += [
+            f'<td class="n">{money(org["true_spend_dollars"])}</td>',
+            f'<td class="n">{money(org["balance_dollars"])}</td>',
+            f'<td class="n">{int(org["transaction_count"] or 0):,}</td>',
+            f'<td>{_hcb_org_link(org["org_slug"])}</td>',
+        ]
+        if page:
+            cells.append(
+                f'<td>{_link(page + "#org-" + str(org["org_slug"]), "transactions")}</td>'
+            )
+        row_id = f' id="org-{esc(org["org_slug"])}"' if anchor_ids else ""
+        rows.append(
+            f'<tr class="sub"{row_id} data-depth="{depth}" data-collapsed="false">'
+            + "".join(cells)
+            + "</tr>"
+        )
+
+    head = ["<th>HCB org</th>"]
+    if show_revenue:
+        head.append('<th class="n">Revenue</th>')
+    head += ['<th class="n">True spend</th>', '<th class="n">Balance</th>',
+             '<th class="n">Txns</th>', "<th></th>"]
+    if page:
+        head.append("<th></th>")
     return (
-        '<table><thead><tr><th>HCB org</th><th class="n">True spend</th>'
-        '<th class="n">Balance</th><th class="n">Txns</th><th></th><th></th>'
-        f"</tr></thead><tbody>{rows}</tbody></table>"
+        f'<table><thead><tr>{"".join(head)}</tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table>'
     )
 
 
@@ -678,27 +700,6 @@ def _revenue_table(txns: List[Dict[str, Any]]) -> str:
     return f"<table><thead><tr>{header}</tr></thead><tbody>{rows}</tbody></table>"
 
 
-def _org_table(orgs: List[Dict[str, Any]]) -> str:
-    rows = "".join(
-        f'<tr id="org-{esc(o["org_slug"])}">'
-        f"<td>{'&nbsp;' * 2 * int(o['depth'] or 0)}{esc(o['org_name'] or o['org_slug'])}</td>"
-        f"<td>{_link(HCB_ORG_URL.format(slug=o['org_slug']), o['org_slug'])}</td>"
-        f'<td class="n">{money(o["external_revenue_dollars"])}</td>'
-        f'<td class="n">{money(o["true_spend_dollars"])}</td>'
-        f'<td class="n">{money(o["balance_dollars"])}</td>'
-        f'<td class="n">{int(o["transaction_count"] or 0):,}</td>'
-        "</tr>"
-        for o in sorted(
-            orgs, key=lambda o: (int(o["depth"] or 0), -_dec(o["true_spend_dollars"]))
-        )
-    )
-    return (
-        '<table><thead><tr><th>Org</th><th>Slug</th><th class="n">Revenue</th>'
-        '<th class="n">True spend</th><th class="n">Balance</th>'
-        f'<th class="n">Outflow txns</th></tr></thead><tbody>{rows}</tbody></table>'
-    )
-
-
 def render_program_page(
     program: Dict[str, Any],
     orgs: List[Dict[str, Any]],
@@ -741,10 +742,7 @@ def render_program_page(
         "<h2>Where the money went</h2>",
         _category_table(spend_txns),
         "<h2>HCB org tree</h2>",
-        _org_table(orgs),
-        "<details><summary>Same tree, nested</summary>",
-        render_org_tree(orgs),
-        "</details>",
+        _org_tree_table(orgs, show_revenue=True, anchor_ids=True),
         f"<h2>Spend transactions ({len(spend_txns):,})</h2>",
         '<p class="note">Every main-ledger outflow of every org in the tree, '
         "classified. Grey rows are not counted as this program's spend. Card-grant "
