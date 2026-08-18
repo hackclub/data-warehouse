@@ -547,8 +547,9 @@ def _summary_table(program: Dict[str, Any]) -> str:
             else "n/a",
         ),
         ("Transfers inside the tree, incl. grant funding (not revenue)", money(program["intra_tree_revenue_dollars"])),
-        ("Card grants funded", money(program["card_grants_funded_dollars"])),
-        ("Card grants unspent", money(program["card_grants_unspent_dollars"])),
+        ("Grant cards funded (counted as spend above)",
+         money(program["card_grants_funded_dollars"])),
+        ("Still sitting on those cards", money(program["card_grants_remaining_dollars"])),
     ]
     if program.get("weighted_hours"):
         rows += [
@@ -793,7 +794,8 @@ def _program_json(program: Dict[str, Any], orgs: List[Dict[str, Any]]) -> Dict[s
         "other_internal_dollars", "intra_tree_dollars", "gross_outflow_dollars",
         "stated_outflow_dollars", "stated_overstatement_pct",
         "funded_by_marketing_dollars", "balance_dollars", "card_grants_funded_dollars",
-        "card_grants_unspent_dollars", "weighted_projects", "weighted_hours",
+        "card_grants_active_face_dollars", "card_grants_remaining_dollars",
+        "grant_card_count", "weighted_projects", "weighted_hours",
         "approved_project_count", "cost_per_weighted_hour", "is_ysws_program",
         "match_source",
     ]

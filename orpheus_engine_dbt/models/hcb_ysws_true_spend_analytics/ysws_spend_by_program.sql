@@ -10,6 +10,13 @@
 
         gross_outflow = true_spend + not_spend (B+D+X) + intra_tree (I)
 
+    Grant cards: card_grants_funded_dollars is money committed to cards (already
+    inside true_spend), card_grants_remaining_dollars is how much of it is still
+    sitting on those cards, measured from each grant's subledger.
+    card_grants_active_face_dollars is only the face value of the grants HCB
+    marks active and is NOT a remaining balance -- it was previously exposed as
+    card_grants_unspent_dollars, which overstated what is left by ~6x.
+
     stated_outflow_dollars reproduces the legacy "stated spend" methodology
     (HCB raised - balance == gross main-ledger outflow, summed over the tree)
     for comparison. balance_dollars is money still sitting in the tree — not
@@ -52,8 +59,58 @@ tree_stats AS (
         ROUND(SUM(-total_outflow_cents) / 100.0, 2) AS stated_outflow_dollars,
         ROUND(SUM(balance_cents) / 100.0, 2) AS balance_dollars,
         ROUND(SUM(card_grants_total_cents) / 100.0, 2) AS card_grants_funded_dollars,
-        ROUND(SUM(card_grants_active_cents) / 100.0, 2) AS card_grants_unspent_dollars
+        -- Face value of grants HCB marks status = active. NOT money left on the
+        -- cards: those grants are mostly spent (see grant_cards below).
+        ROUND(SUM(card_grants_active_cents) / 100.0, 2) AS card_grants_active_face_dollars
     FROM {{ ref('ysws_spend_org_tree') }}
+    GROUP BY 1
+),
+
+-- What is actually LEFT on the grant cards.
+--
+-- Funding a grant card is a main-ledger disbursement into the grant's own
+-- subledger, and that funding is already counted as spend (spend_bucket
+-- 'grants', category A) the moment it happens, unspent or not. This block does
+-- not change that; it reports how much of that committed money is still
+-- sitting on cards.
+--
+-- The balance is the subledger's own arithmetic: funding credit, minus swipes,
+-- minus any expiry return to the org. The synthetic CardGrant issuance row is
+-- excluded because it is the main-ledger side of the same event, not subledger
+-- movement. Grants with no subledger rows yet are counted as fully unspent.
+--
+-- Deliberately NOT card_grants.status (0 = pending invite, 1 = active,
+-- 2 = completed/expired): status says where a grant is in its lifecycle, not
+-- how much is left on it. The grants marked active hold almost nothing, while
+-- pending-invite grants hold most of the live money, so the balance is measured
+-- rather than inferred from the label.
+subledger_balances AS (
+    SELECT
+        subledger_id,
+        SUM(amount_cents) AS net_cents,
+        COUNT(*) AS row_count
+    FROM {{ ref('ledger') }}
+    WHERE subledger_id IS NOT NULL
+      AND transaction_source_type IS DISTINCT FROM 'CardGrant'
+    GROUP BY 1
+),
+
+grant_cards AS (
+    SELECT
+        t.root_event_id,
+        COUNT(*) AS grant_card_count,
+        ROUND(SUM(
+            CASE WHEN sb.row_count IS NULL THEN cg.amount_cents ELSE sb.net_cents END
+        ) / 100.0, 2) AS card_grants_remaining_dollars
+    FROM {{ ref('ysws_spend_org_tree') }} t
+    JOIN {{ source('hcb', 'card_grants') }} cg ON cg.event_id = t.event_id
+    -- Only grants whose funding disbursement actually moved, matching how
+    -- card_grants_funded_dollars is counted upstream in orgs. A grant created
+    -- but not yet deposited has neither been spent nor put money on a card, so
+    -- counting its balance would make remaining exceed funded.
+    JOIN {{ source('hcb', 'disbursements') }} d
+        ON d.id = cg.disbursement_id AND d.aasm_state = 'deposited'
+    LEFT JOIN subledger_balances sb ON sb.subledger_id = cg.subledger_id
     GROUP BY 1
 ),
 
@@ -113,7 +170,9 @@ SELECT
 
     ts.balance_dollars,
     ts.card_grants_funded_dollars,
-    ts.card_grants_unspent_dollars,
+    ts.card_grants_active_face_dollars,
+    COALESCE(gc.card_grants_remaining_dollars, 0) AS card_grants_remaining_dollars,
+    COALESCE(gc.grant_card_count, 0) AS grant_card_count,
 
     ROUND(h.weighted_projects::numeric, 2) AS weighted_projects,
     h.weighted_hours,
@@ -125,5 +184,6 @@ SELECT
 FROM {{ ref('ysws_spend_programs') }} p
 JOIN tree_stats ts ON ts.root_event_id = p.root_event_id
 LEFT JOIN spend s ON s.root_event_id = p.root_event_id
+LEFT JOIN grant_cards gc ON gc.root_event_id = p.root_event_id
 LEFT JOIN hours h ON h.root_event_id = p.root_event_id
 ORDER BY true_spend_dollars DESC

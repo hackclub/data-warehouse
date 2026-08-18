@@ -47,7 +47,9 @@ def _program(**overrides):
         "funded_by_marketing_dollars": Decimal("0.00"),
         "balance_dollars": Decimal("100.00"),
         "card_grants_funded_dollars": Decimal("75.00"),
-        "card_grants_unspent_dollars": Decimal("25.00"),
+        "card_grants_active_face_dollars": Decimal("60.00"),
+        "card_grants_remaining_dollars": Decimal("25.00"),
+        "grant_card_count": 3,
         "is_ysws_program": True,
         "match_source": "unified_ysws_hcb_link",
         "weighted_projects": Decimal("4.00"),
@@ -369,6 +371,14 @@ def test_intra_tree_inflows_are_excluded_from_revenue_but_still_listed():
     page = files["programs/fallout.html"]
     assert "Revenue transactions (1)" in page
     assert "not counted as revenue" in page
+
+
+def test_grant_cards_are_labelled_as_committed_spend_not_leftovers():
+    """The old column exposed active face value as if it were unspent money."""
+    page = _render()["programs/fallout.html"]
+    assert "Grant cards funded (counted as spend above)" in page
+    assert "Still sitting on those cards" in page
+    assert "Card grants unspent" not in page
 
 
 def test_program_json_carries_the_match_provenance():
