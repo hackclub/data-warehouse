@@ -2,12 +2,14 @@
 YSWS True Spend static site.
 
 Reads the true-spend dbt models out of the warehouse, renders a plain static
-site (see site.py), and force-pushes the result to the `main` branch of
+site (see site.py), and commits the result onto the `main` branch of
 https://github.com/hackclub/ysws-true-spend, which serves it on GitHub Pages.
 
-Nothing in the target repo is hand-maintained: every run rewrites the tracked
-files, and a commit only happens when the rendered bytes actually changed, so a
-6-hourly cadence does not spam empty commits.
+Nothing in the target repo is hand-maintained: every run replaces the entire
+tracked tree with what the renderer emitted, and a commit only happens when the
+rendered bytes actually changed, so a 6-hourly cadence does not spam empty
+commits. Anything added to the repo by hand -- including the GitHub Pages CNAME
+-- is deleted on the next run, so it has to be emitted by the renderer instead.
 
 Requires a GitHub token with push access to the target repo in
 YSWS_TRUE_SPEND_GITHUB_TOKEN (fine-grained: Contents read/write on
@@ -41,9 +43,10 @@ from .site import render_site
 DEFAULT_REPO = "hackclub/ysws-true-spend"
 DEFAULT_BRANCH = "main"
 TOKEN_ENV_VAR = "YSWS_TRUE_SPEND_GITHUB_TOKEN"
-# GitHub Pages URL once the target repo is public. While it is private, Pages
-# serves the same content at a random *.pages.github.io host instead.
-PAGES_URL = "https://hackclub.github.io/ysws-true-spend/"
+# The custom domain the renderer publishes in CNAME (see site.CUSTOM_DOMAIN).
+# While the repo is private, Pages also serves the same tree at a random
+# *.pages.github.io host.
+PAGES_URL = "https://ysws-true-spend.hackclub.com/"
 
 # Identity on every commit this asset pushes to the site repo.
 COMMIT_NAME = "Hack Club Data Warehouse"

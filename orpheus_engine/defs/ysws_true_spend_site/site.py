@@ -21,6 +21,12 @@ from .data import SiteData
 from .database import DUCKDB_FILENAME, build_duckdb
 from .documents import build_documents
 
+# GitHub Pages reads the custom domain out of a CNAME file in the published
+# tree. Every run rewrites the whole tree, so this has to be one of the files
+# the renderer emits: setting it by hand in the GitHub UI survives exactly until
+# the next publish, which is how it was silently wiped three times on 2026-08-18.
+CUSTOM_DOMAIN = "ysws-true-spend.hackclub.com"
+
 # Publication policy is enforced in documents.py (emails stripped, private orgs
 # summarised) so the JSON and the HTML are redacted identically. This flag only
 # controls whether the name columns are rendered at all.
@@ -304,7 +310,7 @@ def _org_tree_table(
             f'<span class="note">({esc(org["slug"])})</span>{suffix}</td>'
         ]
         if show_revenue:
-            cells.append(_num_cell(org["external_revenue_dollars"]).replace(' data-v', ' data-v'))
+            cells.append(_num_cell(org["external_revenue_dollars"]))
         cells += [
             f'<td class="n">{money(org["true_spend_dollars"])}</td>',
             f'<td class="n">{money(org["balance_dollars"])}</td>',
@@ -780,7 +786,7 @@ def render_site(data: SiteData, generated_at: datetime) -> Dict[str, Any]:
     index_document = documents["index.json"]
     program_documents = [d for path, d in documents.items() if path != "index.json"]
 
-    files: Dict[str, str] = {".nojekyll": ""}
+    files: Dict[str, str] = {".nojekyll": "", "CNAME": CUSTOM_DOMAIN + "\n"}
     for path, document in documents.items():
         files[path] = _dump(document)
     for document in program_documents:

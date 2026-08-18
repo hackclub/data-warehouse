@@ -166,8 +166,6 @@ SELECT
     COALESCE(disbursement_name, display_memo) AS description,
     COALESCE(dest_org_name, counterparty_name, transfer_recipient_name) AS counterparty,
     initiated_by_name,
-    transfer_recipient_email,
-    transfer_purpose,
     hcb_code,
     hcb_url,
     receipt_count

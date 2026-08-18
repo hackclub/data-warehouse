@@ -8,7 +8,7 @@ and a browser refresh is the whole review loop:
 
     uv run python scripts/ysws_true_spend_preview.py
 
-    -> https://porygon.ocelot-basilisk.ts.net:8899/   (tailnet only)
+    -> http://localhost:8899/   (set YSWS_PREVIEW_HOST to review from elsewhere)
 
 Warehouse rows are cached in the preview root, so iterating on layout costs a
 render (~2 s) instead of a re-query (~10 s). The cache is refreshed
@@ -48,8 +48,10 @@ TRUE_SPEND_MODELS = [
 
 DEFAULT_ROOT = Path.home() / "previews" / "ysws-true-spend-site"
 DEFAULT_PORT = 8899
-# Tailnet hostname of this machine; the preview is tailnet-only (no funnel).
-PREVIEW_HOST = os.environ.get("YSWS_PREVIEW_HOST", "porygon.ocelot-basilisk.ts.net")
+# Host to print in the preview URL. The server binds 127.0.0.1 only; set
+# YSWS_PREVIEW_HOST to the machine's own name when reviewing from another
+# device over a private network.
+PREVIEW_HOST = os.environ.get("YSWS_PREVIEW_HOST", "localhost")
 KEEP_BUILDS = 4
 
 ROOT_INDEX = """<!doctype html>
@@ -282,8 +284,9 @@ def main() -> None:
         f"{sum(len(v) for v in data.orgs_by_program.values())}, transactions "
         f"{data.transaction_count}, data {age / 60:.0f} min old"
     )
-    print(f"\n  https://{PREVIEW_HOST}:{args.port}/")
-    print(f"  https://{PREVIEW_HOST}:{args.port}/builds/{build_id}/   (this build, pinned)")
+    scheme = "http" if PREVIEW_HOST in ("localhost", "127.0.0.1") else "https"
+    print(f"\n  {scheme}://{PREVIEW_HOST}:{args.port}/")
+    print(f"  {scheme}://{PREVIEW_HOST}:{args.port}/builds/{build_id}/   (this build, pinned)")
 
 
 if __name__ == "__main__":

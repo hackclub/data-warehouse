@@ -205,8 +205,23 @@ def _category_breakdown(spend_txns: List[Dict[str, Any]]) -> List[Dict[str, Any]
     ]
 
 
+def private_org_slugs(orgs: List[Dict[str, Any]]) -> Dict[str, str]:
+    """
+    Slug -> name for every org HCB keeps out of transparency mode.
+
+    This, not the withheld summary below, is what suppresses transaction rows:
+    an org with nothing to summarise (no spend, no external revenue) is still
+    private, and its intra-tree inflows must not leak through the gap.
+    """
+    return {
+        o["org_slug"]: (o["org_name"] or o["org_slug"])
+        for o in orgs
+        if HIDE_NON_TRANSPARENT_ORG_DETAIL and not o.get("is_public", True)
+    }
+
+
 def _withheld(
-    orgs: List[Dict[str, Any]],
+    private: Dict[str, str],
     spend_txns: List[Dict[str, Any]],
     revenue_txns: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -214,13 +229,9 @@ def _withheld(
     Orgs HCB keeps private, with the totals that stand in for their rows.
 
     Their dollars remain in every total; only the line-level detail is withheld,
-    exactly as HCB withholds it.
+    exactly as HCB withholds it. Orgs with no rows to stand in for are simply
+    absent here; they are suppressed by private_org_slugs regardless.
     """
-    private = {
-        o["org_slug"]: (o["org_name"] or o["org_slug"])
-        for o in orgs
-        if HIDE_NON_TRANSPARENT_ORG_DETAIL and not o.get("is_public", True)
-    }
     if not private:
         return []
     out = []
@@ -254,8 +265,8 @@ def build_program_document(
     name = page_slug(program["root_slug"], program["root_event_id"])
     external = [t for t in revenue_txns if not t["is_intra_tree"]]
     intra = [t for t in revenue_txns if t["is_intra_tree"]]
-    withheld = _withheld(orgs, spend_txns, external)
-    private_slugs = {w["org_slug"] for w in withheld}
+    private_slugs = private_org_slugs(orgs)
+    withheld = _withheld(private_slugs, spend_txns, external)
 
     return {
         "name": program["program_name"],

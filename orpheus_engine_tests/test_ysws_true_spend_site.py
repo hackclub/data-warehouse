@@ -1,11 +1,12 @@
 """
 Tests for the YSWS true-spend static site renderer.
 
-The site is generated from the warehouse and force-pushed to a PUBLIC repo, so
-the invariants worth pinning are the ones that would either publish something
-wrong or break browsing: totals that disagree with the transactions behind
-them, HTML that is not escaped, page names that escape their directory, and
-links that point at files the renderer never emits.
+The site is generated from the warehouse and published to a repo outside this
+one, so the invariants worth pinning are the ones that would either disclose
+something it should not or break browsing: transactions of organizations HCB
+keeps out of transparency mode, email addresses, totals that disagree with the
+transactions behind them, HTML that is not escaped, page names that escape their
+directory, and links that point at files the renderer never emits.
 
 No network or database access; the renderer is pure.
 """
@@ -25,6 +26,7 @@ from orpheus_engine.defs.ysws_true_spend_site.documents import (
     page_slug,
 )
 from orpheus_engine.defs.ysws_true_spend_site.site import (
+    CUSTOM_DOMAIN,
     ago,
     money,
     render_site,
@@ -111,8 +113,6 @@ def _spend_txn(**overrides):
         "description": "Grant to a maker",
         "counterparty": "Fallout",
         "initiated_by_name": "Sam Liu",
-        "transfer_recipient_email": None,
-        "transfer_purpose": None,
         "hcb_code": "HCB-500-64019",
         "hcb_url": "https://hcb.hackclub.com/hcb/HCB-500-64019",
         "receipt_count": 0,
@@ -272,6 +272,7 @@ def test_expected_files_are_emitted():
         "llms.txt",
         ".nojekyll",
         "README.md",
+        "CNAME",
     ):
         assert expected in files, expected
 
@@ -499,6 +500,41 @@ def test_private_orgs_are_summarised_not_listed():
     # withholding detail must not move a single total
     assert "True spend (A + C + offsets)</td><td class=\"n\">$300.00" in page
     assert "Spend transactions (2)" in page
+
+
+def test_private_org_with_only_intra_tree_rows_is_still_suppressed():
+    """
+    Regression: suppression used to be driven by the withheld SUMMARY, which
+    skips an org that has no spend and no external revenue to summarise. Such an
+    org is still outside transparency mode, and its intra-tree inflows leaked.
+    """
+    data = _site_data()
+    data.orgs_by_program["fallout"][1]["is_public"] = False
+    # the sub-org's only row is an inflow from its own parent
+    data.spend_by_program["fallout"] = []
+    data.revenue_by_program["fallout"] = [
+        _revenue_txn(
+            org_slug="fallout-sub",
+            is_intra_tree=True,
+            description="SECRET INTERNAL TOPUP",
+            source="Fallout",
+            source_org_slug="fallout",
+        )
+    ]
+    files = render_site(data, GENERATED_AT)
+    page, document = files["programs/fallout.html"], files["programs/fallout.json"]
+    assert "SECRET INTERNAL TOPUP" not in page
+    assert "SECRET INTERNAL TOPUP" not in document
+
+
+def test_pages_custom_domain_is_published_not_hand_maintained():
+    """
+    Every run replaces the whole tree, so a hand-added CNAME is deleted on the
+    next publish (it was, three times). The renderer has to emit it.
+    """
+    files = _render()
+    assert files["CNAME"] == CUSTOM_DOMAIN + "\n"
+    assert CUSTOM_DOMAIN.endswith(".hackclub.com")
 
 
 def test_html_is_escaped():

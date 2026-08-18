@@ -19,10 +19,14 @@ WITH linked AS (
 ),
 
 resolvable AS (
-    -- ysws_spend_programs can only register a program whose slug is a real org.
+    -- ysws_spend_programs can only register a program whose slug is a real,
+    -- live org. A link to a soft-deleted org is a different gap, reported by
+    -- ysws_unlinked_programs as gap_type = 'org_deleted'; counting it here
+    -- would fail this test for a mapping the model is right to skip.
     SELECT l.program_id
     FROM linked l
     JOIN {{ ref('orgs') }} o ON o.slug = l.root_slug
+    WHERE NOT o.is_deleted
 ),
 
 attributed AS (
