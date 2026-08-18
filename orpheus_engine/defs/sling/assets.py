@@ -530,7 +530,7 @@ _HACKATIME_APP_INDEXES: dict[str, list[tuple[str, ...]]] = {
         ("leaderboard_id", "user_id"),
     ],
     "leaderboards": [
-        ("start_date", "period_type", "timezone_offset"),
+        ("start_date", "period_type", "timezone_utc_offset"),
     ],
     "mailkick_subscriptions": [
         ("subscriber_type", "subscriber_id", "list"),
@@ -764,6 +764,31 @@ def _ensure_target_indexes(
                     (sql.Identifier(schema_name, table_name).as_string(conn),),
                 )
                 if cursor.fetchone()[0] is None:
+                    continue
+
+                cursor.execute(
+                    """
+                    SELECT attname
+                    FROM pg_attribute
+                    WHERE attrelid = to_regclass(%s)
+                      AND attnum > 0
+                      AND NOT attisdropped
+                    """,
+                    (sql.Identifier(schema_name, table_name).as_string(conn),),
+                )
+                existing_columns = {row[0] for row in cursor.fetchall()}
+                missing_columns = [
+                    column for column in columns if column not in existing_columns
+                ]
+                if missing_columns:
+                    context.log.warning(
+                        "Skipping index on %s.%s(%s): missing column(s) %s. "
+                        "The source schema likely renamed or dropped them.",
+                        schema_name,
+                        table_name,
+                        ", ".join(columns),
+                        ", ".join(missing_columns),
+                    )
                     continue
 
                 index_name = _safe_index_name(schema_name, table_name, *columns)
