@@ -19,11 +19,14 @@ from orpheus_engine.defs.ysws_true_spend_site.definitions import (
     COMMIT_NAME,
 )
 from orpheus_engine.defs.ysws_true_spend_site.freshness import Freshness
+from orpheus_engine.defs.ysws_true_spend_site.documents import (
+    _text as redact_text,
+    build_documents,
+    page_slug,
+)
 from orpheus_engine.defs.ysws_true_spend_site.site import (
     ago,
     money,
-    page_slug,
-    redact,
     render_site,
 )
 
@@ -249,7 +252,8 @@ def test_commits_are_authored_by_the_warehouse():
 def test_money_formats_negatives_and_thousands():
     assert money(Decimal("1234.5")) == "$1,234.50"
     assert money(Decimal("-1234.5")) == "-$1,234.50"
-    assert money(None) == "$0.00"
+    # a missing figure is blank, not zero: they mean different things
+    assert money(None) == ""
 
 
 def test_page_slug_rejects_path_traversal():
@@ -262,10 +266,9 @@ def test_expected_files_are_emitted():
     files = _render()
     for expected in (
         "index.html",
+        "index.json",
         "programs/fallout.html",
-        "data/programs.json",
-        "data/programs/fallout.json",
-        "data/unmatched.json",
+        "programs/fallout.json",
         "llms.txt",
         ".nojekyll",
         "README.md",
@@ -334,9 +337,9 @@ def test_program_table_is_sortable_and_numbers_carry_raw_values():
     for header in ("True spend", "$ / weighted hour", "Weighted projects", "Orgs"):
         assert f'data-type="num">{header}' in index, header
     # spend/balance/$-per-hour raw values present for the one program
-    assert 'data-v="300.00"' in index
-    assert 'data-v="7.50"' in index
-    assert 'data-v="4.00"' in index
+    assert 'data-v="300.0"' in index
+    assert 'data-v="7.5"' in index
+    assert 'data-v="4.0"' in index
 
 
 def test_index_has_no_revenue_column():
@@ -451,16 +454,18 @@ def test_no_methodology_page_anywhere():
 def test_publication_mirrors_hcb_transparency():
     """
     Measured against HCB's public API: names are published, emails never are.
+    Redaction happens in the document, so the JSON is as clean as the HTML.
     """
-    assert redact("Grant to person@example.com") == "Grant to [email hidden]"
-    assert redact("Grant to Youssef Ayman") == "Grant to Youssef Ayman"
+    assert redact_text("Grant to person@example.com") == "Grant to [email hidden]"
+    assert redact_text("Grant to Youssef Ayman") == "Grant to Youssef Ayman"
 
     data = _site_data()
     data.spend_by_program["fallout"][0]["description"] = "Grant to maker@gmail.com"
     data.spend_by_program["fallout"][0]["counterparty"] = "maker@gmail.com"
-    page = render_site(data, GENERATED_AT)["programs/fallout.html"]
-    assert "maker@gmail.com" not in page
-    assert "[email hidden]" in page
+    files = render_site(data, GENERATED_AT)
+    page, document = files["programs/fallout.html"], files["programs/fallout.json"]
+    assert "maker@gmail.com" not in page and "maker@gmail.com" not in document
+    assert "[email hidden]" in page and "[email hidden]" in document
     # the name columns stay: HCB publishes full_name on every transaction
     assert "Sam Liu" in page
 
@@ -471,9 +476,10 @@ def test_private_orgs_are_summarised_not_listed():
     data.orgs_by_program["fallout"][1]["is_public"] = False
     data.spend_by_program["fallout"][1]["org_slug"] = "fallout-sub"
     data.spend_by_program["fallout"][1]["description"] = "SECRET LINE ITEM"
-    page = render_site(data, GENERATED_AT)["programs/fallout.html"]
 
-    assert "SECRET LINE ITEM" not in page
+    files = render_site(data, GENERATED_AT)
+    page, document = files["programs/fallout.html"], files["programs/fallout.json"]
+    assert "SECRET LINE ITEM" not in page and "SECRET LINE ITEM" not in document
     assert "not in transparency mode" in page
     assert "1 outflows totalling" in page
     # withholding detail must not move a single total
@@ -486,8 +492,9 @@ def test_html_is_escaped():
     data.spend_by_program["fallout"][0]["description"] = '<script>alert("x")</script>'
     files = render_site(data, GENERATED_AT)
     page = files["programs/fallout.html"]
-    assert "<script>" not in page
-    assert "&lt;script&gt;" in page
+    # the page carries its own <script> block; the memo must not inject one
+    assert "<script>alert" not in page
+    assert "&lt;script&gt;alert" in page
 
 
 def test_intra_tree_inflows_are_excluded_from_revenue_but_still_listed():
@@ -506,26 +513,23 @@ def test_grant_cards_are_labelled_as_committed_spend_not_leftovers():
 
 
 def test_llms_txt_documents_the_real_json_fields():
-    """Derived from the objects written, so it cannot drift from the data."""
+    """Derived from the documents written, so it cannot drift from the data."""
+    import json
+
     files = _render()
     llms = files["llms.txt"]
     assert llms.startswith("# YSWS true spend")
-    for path in ("data/programs.json", "data/programs/<root_slug>.json",
-                 "data/unmatched.json"):
+    for path in ("index.json", "programs/<root_slug>.json"):
         assert path in llms, path
-    # fields listed are the fields actually emitted
-    import json
-
-    summary = json.loads(files["data/programs.json"])["programs"][0]
-    for field in ("true_spend_dollars", "root_slug", "page"):
-        assert field in summary and field in llms, field
-    assert "match_source" in llms
+    document = json.loads(files["programs/fallout.json"])
+    for field in ("spend_transactions", "category_breakdown", "match_source"):
+        assert field in document and field in llms, field
 
 
 def test_index_shows_the_json_layout_and_links_llms_txt():
     index = _render()["index.html"]
     assert 'href="llms.txt"' in index
-    assert 'href="data/programs.json"' in index
+    assert 'href="index.json"' in index
     assert "<pre>" in index
     # the layout block sits above the section headers
     assert index.index("<pre>") < index.index("YSWS Programs w/ Linked HCBs")
@@ -534,23 +538,52 @@ def test_index_shows_the_json_layout_and_links_llms_txt():
 def test_program_json_carries_the_match_provenance():
     import json
 
-    detail = json.loads(_render()["data/programs/fallout.json"])
+    detail = json.loads(_render()["programs/fallout.json"])
     assert detail["match_source"] == "unified_ysws_hcb_link"
     assert detail["is_ysws_program"] is True
     assert detail["weighted_projects"] == 4.0
 
 
-def test_program_json_omits_transaction_arrays_but_keeps_counts():
+def test_index_json_mirrors_the_page_sections():
+    import json
+
+    index = json.loads(_render(_site_data_with_marketing())["index.json"])
+    assert list(index) == [
+        "metadata",
+        "ysws_programs_with_linked_hcbs",
+        "ysws_programs_with_no_linked_hcbs",
+        "ysws_marketing",
+        "hcb_orgs_no_program_claims",
+    ]
+    meta = index["metadata"]
+    for key in ("hcb_data_pulled", "newest_hcb_record_held", "spend_recalculated",
+                "page_built"):
+        assert key in meta, key
+    program = index["ysws_programs_with_linked_hcbs"][0]
+    assert program["name"] == "Fallout"
+    assert program["hcb_org_count"] == 2
+    assert program["weighted_projects"] == 4.0
+    assert program["totals"]["true_spend_dollars"] == 300.0
+    # the tree, nested, with its details
+    assert program["orgs"][0]["slug"] == "fallout"
+    assert program["orgs"][0]["children"][0]["slug"] == "fallout-sub"
+    assert index["ysws_marketing"][0]["is_ysws_program"] is False
+    assert index["hcb_orgs_no_program_claims"][0]["slug"] == "som-sticker-shipments"
+
+
+def test_program_json_holds_everything_its_page_shows():
     import json
 
     files = _render()
-    detail = json.loads(files["data/programs/fallout.json"])
-    assert "spend_transactions" not in detail
-    assert detail["spend_transaction_count"] == 3
-    assert detail["revenue_transaction_count"] == 1
-    assert detail["true_spend_dollars"] == 300.0
-    assert len(detail["orgs"]) == 2
+    detail = json.loads(files["programs/fallout.json"])
+    assert len(detail["spend_transactions"]) == 3
+    assert len(detail["revenue_transactions"]) == 1
+    assert len(detail["intra_tree_transactions"]) == 1
+    assert {c["category"] for c in detail["category_breakdown"]} == {"A", "C", "B"}
+    assert detail["totals"]["true_spend_dollars"] == 300.0
 
-    summary = json.loads(files["data/programs.json"])
-    assert summary["program_count"] == 1
-    assert summary["programs"][0]["page"] == "programs/fallout.html"
+    # every figure the page prints comes from the document
+    page = files["programs/fallout.html"]
+    for txn in detail["spend_transactions"]:
+        assert money(txn["amount_dollars"]) in page
+    assert money(detail["totals"]["balance_dollars"]) in page
