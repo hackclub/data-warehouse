@@ -23,10 +23,27 @@ from .freshness import Freshness
 REPO_URL = "https://github.com/hackclub/ysws-true-spend"
 HCB_ORG_URL = "https://hcb.hackclub.com/{slug}"
 
-# Zach's call (2026-08-18): publish the transaction detail as-is, matching HCB's
-# public transparency pages, rather than stripping recipient names. Flip this to
-# False to drop every person-identifying column from the site and the JSON.
-INCLUDE_PERSONAL_FIELDS = True
+# --- publication policy: mirror HCB's own transparency pages ----------------
+#
+# Measured 2026-08-18 against hcb.hackclub.com unauthenticated (public org page
+# + /api/v3/organizations/<slug>/transactions):
+#   - Names ARE public: every transaction carries a `user` object with
+#     full_name and photo, and memos read "Grant to Youssef Ayman".
+#   - Emails are NOT: zero email addresses in a 100-transaction payload or on
+#     the rendered page. Our warehouse memos are the raw ones, which sometimes
+#     hold the recipient's email ("Grant to jptotoro241@gmail.com") -- 6,987
+#     distinct addresses across the site before this was added.
+#   - Orgs not in transparency mode expose nothing at all publicly.
+#
+# So: keep names, strip emails, and aggregate the transactions of orgs HCB
+# keeps private. Program totals are unaffected either way -- they are our
+# analysis, not HCB's disclosure.
+INCLUDE_PERSONAL_FIELDS = True   # name columns (counterparty, initiated by)
+REDACT_EMAILS = True             # emails never appear on HCB's public pages
+HIDE_NON_TRANSPARENT_ORG_DETAIL = True  # no line detail for private orgs
+
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+EMAIL_PLACEHOLDER = "[email hidden]"
 
 _SAFE_SLUG = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -189,6 +206,21 @@ def esc(value: Any) -> str:
     if value is None:
         return ""
     return html.escape(str(value))
+
+
+def redact(value: Any) -> str:
+    """
+    Escape for HTML, and drop email addresses that HCB itself never publishes.
+
+    Applied to every free-text field taken from a memo or counterparty name, so
+    a raw memo like "Grant to person@example.com" reads "Grant to
+    [email hidden]" -- the same transaction HCB's public page renders as
+    "Grant to <person's name>".
+    """
+    text = esc(value)
+    if REDACT_EMAILS and text:
+        text = _EMAIL.sub(EMAIL_PLACEHOLDER, text)
+    return text
 
 
 def fmt_date(value: Any) -> str:
@@ -659,11 +691,11 @@ def _spend_rows(txns: Iterable[Dict[str, Any]]) -> str:
             f"<td>{esc(txn['spend_category'])}</td>",
             f"<td>{esc(txn['spend_bucket'])}</td>",
             f"<td>{esc(txn['transaction_type'])}</td>",
-            f"<td class=\"memo\">{esc(txn['description'])}</td>",
+            f"<td class=\"memo\">{redact(txn['description'])}</td>",
         ]
         if INCLUDE_PERSONAL_FIELDS:
-            cells.append(f"<td>{esc(txn['counterparty'])}</td>")
-            cells.append(f"<td>{esc(txn['initiated_by_name'])}</td>")
+            cells.append(f"<td>{redact(txn['counterparty'])}</td>")
+            cells.append(f"<td>{redact(txn['initiated_by_name'])}</td>")
         cells.append(f'<td class="n">{money(txn["outflow_dollars"])}</td>')
         cells.append(f"<td>{'yes' if counted else 'no'}</td>")
         cells.append(
@@ -672,6 +704,40 @@ def _spend_rows(txns: Iterable[Dict[str, Any]]) -> str:
         klass = "" if counted else ' class="excluded"'
         out.append(f"<tr{klass}>" + "".join(cells) + "</tr>")
     return "".join(out)
+
+
+def _private_org_note(
+    txns: List[Dict[str, Any]], private: Dict[str, str], label: str
+) -> str:
+    """
+    One line per org HCB keeps private, standing in for its hidden rows.
+
+    Their dollars still count in every total on the page: what is withheld is
+    the line-level detail HCB withholds too, not the analysis.
+    """
+    if not private:
+        return ""
+    rollup: Dict[str, List[Any]] = {}
+    for txn in txns:
+        slug = txn["org_slug"]
+        if slug not in private:
+            continue
+        count, total = rollup.get(slug, (0, Decimal(0)))
+        amount = _dec(txn.get("outflow_dollars", txn.get("amount_dollars")))
+        rollup[slug] = (count + 1, total + amount)
+    if not rollup:
+        return ""
+    lines = "".join(
+        f"<li>{esc(private[slug])} <span class=\"note\">({esc(slug)})</span>: "
+        f"{count:,} {label} totalling {money(total)}</li>"
+        for slug, (count, total) in sorted(rollup.items())
+    )
+    return (
+        '<p class="note">Not listed below, because HCB does not publish them '
+        "either — these orgs are not in transparency mode. Their dollars are "
+        "still counted in every total on this page.</p>"
+        f"<ul>{lines}</ul>"
+    )
 
 
 def _spend_table(txns: List[Dict[str, Any]]) -> str:
@@ -699,8 +765,8 @@ def _revenue_table(txns: List[Dict[str, Any]]) -> str:
         f"<td>{fmt_date(txn['transaction_date'])}</td>"
         f"<td>{esc(txn['org_slug'])}</td>"
         f"<td>{esc(txn['transaction_type'])}</td>"
-        f"<td>{esc(txn['source'])}</td>"
-        f"<td class=\"memo\">{esc(txn['description'])}</td>"
+        f"<td>{redact(txn['source'])}</td>"
+        f"<td class=\"memo\">{redact(txn['description'])}</td>"
         f'<td class="n">{money(txn["amount_dollars"])}</td>'
         f'<td>{_link(txn["hcb_url"], txn["hcb_code"]) if txn["hcb_url"] else esc(txn["hcb_code"])}</td>'
         "</tr>"
@@ -719,6 +785,16 @@ def render_program_page(
     slug = program["root_slug"]
     external_revenue = [t for t in revenue_txns if not t["is_intra_tree"]]
     intra_revenue = [t for t in revenue_txns if t["is_intra_tree"]]
+
+    # Mirror HCB: an org outside transparency mode publishes no ledger at all,
+    # so its rows are summarised rather than listed.
+    private = {
+        o["org_slug"]: (o["org_name"] or o["org_slug"])
+        for o in orgs
+        if HIDE_NON_TRANSPARENT_ORG_DETAIL and not o.get("is_public", True)
+    }
+    listed_spend = [t for t in spend_txns if t["org_slug"] not in private]
+    listed_revenue = [t for t in external_revenue if t["org_slug"] not in private]
 
     json_link = _link(
         "../data/programs/{}.json".format(page_slug(slug, program["root_event_id"])), "json"
@@ -752,15 +828,17 @@ def render_program_page(
         _category_table(spend_txns),
         "<h2>HCB org tree</h2>",
         _org_tree_table(orgs, show_revenue=True, anchor_ids=True),
-        f"<h2>Spend transactions ({len(spend_txns):,})</h2>",
+        f"<h2>Spend transactions ({len(listed_spend):,})</h2>",
         '<p class="note">Every main-ledger outflow of every org in the tree, '
         "classified. Grey rows are not counted as this program's spend. Card-grant "
         "swipes are omitted: the grant is counted when the card is funded.</p>",
-        _spend_table(spend_txns),
-        f"<h2>Revenue transactions ({len(external_revenue):,})</h2>",
+        _private_org_note(spend_txns, private, "outflows"),
+        _spend_table(listed_spend),
+        f"<h2>Revenue transactions ({len(listed_revenue):,})</h2>",
         '<p class="note">Money entering the tree from outside it — HQ funding, '
         "donations, refunds, transfers from other orgs.</p>",
-        _revenue_table(external_revenue),
+        _private_org_note(external_revenue, private, "inflows"),
+        _revenue_table(listed_revenue),
     ]
     if intra_revenue:
         out += [

@@ -72,7 +72,11 @@ WITH tree AS (
         t.org_name,
         t.depth,
         t.balance_cents,
-        o.parent_id
+        o.parent_id,
+        -- Whether HCB itself publishes this org's ledger. Orgs outside
+        -- transparency mode show nothing publicly, so the site aggregates
+        -- their transactions instead of listing them.
+        o.is_public
     FROM {SPEND_SCHEMA}.ysws_spend_org_tree t
     JOIN {HCB_SCHEMA}.orgs o ON o.event_id = t.event_id
 ),
@@ -130,6 +134,7 @@ SELECT
     t.org_slug,
     t.org_name,
     t.depth,
+    t.is_public,
     ROUND(t.balance_cents / 100.0, 2) AS balance_dollars,
     COALESCE(r.external_revenue_dollars, 0) AS external_revenue_dollars,
     COALESCE(r.intra_tree_revenue_dollars, 0) AS intra_tree_revenue_dollars,

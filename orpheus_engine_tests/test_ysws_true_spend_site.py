@@ -23,6 +23,7 @@ from orpheus_engine.defs.ysws_true_spend_site.site import (
     ago,
     money,
     page_slug,
+    redact,
     render_site,
 )
 
@@ -69,8 +70,9 @@ def _program(**overrides):
     return program
 
 
-def _org(slug, event_id, parent_id, depth, spend, revenue):
+def _org(slug, event_id, parent_id, depth, spend, revenue, is_public=True):
     return {
+        "is_public": is_public,
         "root_event_id": 1,
         "root_slug": "fallout",
         "program_name": "Fallout",
@@ -436,6 +438,39 @@ def test_no_methodology_page_anywhere():
     assert "methodology.html" not in files
     for path, content in files.items():
         assert "methodology.html" not in content, path
+
+
+def test_publication_mirrors_hcb_transparency():
+    """
+    Measured against HCB's public API: names are published, emails never are.
+    """
+    assert redact("Grant to person@example.com") == "Grant to [email hidden]"
+    assert redact("Grant to Youssef Ayman") == "Grant to Youssef Ayman"
+
+    data = _site_data()
+    data.spend_by_program["fallout"][0]["description"] = "Grant to maker@gmail.com"
+    data.spend_by_program["fallout"][0]["counterparty"] = "maker@gmail.com"
+    page = render_site(data, GENERATED_AT)["programs/fallout.html"]
+    assert "maker@gmail.com" not in page
+    assert "[email hidden]" in page
+    # the name columns stay: HCB publishes full_name on every transaction
+    assert "Sam Liu" in page
+
+
+def test_private_orgs_are_summarised_not_listed():
+    """An org outside transparency mode publishes no ledger, so neither do we."""
+    data = _site_data()
+    data.orgs_by_program["fallout"][1]["is_public"] = False
+    data.spend_by_program["fallout"][1]["org_slug"] = "fallout-sub"
+    data.spend_by_program["fallout"][1]["description"] = "SECRET LINE ITEM"
+    page = render_site(data, GENERATED_AT)["programs/fallout.html"]
+
+    assert "SECRET LINE ITEM" not in page
+    assert "not in transparency mode" in page
+    assert "1 outflows totalling" in page
+    # withholding detail must not move a single total
+    assert "True spend (A + C + offsets)</td><td class=\"n\">$300.00" in page
+    assert "Spend transactions (2)" in page
 
 
 def test_html_is_escaped():
