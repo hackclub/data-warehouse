@@ -463,11 +463,198 @@ def _unmatched_table(rows: List[Dict[str, Any]]) -> str:
             f"</tr></thead><tbody>{body}</tbody></table>")
 
 
+def _budgets_table(rows: List[Dict[str, Any]], table_id: str) -> str:
+    """
+    Every personal budget pot. Personal spend leads, because that is the
+    question the section answers: what did this person spend YSWS money on.
+    """
+    headers = [("Budget", "text"), ("Person", "text"), ("Personal spend", "num"),
+               ("Funded by programs", "num"), ("Sent back to orgs", "num"),
+               ("Balance", "num"), ("Txns", "num"), ("Last activity", "text"),
+               ("HCB", "text"), ("JSON", "text")]
+    head = "".join(
+        f'<th class="n" data-type="{t}">{esc(h)}</th>' if t == "num"
+        else f'<th data-type="{t}">{esc(h)}</th>'
+        for h, t in headers
+    )
+    body = []
+    for row in rows:
+        person = row["person_name"] or '<span class="note">not linked</span>'
+        note = ""
+        if row["is_also_program_root"]:
+            note = (' <span class="note">(also the program '
+                    f'{esc(row["also_program_name"])})</span>')
+        body.append(
+            "<tr>"
+            f'<td><a href="{esc(row["page"])}">{esc(row["budget_name"])}</a>{note}</td>'
+            f'<td>{esc(row["person_name"]) if row["person_name"] else person}</td>'
+            + _num_cell(row["personal_spend_dollars"])
+            + _num_cell(row["funding_received_dollars"])
+            + _num_cell(row["transferred_to_orgs_dollars"])
+            + _num_cell(row["balance_dollars"])
+            + f'<td class="n" data-v="{row["transaction_count"]}">{row["transaction_count"]:,}</td>'
+            + f'<td>{fmt_date(row["last_activity_date"])}</td>'
+            + f'<td>{_link(row["hcb_url"], "hcb")}</td>'
+            + f'<td>{_link(row["json"], "json")}</td>'
+            "</tr>"
+        )
+    return (f'<table class="sortable" id="{esc(table_id)}"><thead><tr>{head}</tr></thead>'
+            f'<tbody>{"".join(body)}</tbody></table>')
+
+
+def _people_without_budget_table(rows: List[Dict[str, Any]]) -> str:
+    body = "".join(
+        "<tr>"
+        f'<td>{esc(r["name"])}</td>'
+        f'<td>{esc(r["problem"])}</td>'
+        f'<td class="wrap">{esc(r["hcb_budget_field"] or "")}</td>'
+        + _num_cell(r["grants_attributed_dollars"], money0)
+        + "</tr>"
+        for r in rows
+    )
+    return ('<p class="note">Grants attributed is the money each has moved as a '
+            "reviewer, so the top of this list is where an unlinked budget hides "
+            "the most spend.</p>"
+            '<table class="sortable"><thead><tr>'
+            '<th data-type="text">Person</th><th data-type="text">Problem</th>'
+            '<th data-type="text">HCB Budget Fund field</th>'
+            '<th class="n" data-type="num">Grants attributed</th>'
+            f"</tr></thead><tbody>{body}</tbody></table>")
+
+
+def _budgets_without_person_note() -> str:
+    return ('<p class="note">These pots spend real money, but no YSWS Authors '
+            "record points at them, so the site cannot say whose they are. Fixing "
+            "the HCB Budget Fund field on the person's roster record names them "
+            "here automatically.</p>")
+
+
+def _budget_summary_table(document: Dict[str, Any]) -> str:
+    t = document["totals"]
+    rows = [
+        ("Funded by programs", money(t["funding_received_dollars"])),
+        ("Other money in (refunds, donations)", money(t["other_inflow_dollars"])),
+        ("", ""),
+        ("Personal spend (outside world + cards loaded)",
+         money(t["personal_spend_dollars"])),
+        ("Sent back to HCB orgs (that org's spend, not this one's)",
+         money(t["transferred_to_orgs_dollars"])),
+        ("Balance still held", money(t["balance_dollars"])),
+        ("", ""),
+        ("Grant cards funded (counted in personal spend)",
+         money(t["card_grants_funded_dollars"])),
+        ("Still sitting on those cards", money(t["card_grants_unspent_dollars"])),
+    ]
+    body = "".join(
+        '<tr><td colspan="2"></td></tr>' if not label
+        else f'<tr><td>{esc(label)}</td><td class="n">{value}</td></tr>'
+        for label, value in rows
+    )
+    return f"<table>{body}</table>"
+
+
+def _budget_bucket_table(breakdown: List[Dict[str, Any]]) -> str:
+    rows = "".join(
+        f'<tr><td>{esc(row["label"])}</td>'
+        f'<td class="n">{row["transaction_count"]:,}</td>'
+        f'<td class="n">{money(row["dollars"])}</td>'
+        f'<td>{"counted" if row["counted_as_personal_spend"] else "excluded"}</td></tr>'
+        for row in breakdown
+    )
+    counted = [r for r in breakdown if r["counted_as_personal_spend"]]
+    total = sum((_dec(r["dollars"]) for r in counted), Decimal(0))
+    return ('<table><thead><tr><th>Bucket</th><th class="n">Txns</th>'
+            '<th class="n">Amount</th><th>Personal spend?</th></tr></thead><tbody>'
+            f"{rows}"
+            f'<tr class="tot"><td>Personal spend</td>'
+            f'<td class="n">{sum(r["transaction_count"] for r in counted):,}</td>'
+            f'<td class="n">{money(total)}</td><td></td></tr></tbody></table>')
+
+
+def _budget_txn_table(txns: List[Dict[str, Any]], counted_column: bool) -> str:
+    head = ["Date", "Bucket", "Type", "Description"]
+    if INCLUDE_PERSONAL_FIELDS:
+        head += ["Counterparty", "Initiated by"]
+    head += ["Amount"]
+    if counted_column:
+        head += ["Counted"]
+    head += ["HCB"]
+    header = "".join(
+        f'<th class="n">{esc(h)}</th>' if h == "Amount" else f"<th>{esc(h)}</th>"
+        for h in head
+    )
+    rows = []
+    for txn in txns:
+        cells = [
+            f'<td>{fmt_date(txn["date"])}</td>',
+            f'<td>{esc(txn["bucket"])}</td>',
+            f'<td>{esc(txn["type"])}</td>',
+            f'<td class="memo">{esc(txn["description"])}</td>',
+        ]
+        if INCLUDE_PERSONAL_FIELDS:
+            cells.append(f'<td>{esc(txn["counterparty"])}</td>')
+            cells.append(f'<td>{esc(txn["initiated_by"])}</td>')
+        cells.append(f'<td class="n">{money(txn["amount_dollars"])}</td>')
+        if counted_column:
+            cells.append(f'<td>{"yes" if txn["counted_as_personal_spend"] else "no"}</td>')
+        cells.append(
+            f'<td>{_link(txn["hcb_url"], txn["hcb_code"]) if txn["hcb_url"] else esc(txn["hcb_code"])}</td>'
+        )
+        klass = "" if txn["counted_as_personal_spend"] or not counted_column else ' class="excluded"'
+        rows.append(f"<tr{klass}>" + "".join(cells) + "</tr>")
+    return f'<table><thead><tr>{header}</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+
+
+def render_budget_page(document: Dict[str, Any]) -> str:
+    """One person's budget pot: where the money came from, and where it went."""
+    who = (f'{esc(document["person_name"])}' if document["person_name"]
+           else '<span class="note">no YSWS Authors record links to this pot</span>')
+    notes = ['<p class="note">A personal YSWS budget: programs grant money into '
+             "it, and it is spent across whatever its holder reviews. Money sent "
+             "back to an HCB org is not counted here, because that org's own "
+             "ledger counts it.</p>"]
+    if document["is_also_program_root"]:
+        notes.append(
+            '<p class="note">This pot is also the HCB org of the program '
+            f'{esc(document["also_program_name"])}, so its dollars appear on that '
+            "program's page too. Do not add the two together.</p>"
+        )
+    out = [
+        f'<p>{_link("../index.html", "← all programs and budgets")}</p>',
+        f'<h1>{esc(document["budget_name"])}</h1>',
+        f"<p>{who}"
+        f' · HCB: {_link(document["hcb_url"], "hcb.hackclub.com/" + document["slug"])}'
+        f' · activity {fmt_date(document["first_activity_date"])} to '
+        f'{fmt_date(document["last_activity_date"])}'
+        f' · {_link("../" + document["json"], "json")}</p>',
+        *notes,
+        "<h2>Totals</h2>",
+        _budget_summary_table(document),
+        "<h2>Where the money went</h2>",
+        _budget_bucket_table(document["bucket_breakdown"]),
+        f'<h2>Outgoing transactions ({len(document["spend_transactions"]):,})</h2>',
+        '<p class="note">Every outflow. Grey rows are not this person\'s spend. '
+        "Card-grant swipes are omitted: a grant is counted when the card is "
+        "loaded.</p>",
+        _budget_txn_table(document["spend_transactions"], counted_column=True),
+        f'<h2>Incoming transactions ({len(document["funding_transactions"]):,})</h2>',
+        '<p class="note">Money in, almost always a disbursement from the program '
+        "whose reviewing this budget pays for.</p>",
+        _budget_txn_table(document["funding_transactions"], counted_column=False),
+        _machine_readable(document["json"], base="../"),
+    ]
+    return _page(f'{document["budget_name"]} — YSWS true spend', "\n".join(out),
+                 script=True)
+
+
 def render_index(index_document: Dict[str, Any]) -> str:
     linked = index_document["ysws_programs_with_linked_hcbs"]
     unlinked = index_document["ysws_programs_with_no_linked_hcbs"]
     marketing = index_document["ysws_marketing"]
     unmatched = index_document["hcb_orgs_no_program_claims"]
+    budgets = index_document["ysws_budgets"]
+    budgets_no_person = index_document["ysws_budgets_with_no_linked_person"]
+    people_no_budget = index_document["ysws_people_with_no_linked_budget"]
 
     out = [
         "<h1>YSWS true spend</h1>",
@@ -478,6 +665,23 @@ def render_index(index_document: Dict[str, Any]) -> str:
         _section(f"YSWS Programs w/ No Linked HCBs ({len(unlinked):,})",
                  _unlinked_table(unlinked)),
     ]
+    if budgets:
+        out.append(_section(
+            f"YSWS Budgets ({len(budgets):,})",
+            '<p class="note">One HCB org per person. Programs grant money into '
+            "these, so a program funding a budget is not that program's spend — "
+            "it is spend here, once it leaves for the outside world. The two are "
+            "never added together.</p>"
+            + _budgets_table(budgets, "budgets"),
+        ))
+    out.append(_section(
+        f"YSWS Budgets w/ No Linked Person ({len(budgets_no_person):,})",
+        _budgets_without_person_note() + _budgets_table(budgets_no_person, "budgets-no-person"),
+    ))
+    out.append(_section(
+        f"People w/ No Linked Budget ({len(people_no_budget):,})",
+        _people_without_budget_table(people_no_budget),
+    ))
     if marketing:
         out.append(_section(
             "YSWS - Marketing",
@@ -694,19 +898,29 @@ files, no auth. Amounts are US dollars, dates ISO-8601, timestamps UTC.
 ## Data
 
 The home page is rendered from /index.json, which holds the metadata (when HCB
-was last pulled, when the spend was last recalculated) and the four sections of
-the site: ysws_programs_with_linked_hcbs, ysws_programs_with_no_linked_hcbs,
-ysws_marketing, and hcb_orgs_no_program_claims. Each program there carries its
-totals and its nested HCB org tree, and points at its own document.
+was last pulled, when the spend was last recalculated) and the sections of the
+site: ysws_programs_with_linked_hcbs, ysws_programs_with_no_linked_hcbs,
+ysws_budgets, ysws_budgets_with_no_linked_person,
+ysws_people_with_no_linked_budget, ysws_marketing, and
+hcb_orgs_no_program_claims. Each program there carries its totals and its
+nested HCB org tree, and points at its own document.
 
 Each program page is rendered from /programs/{{program_name}}.json, for example
 /programs/{example_slug}.json, which holds that program's totals, category
 breakdown, HCB org tree, and every transaction counted.
 
+Each budget page is rendered from /budgets/{{budget_slug}}.json. A YSWS budget
+is one person's own HCB org: programs grant money into it, and it is spent
+across whatever that person reviews. A program funding a budget is therefore
+NOT the program's spend, and the two sets of dollars must never be added
+together. Money a budget sends back to an HCB org is likewise not counted as
+that person's spend, because the receiving org's ledger already counts it.
+
 The same data is also published as a DuckDB database at /{DUCKDB_FILENAME}, for
 querying rather than walking the JSON, with tables programs, program_orgs,
 spend_transactions, revenue_transactions, withheld_orgs, unmatched_orgs,
-unlinked_programs and metadata:
+unlinked_programs, budgets, budget_transactions, people_without_budget and
+metadata:
 
     duckdb {DUCKDB_FILENAME}
     SELECT name, true_spend_dollars FROM programs ORDER BY 2 DESC LIMIT 10;
@@ -756,12 +970,16 @@ Built as JSON first, then rendered to HTML from that JSON, so the two cannot
 disagree.
 
 - `index.json` / `index.html` — metadata, programs with linked HCBs, programs
-  without, marketing, and HCB orgs no program claims.
+  without, personal YSWS budgets, the two budget-link gap lists, marketing, and
+  HCB orgs no program claims.
 - `programs/<root_slug>.json` / `.html` — one program: totals, category
   breakdown, HCB org tree, and every transaction counted.
+- `budgets/<slug>.json` / `.html` — one person's YSWS budget: totals, bucket
+  breakdown, and every transaction behind them.
 - `llms.txt` — the JSON layout and what the numbers mean.
 
-{len(linked)} programs · true spend {money(spend)} · built
+{len(linked)} programs · true spend {money(spend)} ·
+{len(index_document["ysws_budgets"])} personal budgets · built
 {index_document["metadata"]["page_built"]}.
 
 ## Do not edit by hand
@@ -784,15 +1002,21 @@ def render_site(data: SiteData, generated_at: datetime) -> Dict[str, Any]:
     """
     documents = build_documents(data, generated_at)
     index_document = documents["index.json"]
-    program_documents = [d for path, d in documents.items() if path != "index.json"]
+    program_documents = [d for path, d in documents.items()
+                         if path.startswith("programs/")]
+    budget_documents = [d for path, d in documents.items()
+                        if path.startswith("budgets/")]
 
     files: Dict[str, str] = {".nojekyll": "", "CNAME": CUSTOM_DOMAIN + "\n"}
     for path, document in documents.items():
         files[path] = _dump(document)
     for document in program_documents:
         files[document["page"]] = render_program_page(document)
+    for document in budget_documents:
+        files[document["page"]] = render_budget_page(document)
 
-    files[DUCKDB_FILENAME] = build_duckdb(index_document, program_documents)
+    files[DUCKDB_FILENAME] = build_duckdb(index_document, program_documents,
+                                          budget_documents)
 
     example = program_documents[0]["root_slug"] if program_documents else "flavortown"
     files["llms.txt"] = render_llms_txt(index_document, example)

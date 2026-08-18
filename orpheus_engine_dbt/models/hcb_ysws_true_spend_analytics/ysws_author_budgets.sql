@@ -4,9 +4,9 @@
 ) }}
 
 /*
-    Individual YSWS budget pots — one row per `ysws-budget-*` org, for the
-    leadership dashboard's per-person staff spend. Map budget_slug/budget_name
-    to a person downstream (the slugs are first names / handles).
+    Individual YSWS budget pots — one row per pot in ysws_budget_orgs, with the
+    person it belongs to already attached (roster link; NULL when the roster's
+    "HCB Budget Fund" field was never filled in).
 
     personal_spend_dollars = the pot's own external spend + card-grant funding
     (drill into ysws_author_budget_ledger WHERE is_personal_spend for the
@@ -29,9 +29,18 @@ WITH activity AS (
 )
 
 SELECT
-    o.event_id AS budget_event_id,
-    o.slug AS budget_slug,
-    o.name AS budget_name,
+    o.budget_event_id,
+    o.budget_slug,
+    o.budget_name,
+    o.hcb_url,
+    o.matched_by,
+    o.person_record_id,
+    o.person_name,
+    o.airtable_record_url,
+    o.has_person,
+    o.is_also_program_root,
+    o.also_program_name,
+    o.is_public,
     a.first_activity_date,
     a.last_activity_date,
     ROUND(COALESCE(a.personal_spend_dollars, 0)::numeric, 2) AS personal_spend_dollars,
@@ -41,7 +50,6 @@ SELECT
     ROUND(o.balance_cents / 100.0, 2) AS balance_dollars,
     ROUND(o.card_grants_total_cents / 100.0, 2) AS card_grants_funded_dollars,
     ROUND(o.card_grants_active_cents / 100.0, 2) AS card_grants_unspent_dollars
-FROM {{ ref('orgs') }} o
-LEFT JOIN activity a ON a.budget_event_id = o.event_id
-WHERE o.slug LIKE 'ysws-budget-%'
+FROM {{ ref('ysws_budget_orgs') }} o
+LEFT JOIN activity a ON a.budget_event_id = o.budget_event_id
 ORDER BY personal_spend_dollars DESC

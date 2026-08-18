@@ -191,10 +191,46 @@ models:
       - name: settled_after_days
         description: "Days between spent_date and settlement; NULL when unknown."
 
+  - name: ysws_budget_people
+    description: >
+      One row per record in the Unified YSWS DB "YSWS Authors" roster, with the
+      HCB budget org their hand-typed "HCB Budget Fund" URL resolves to.
+      link_status names the gap when it does not resolve (no_budget_link,
+      unparseable_budget_link, org_not_found). Excludes the roster's email and
+      payout columns.
+    columns:
+      - name: person_record_id
+        tests: [unique, not_null]
+      - name: link_status
+        tests:
+          - not_null
+          - accepted_values:
+              values: [linked, no_budget_link, unparseable_budget_link, org_not_found]
+      - name: grants_attributed_dollars
+        description: "Dollar value of grants credited to this person as a reviewer."
+
+  - name: ysws_budget_orgs
+    description: >
+      The personal YSWS budget pot universe and whose pot each one is. Claims a
+      pot by slug (ysws-budget-*), by HCB display name (YSWS - Budget*) or by a
+      roster link, so pots renamed out of the slug convention are not dropped.
+      is_also_program_root marks pots that ysws_spend_org_tree also treats as a
+      program root.
+    columns:
+      - name: budget_event_id
+        tests: [unique, not_null]
+      - name: budget_slug
+        tests: [unique, not_null]
+      - name: matched_by
+        tests:
+          - not_null
+          - accepted_values: { values: [slug, name, airtable] }
+
   - name: ysws_author_budgets
     description: >
-      One row per personal ysws-budget-* pot: personal spend, transfers back to
-      orgs (excluded from personal spend), funding received, balance.
+      One row per personal YSWS budget pot: personal spend, transfers back to
+      orgs (excluded from personal spend), funding received, balance, and the
+      person it belongs to (NULL when the roster link is missing).
     columns:
       - name: budget_event_id
         tests: [unique, not_null]

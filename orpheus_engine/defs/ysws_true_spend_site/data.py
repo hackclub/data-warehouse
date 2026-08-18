@@ -1,6 +1,11 @@
 """
 Warehouse queries behind the YSWS true-spend static site.
 
+Two things are published: what each YSWS program spent, and what each person's
+YSWS budget pot spent. They are the same dollars seen at different moments --
+a program funding a budget is not the program's spend, it is the budget's
+funding -- so the two are never added together.
+
 Everything here reads the dbt models in `public_hcb_ysws_true_spend_analytics`
 (see orpheus_engine_dbt/models/hcb_ysws_true_spend_analytics/) plus the HCB
 ledger, and returns plain Python dicts. No Dagster imports, so the site can be
@@ -236,6 +241,85 @@ ORDER BY gap_type, program_name
 """
 
 
+# --- personal budget pots ----------------------------------------------------
+#
+# A YSWS budget is one person's own HCB org: a program grants money into it,
+# and the person spends it across whatever they are reviewing. Programs and
+# budgets are two views of the same dollars at different moments -- money
+# leaving a program into a budget is category B there (not the program's
+# spend), and lands here as funding_received.
+
+BUDGETS_SQL = f"""
+SELECT
+    budget_event_id,
+    budget_slug,
+    budget_name,
+    hcb_url,
+    matched_by,
+    person_record_id,
+    person_name,
+    airtable_record_url,
+    has_person,
+    is_also_program_root,
+    also_program_name,
+    is_public,
+    first_activity_date,
+    last_activity_date,
+    personal_spend_dollars,
+    transferred_to_orgs_dollars,
+    funding_received_dollars,
+    other_inflow_dollars,
+    balance_dollars,
+    card_grants_funded_dollars,
+    card_grants_unspent_dollars
+FROM {SPEND_SCHEMA}.ysws_author_budgets
+ORDER BY personal_spend_dollars DESC NULLS LAST, budget_slug
+"""
+
+# Every main-ledger transaction of every pot, both directions, bucketed.
+BUDGET_TRANSACTIONS_SQL = f"""
+SELECT
+    budget_slug,
+    transaction_date,
+    transaction_type,
+    flow_direction,
+    budget_bucket,
+    is_personal_spend,
+    ROUND(amount_dollars::numeric, 2) AS amount_dollars,
+    ROUND(outflow_dollars::numeric, 2) AS outflow_dollars,
+    COALESCE(disbursement_name, display_memo) AS description,
+    COALESCE(dest_org_name, counterparty_name, transfer_recipient_name) AS counterparty,
+    COALESCE(source_org_name, counterparty_name) AS source,
+    source_org_slug,
+    initiated_by_name,
+    merchant_category,
+    hcb_code,
+    hcb_url,
+    receipt_count
+FROM {SPEND_SCHEMA}.ysws_author_budget_ledger
+ORDER BY budget_slug, transaction_date DESC NULLS LAST, hcb_code
+"""
+
+# The roster behind the pots, including everyone whose budget link is missing
+# or broken -- the fix-it list that keeps per-person spend from silently
+# under-reporting.
+BUDGET_PEOPLE_SQL = f"""
+SELECT
+    person_record_id,
+    person_name,
+    airtable_record_url,
+    hcb_budget_field,
+    linked_slug,
+    budget_slug,
+    budget_name,
+    link_status,
+    has_budget,
+    grants_attributed_dollars
+FROM {SPEND_SCHEMA}.ysws_budget_people
+ORDER BY grants_attributed_dollars DESC NULLS LAST, person_name
+"""
+
+
 @dataclass
 class SiteData:
     """Everything the renderer needs, already grouped by program root slug."""
@@ -246,6 +330,9 @@ class SiteData:
     revenue_by_program: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     unmatched_orgs: List[Dict[str, Any]] = field(default_factory=list)
     unlinked_programs: List[Dict[str, Any]] = field(default_factory=list)
+    budgets: List[Dict[str, Any]] = field(default_factory=list)
+    budget_txns_by_slug: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    budget_people: List[Dict[str, Any]] = field(default_factory=list)
     # Filled by the caller: the asset reads the Dagster instance, the preview
     # script reads the prod Dagster database. See freshness.py.
     freshness: Optional["Freshness"] = None
@@ -284,6 +371,9 @@ def fetch_site_data(conn) -> SiteData:
     revenue_txns = _rows(conn, REVENUE_TRANSACTIONS_SQL)
     unmatched_orgs = _rows(conn, UNMATCHED_ORGS_SQL)
     unlinked_programs = _rows(conn, UNLINKED_PROGRAMS_SQL)
+    budgets = _rows(conn, BUDGETS_SQL)
+    budget_txns = _rows(conn, BUDGET_TRANSACTIONS_SQL)
+    budget_people = _rows(conn, BUDGET_PEOPLE_SQL)
 
     orgs_by_program = _group(orgs, "root_slug")
 
@@ -310,5 +400,8 @@ def fetch_site_data(conn) -> SiteData:
         revenue_by_program=_group(revenue_txns, "root_slug"),
         unmatched_orgs=unmatched_orgs,
         unlinked_programs=unlinked_programs,
+        budgets=budgets,
+        budget_txns_by_slug=_group(budget_txns, "budget_slug"),
+        budget_people=budget_people,
         freshness=Freshness(hcb_data_through=hcb_data_through(conn)),
     )

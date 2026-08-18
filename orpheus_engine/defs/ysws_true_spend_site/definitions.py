@@ -57,6 +57,9 @@ COMMIT_EMAIL = "data-warehouse@hackclub.com"
 # than relying on the bare model name, which would silently create a phantom
 # upstream asset instead of wiring the real dependency.
 UPSTREAM_ASSETS = [
+    AssetKey(["hcb_ysws_true_spend_analytics", "ysws_author_budgets"]),
+    AssetKey(["hcb_ysws_true_spend_analytics", "ysws_author_budget_ledger"]),
+    AssetKey(["hcb_ysws_true_spend_analytics", "ysws_budget_people"]),
     AssetKey(["hcb_ysws_true_spend_analytics", "ysws_spend_by_program"]),
     AssetKey(["hcb_ysws_true_spend_analytics", "ysws_spend_org_tree"]),
     AssetKey(["hcb_ysws_true_spend_analytics", "ysws_spend_ledger"]),
@@ -252,6 +255,18 @@ def build_site_files(
         ),
         "unmatched_orgs": len(data.unmatched_orgs),
         "unlinked_programs": len(data.unlinked_programs),
+        "budget_count": len(data.budgets),
+        "budget_transaction_count": sum(
+            len(v) for v in data.budget_txns_by_slug.values()
+        ),
+        "people_without_budget": sum(
+            1 for p in data.budget_people if p["link_status"] != "linked"
+        ),
+        "budgets_without_person": sum(1 for b in data.budgets if not b["has_person"]),
+        "total_personal_spend_dollars": sum(
+            (Decimal(str(b["personal_spend_dollars"] or 0)) for b in data.budgets),
+            Decimal(0),
+        ),
         "freshness": data.freshness,
     }
 
@@ -262,8 +277,9 @@ def build_site_files(
     group_name="ysws_true_spend_site",
     deps=UPSTREAM_ASSETS,
     description=(
-        "Renders the YSWS true-spend static site (program tree, per-program "
-        "transaction pages, JSON) from the true-spend dbt models and pushes it to "
+        "Renders the YSWS true-spend static site (program tree, per-program and "
+        "per-budget transaction pages, JSON) from the true-spend dbt models and "
+        "pushes it to "
         f"the {DEFAULT_BRANCH} branch of {DEFAULT_REPO}."
     ),
 )
@@ -276,7 +292,9 @@ def ysws_true_spend_site(
         f"Rendered {len(files)} files ({built['bytes'] / 1_000_000:.1f} MB) for "
         f"{built['program_count']} programs, {built['org_count']} orgs, "
         f"{built['spend_transaction_count']} spend and "
-        f"{built['revenue_transaction_count']} revenue transactions."
+        f"{built['revenue_transaction_count']} revenue transactions, plus "
+        f"{built['budget_count']} personal budgets "
+        f"({built['budget_transaction_count']} transactions)."
     )
 
     fresh = built["freshness"]
@@ -300,6 +318,13 @@ def ysws_true_spend_site(
         ),
         "unmatched_orgs": MetadataValue.int(built["unmatched_orgs"]),
         "unlinked_programs": MetadataValue.int(built["unlinked_programs"]),
+        "budgets": MetadataValue.int(built["budget_count"]),
+        "budget_transactions": MetadataValue.int(built["budget_transaction_count"]),
+        "total_personal_spend": MetadataValue.float(
+            float(built["total_personal_spend_dollars"])
+        ),
+        "people_without_budget": MetadataValue.int(built["people_without_budget"]),
+        "budgets_without_person": MetadataValue.int(built["budgets_without_person"]),
         "files": MetadataValue.int(len(files)),
         "size_mb": MetadataValue.float(round(built["bytes"] / 1_000_000, 2)),
         "site_url": MetadataValue.url(PAGES_URL),

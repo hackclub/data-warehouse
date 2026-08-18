@@ -173,6 +173,75 @@ def _unlinked_program(**overrides):
     return program
 
 
+def _budget(**overrides):
+    budget = {
+        "budget_event_id": 90,
+        "budget_slug": "ysws-budget-robin",
+        "budget_name": "YSWS - Budget - Robin",
+        "hcb_url": "https://hcb.hackclub.com/ysws-budget-robin",
+        "matched_by": "slug",
+        "person_record_id": "recRobin",
+        "person_name": "Robin Fisher",
+        "airtable_record_url": "https://airtable.com/app3A5kJwYqxMLOgh/tblRf1BQs5H8298gW/recRobin",
+        "has_person": True,
+        "is_also_program_root": False,
+        "also_program_name": None,
+        "is_public": True,
+        "first_activity_date": date(2026, 4, 1),
+        "last_activity_date": date(2026, 8, 2),
+        "personal_spend_dollars": Decimal("140.00"),
+        "transferred_to_orgs_dollars": Decimal("60.00"),
+        "funding_received_dollars": Decimal("500.00"),
+        "other_inflow_dollars": Decimal("0.00"),
+        "balance_dollars": Decimal("300.00"),
+        "card_grants_funded_dollars": Decimal("40.00"),
+        "card_grants_unspent_dollars": Decimal("15.00"),
+    }
+    budget.update(overrides)
+    return budget
+
+
+def _budget_txn(**overrides):
+    txn = {
+        "budget_slug": "ysws-budget-robin",
+        "transaction_date": date(2026, 7, 4),
+        "transaction_type": "card_charge",
+        "flow_direction": "outflow",
+        "budget_bucket": "external_spend",
+        "is_personal_spend": True,
+        "amount_dollars": Decimal("-100.00"),
+        "outflow_dollars": Decimal("100.00"),
+        "description": "Soldering irons",
+        "counterparty": "Adafruit",
+        "source": None,
+        "source_org_slug": None,
+        "initiated_by_name": "Robin Fisher",
+        "merchant_category": "electronics",
+        "hcb_code": "HCB-100",
+        "hcb_url": "https://hcb.hackclub.com/hcb/HCB-100",
+        "receipt_count": 1,
+    }
+    txn.update(overrides)
+    return txn
+
+
+def _budget_person(**overrides):
+    person = {
+        "person_record_id": "recSam",
+        "person_name": "Sam Reviewer",
+        "airtable_record_url": "https://airtable.com/app3A5kJwYqxMLOgh/tblRf1BQs5H8298gW/recSam",
+        "hcb_budget_field": None,
+        "linked_slug": None,
+        "budget_slug": None,
+        "budget_name": None,
+        "link_status": "no_budget_link",
+        "has_budget": False,
+        "grants_attributed_dollars": Decimal("12000.00"),
+    }
+    person.update(overrides)
+    return person
+
+
 def _site_data(**overrides) -> SiteData:
     data = SiteData(
         programs=[_program()],
@@ -207,6 +276,73 @@ def _site_data(**overrides) -> SiteData:
         },
         unmatched_orgs=[_unmatched_org()],
         unlinked_programs=[_unlinked_program()],
+        budgets=[_budget(), _budget(
+            budget_event_id=91,
+            budget_slug="ysws-budget-orphan",
+            budget_name="YSWS - Budget - Orphan",
+            hcb_url="https://hcb.hackclub.com/ysws-budget-orphan",
+            person_record_id=None,
+            person_name=None,
+            airtable_record_url=None,
+            has_person=False,
+            matched_by="name",
+            personal_spend_dollars=Decimal("0.00"),
+            transferred_to_orgs_dollars=Decimal("0.00"),
+            funding_received_dollars=Decimal("0.00"),
+            card_grants_funded_dollars=Decimal("0.00"),
+            card_grants_unspent_dollars=Decimal("0.00"),
+        )],
+        budget_txns_by_slug={
+            "ysws-budget-robin": [
+                _budget_txn(),
+                _budget_txn(
+                    budget_bucket="card_grant_funding",
+                    transaction_type="disbursement",
+                    outflow_dollars=Decimal("40.00"),
+                    amount_dollars=Decimal("-40.00"),
+                    hcb_code="HCB-101",
+                    description="Grant card top-up",
+                ),
+                _budget_txn(
+                    budget_bucket="transfer_to_org",
+                    is_personal_spend=False,
+                    outflow_dollars=Decimal("60.00"),
+                    amount_dollars=Decimal("-60.00"),
+                    hcb_code="HCB-102",
+                    description="Back to the program",
+                ),
+                _budget_txn(
+                    flow_direction="inflow",
+                    budget_bucket="funding_received",
+                    transaction_type="incoming_disbursement",
+                    is_personal_spend=False,
+                    amount_dollars=Decimal("500.00"),
+                    outflow_dollars=Decimal("-500.00"),
+                    hcb_code="HCB-103",
+                    description="Fallout reviewer budget",
+                    source="Fallout",
+                ),
+            ]
+        },
+        budget_people=[
+            _budget_person(),
+            _budget_person(
+                person_record_id="recRobin",
+                person_name="Robin Fisher",
+                hcb_budget_field="https://hcb.hackclub.com/ysws-budget-robin",
+                linked_slug="ysws-budget-robin",
+                budget_slug="ysws-budget-robin",
+                link_status="linked",
+                has_budget=True,
+            ),
+            _budget_person(
+                person_record_id="recTyp",
+                person_name="Tay Poe",
+                hcb_budget_field=",.",
+                link_status="unparseable_budget_link",
+                grants_attributed_dollars=Decimal("500.00"),
+            ),
+        ],
         freshness=Freshness(
             hcb_pulled_at=GENERATED_AT - timedelta(hours=5),
             hcb_data_through=GENERATED_AT - timedelta(hours=5),
@@ -393,17 +529,20 @@ def test_ago_formats_the_units_it_uses():
 
 
 def test_homepage_sections_are_collapsible_and_in_order():
-    """Linked programs, unlinked programs, marketing, orgs nobody claims."""
+    """Programs, budgets, the two budget gap lists, marketing, unclaimed orgs."""
     files = _render(_site_data_with_marketing())
     assert "unmatched.html" not in files
     index = files["index.html"]
     linked = index.index("YSWS Programs w/ Linked HCBs")
     unlinked = index.index("YSWS Programs w/ No Linked HCBs")
+    budgets = index.index("YSWS Budgets (")
+    no_person = index.index("YSWS Budgets w/ No Linked Person")
+    no_budget = index.index("People w/ No Linked Budget")
     marketing = index.index("<h2>YSWS - Marketing</h2>")
     orgs = index.index("HCB orgs no program claims")
-    assert linked < unlinked < marketing < orgs
+    assert linked < unlinked < budgets < no_person < no_budget < marketing < orgs
     # every section header is a <summary>, and only the programs one starts open
-    assert index.count("<summary><h2>") == 4
+    assert index.count("<summary><h2>") == 7
     assert "<details open><summary><h2>YSWS Programs w/ Linked HCBs" in index
     assert "<details><summary><h2>HCB orgs no program claims" in index
     # the content is all still there
@@ -671,6 +810,9 @@ def test_index_json_mirrors_the_page_sections():
         "metadata",
         "ysws_programs_with_linked_hcbs",
         "ysws_programs_with_no_linked_hcbs",
+        "ysws_budgets",
+        "ysws_budgets_with_no_linked_person",
+        "ysws_people_with_no_linked_budget",
         "ysws_marketing",
         "hcb_orgs_no_program_claims",
     ]
@@ -707,3 +849,153 @@ def test_program_json_holds_everything_its_page_shows():
     for txn in detail["spend_transactions"]:
         assert money(txn["amount_dollars"]) in page
     assert money(detail["totals"]["balance_dollars"]) in page
+
+
+# --- personal budgets --------------------------------------------------------
+
+def test_every_budget_gets_a_page_and_a_document():
+    files = _render()
+    for slug in ("ysws-budget-robin", "ysws-budget-orphan"):
+        assert f"budgets/{slug}.html" in files
+        assert f"budgets/{slug}.json" in files
+    index = files["index.html"]
+    assert 'href="budgets/ysws-budget-robin.html"' in index
+    assert "YSWS Budgets (2)" in index
+
+
+def test_budget_page_totals_match_its_transactions():
+    """The bucket table is the audit trail for the headline personal spend."""
+    import json
+
+    page = _render()["budgets/ysws-budget-robin.html"]
+    # external $100 + cards loaded $40 = $140; the $60 sent back is excluded
+    assert "$140.00" in page
+    assert "Back to the program" in page          # listed
+    assert 'class="excluded"' in page             # but greyed out
+
+    document = json.loads(_render()["budgets/ysws-budget-robin.json"])
+    counted = sum(
+        Decimal(str(t["amount_dollars"]))
+        for t in document["spend_transactions"]
+        if t["counted_as_personal_spend"]
+    )
+    assert counted == Decimal(str(document["totals"]["personal_spend_dollars"]))
+
+
+def test_budget_money_in_is_not_confused_with_money_out():
+    """Funding is money in; listing it as spend would double the person's total."""
+    import json
+
+    document = json.loads(_render()["budgets/ysws-budget-robin.json"])
+    assert len(document["funding_transactions"]) == 1
+    assert document["funding_transactions"][0]["amount_dollars"] == 500.0
+    assert all(t["direction"] == "outflow" for t in document["spend_transactions"])
+    assert not any(
+        t["counted_as_personal_spend"] for t in document["funding_transactions"]
+    )
+
+
+def test_program_funding_a_budget_is_never_added_to_program_spend():
+    """
+    The same dollars appear twice on this site -- as category B on the program
+    that granted them, and as funding on the budget that received them -- so
+    both surfaces have to say out loud that they must not be summed.
+    """
+    files = _render()
+    assert "never added together" in files["index.html"]
+    assert "not counted here" in files["budgets/ysws-budget-robin.html"]
+    assert "must never be added" in files["llms.txt"]
+
+
+def test_both_sides_of_a_broken_budget_link_are_published():
+    """A pot with no person and a person with no pot are each fixable, once seen."""
+    import json
+
+    files = _render()
+    index = files["index.html"]
+    assert "YSWS Budgets w/ No Linked Person (1)" in index
+    assert "People w/ No Linked Budget (2)" in index      # blank + unparseable
+
+    document = json.loads(files["index.json"])
+    orphans = document["ysws_budgets_with_no_linked_person"]
+    assert [b["slug"] for b in orphans] == ["ysws-budget-orphan"]
+    assert orphans[0]["person_name"] is None
+
+    people = document["ysws_people_with_no_linked_budget"]
+    assert {p["name"] for p in people} == {"Sam Reviewer", "Tay Poe"}
+    assert {p["problem"] for p in people} == {
+        "No HCB Budget Fund on the YSWS Authors record",
+        "The HCB Budget Fund field is not an hcb.hackclub.com org URL",
+    }
+    # ranked by the money each has moved, so the costly gaps read first
+    assert people[0]["grants_attributed_dollars"] == 12000.0
+    # a linked person is not a gap
+    assert "Robin Fisher" not in {p["name"] for p in people}
+
+
+def test_unlinked_budget_still_appears_in_the_main_budget_table():
+    """The gap list is a fix-it queue, not a place to hide a pot's spending."""
+    index = _render()["index.html"]
+    main_table = index.split('id="budgets"')[1].split("</table>")[0]
+    assert "YSWS - Budget - Orphan" in main_table
+    assert "not linked" in main_table
+
+
+def test_roster_pay_and_seniority_are_not_published():
+    """Names and dollars are in scope; the internal ladder and payouts are not."""
+    files = _render()
+    everything = "".join(
+        content for content in files.values() if isinstance(content, str)
+    )
+    for withheld in ("trust_level", "YSWS Principal", "YSWS Senior",
+                     "total_payouts", "temp - total payouts"):
+        assert withheld not in everything, withheld
+
+
+def test_budget_page_redacts_emails_like_every_other_page():
+    data = _site_data()
+    data.budget_txns_by_slug["ysws-budget-robin"][0]["description"] = (
+        "reimbursed robin@example.com"
+    )
+    files = render_site(data, GENERATED_AT)
+    page = files["budgets/ysws-budget-robin.html"]
+    assert "robin@example.com" not in page
+    assert "[email hidden]" in page
+
+
+def test_a_pot_that_is_also_a_program_says_so_on_both_ends():
+    """Three pots are also program roots; summing the two lists would double them."""
+    data = _site_data()
+    data.budgets[0]["is_also_program_root"] = True
+    data.budgets[0]["also_program_name"] = "Giftbox"
+    files = render_site(data, GENERATED_AT)
+    assert "also the program Giftbox" in files["index.html"]
+    assert "Do not add the two together." in files["budgets/ysws-budget-robin.html"]
+
+
+def test_duckdb_carries_the_budget_tables():
+    import tempfile
+    from pathlib import Path
+
+    import duckdb
+
+    files = _render()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "site.duckdb"
+        path.write_bytes(files["ysws-true-spend.duckdb"])
+        con = duckdb.connect(str(path), read_only=True)
+        try:
+            assert con.execute("SELECT count(*) FROM budgets").fetchone()[0] == 2
+            assert con.execute(
+                "SELECT count(*) FROM budget_transactions"
+            ).fetchone()[0] == 4
+            assert con.execute(
+                "SELECT count(*) FROM people_without_budget"
+            ).fetchone()[0] == 2
+            spend = con.execute(
+                "SELECT personal_spend_dollars FROM budgets WHERE slug = ?",
+                ["ysws-budget-robin"],
+            ).fetchone()[0]
+            assert spend == 140.0
+        finally:
+            con.close()

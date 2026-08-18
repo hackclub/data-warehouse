@@ -6,11 +6,13 @@ Pipeline: dbt models -> data.py (SQL rows) -> documents.py (JSON) -> site.py
 show a number the JSON lacks: adding a field to a page means adding it here,
 and it lands in both surfaces at once.
 
-Two documents, mirroring the two kinds of page:
+Three documents, mirroring the three kinds of page:
 
-  index.json                 metadata + the four sections of the home page
+  index.json                 metadata + the sections of the home page
   programs/<root_slug>.json  one program: totals, category breakdown, HCB org
                              tree, and every transaction listed on its page
+  budgets/<slug>.json        one person's budget pot: totals, bucket breakdown,
+                             and every transaction behind them
 
 Redaction happens here rather than in the renderer, so the JSON is publishable
 under the same rules as the HTML: email addresses stripped, and transactions of
@@ -58,6 +60,30 @@ GAP_TYPES = {
     "unparseable_hcb": "The hcb field is not an hcb.hackclub.com org URL",
     "org_not_found": "The linked slug matches no HCB org",
     "org_deleted": "The linked HCB org is deleted",
+}
+
+# A budget pot's outflows. Only the first two are the person's own spend: money
+# sent back to an org is spent (or not) by that org, and its ledger counts it.
+BUDGET_BUCKET_ORDER = [
+    "external_spend", "card_grant_funding", "transfer_to_org", "internal_leg",
+    "funding_received", "other_inflow",
+]
+BUDGET_BUCKET_LABELS = {
+    "external_spend": "Spent on the outside world (grants, cards, transfers out)",
+    "card_grant_funding": "Loaded onto this person's grant cards",
+    "transfer_to_org": "Sent back to an HCB org (that org's ledger counts it)",
+    "internal_leg": "Internal leg on the bank rails (not spend)",
+    "funding_received": "Funding received from a program",
+    "other_inflow": "Other money in (refunds, donations)",
+}
+PERSONAL_SPEND_BUCKETS = {"external_spend", "card_grant_funding"}
+
+# Why a roster row has no budget attached. Mirrors GAP_TYPES for programs: the
+# link is one hand-typed field, so it fails in the same handful of ways.
+BUDGET_GAP_TYPES = {
+    "no_budget_link": "No HCB Budget Fund on the YSWS Authors record",
+    "unparseable_budget_link": "The HCB Budget Fund field is not an hcb.hackclub.com org URL",
+    "org_not_found": "The linked slug matches no HCB org",
 }
 
 _SAFE_SLUG = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -255,6 +281,114 @@ def _withheld(
 
 # --- documents --------------------------------------------------------------
 
+def _budget_transaction(txn: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    One line of a pot's ledger. Outflows carry a positive amount and inflows a
+    negative one on the ledger's own sign convention, so both are republished
+    as the dollars that moved, with direction as its own field.
+    """
+    return {
+        "date": _iso(txn["transaction_date"]),
+        "direction": txn["flow_direction"],
+        "bucket": txn["budget_bucket"],
+        "bucket_label": BUDGET_BUCKET_LABELS.get(txn["budget_bucket"], txn["budget_bucket"]),
+        "type": txn["transaction_type"],
+        "description": _text(txn["description"]),
+        "counterparty": _text(txn["counterparty"] if txn["flow_direction"] == "outflow"
+                              else txn["source"]),
+        "initiated_by": _text(txn["initiated_by_name"]),
+        "merchant_category": txn["merchant_category"],
+        "amount_dollars": _money(
+            txn["outflow_dollars"] if txn["flow_direction"] == "outflow"
+            else txn["amount_dollars"]
+        ),
+        "counted_as_personal_spend": bool(txn["is_personal_spend"]),
+        "receipt_count": int(txn["receipt_count"] or 0),
+        "hcb_code": txn["hcb_code"],
+        "hcb_url": txn["hcb_url"],
+    }
+
+
+def _budget_bucket_breakdown(txns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    totals: Dict[str, Decimal] = {}
+    counts: Dict[str, int] = {}
+    for txn in txns:
+        bucket = txn["budget_bucket"] or "?"
+        amount = _dec(txn["outflow_dollars"] if txn["flow_direction"] == "outflow"
+                      else txn["amount_dollars"])
+        totals[bucket] = totals.get(bucket, Decimal(0)) + amount
+        counts[bucket] = counts.get(bucket, 0) + 1
+    order = [b for b in BUDGET_BUCKET_ORDER if b in totals] + [
+        b for b in sorted(totals) if b not in BUDGET_BUCKET_ORDER
+    ]
+    return [
+        {
+            "bucket": bucket,
+            "label": BUDGET_BUCKET_LABELS.get(bucket, bucket),
+            "transaction_count": counts[bucket],
+            "dollars": _money(totals[bucket]),
+            "counted_as_personal_spend": bucket in PERSONAL_SPEND_BUCKETS,
+        }
+        for bucket in order
+    ]
+
+
+def build_budget_document(
+    budget: Dict[str, Any], txns: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """One person's budget pot, with every transaction behind its total."""
+    name = page_slug(budget["budget_slug"], budget["budget_event_id"])
+    outflows = [t for t in txns if t["flow_direction"] == "outflow"]
+    inflows = [t for t in txns if t["flow_direction"] != "outflow"]
+    return {
+        "budget_name": budget["budget_name"],
+        "person_name": budget["person_name"],
+        "slug": budget["budget_slug"],
+        "hcb_url": budget["hcb_url"],
+        "page": f"budgets/{name}.html",
+        "json": f"budgets/{name}.json",
+        "matched_by": budget["matched_by"],
+        "has_person": bool(budget["has_person"]),
+        "is_also_program_root": bool(budget["is_also_program_root"]),
+        "also_program_name": budget["also_program_name"],
+        "first_activity_date": _iso(budget["first_activity_date"]),
+        "last_activity_date": _iso(budget["last_activity_date"]),
+        "totals": {
+            "personal_spend_dollars": _money(budget["personal_spend_dollars"]),
+            "funding_received_dollars": _money(budget["funding_received_dollars"]),
+            "transferred_to_orgs_dollars": _money(budget["transferred_to_orgs_dollars"]),
+            "other_inflow_dollars": _money(budget["other_inflow_dollars"]),
+            "balance_dollars": _money(budget["balance_dollars"]),
+            "card_grants_funded_dollars": _money(budget["card_grants_funded_dollars"]),
+            "card_grants_unspent_dollars": _money(budget["card_grants_unspent_dollars"]),
+        },
+        "bucket_breakdown": _budget_bucket_breakdown(txns),
+        "spend_transactions": [_budget_transaction(t) for t in outflows],
+        "funding_transactions": [_budget_transaction(t) for t in inflows],
+    }
+
+
+def budget_index_summary(document: Dict[str, Any]) -> Dict[str, Any]:
+    """A pot as the home page lists it."""
+    return {
+        "budget_name": document["budget_name"],
+        "person_name": document["person_name"],
+        "slug": document["slug"],
+        "hcb_url": document["hcb_url"],
+        "page": document["page"],
+        "json": document["json"],
+        "personal_spend_dollars": document["totals"]["personal_spend_dollars"],
+        "funding_received_dollars": document["totals"]["funding_received_dollars"],
+        "transferred_to_orgs_dollars": document["totals"]["transferred_to_orgs_dollars"],
+        "balance_dollars": document["totals"]["balance_dollars"],
+        "transaction_count": (len(document["spend_transactions"])
+                              + len(document["funding_transactions"])),
+        "last_activity_date": document["last_activity_date"],
+        "is_also_program_root": document["is_also_program_root"],
+        "also_program_name": document["also_program_name"],
+    }
+
+
 def build_program_document(
     program: Dict[str, Any],
     orgs: List[Dict[str, Any]],
@@ -339,9 +473,10 @@ def index_summary(document: Dict[str, Any], orgs: List[Dict[str, Any]]) -> Dict[
 def build_index_document(
     data: SiteData,
     program_documents: List[Dict[str, Any]],
+    budget_documents: List[Dict[str, Any]],
     generated_at: datetime,
 ) -> Dict[str, Any]:
-    """The home page: metadata, then its four sections, in page order."""
+    """The home page: metadata, then its sections, in page order."""
     fresh = data.freshness or Freshness()
     summaries = [
         index_summary(d, data.orgs_by_program.get(d["root_slug"], []))
@@ -352,6 +487,24 @@ def build_index_document(
     ]
     marketing = [
         s for s, d in zip(summaries, program_documents) if not d["is_ysws_program"]
+    ]
+    budgets = [budget_index_summary(d) for d in budget_documents]
+    # A pot with no roster link is a gap on both sides: nobody is named here,
+    # and the person (if they have a roster row at all) shows up in the list
+    # below with an empty field. Both lists are published so either end can be
+    # fixed.
+    budgets_without_person = [b for b, d in zip(budgets, budget_documents)
+                              if not d["has_person"]]
+    people_without_budget = [
+        {
+            "name": person["person_name"],
+            "problem": BUDGET_GAP_TYPES.get(person["link_status"], person["link_status"]),
+            "hcb_budget_field": _text(person["hcb_budget_field"]),
+            "airtable_url": person["airtable_record_url"],
+            "grants_attributed_dollars": _money(person["grants_attributed_dollars"]),
+        }
+        for person in data.budget_people
+        if person["link_status"] != "linked"
     ]
 
     return {
@@ -376,6 +529,9 @@ def build_index_document(
             }
             for g in data.unlinked_programs
         ],
+        "ysws_budgets": budgets,
+        "ysws_budgets_with_no_linked_person": budgets_without_person,
+        "ysws_people_with_no_linked_budget": people_without_budget,
         "ysws_marketing": marketing,
         "hcb_orgs_no_program_claims": [
             {
@@ -408,7 +564,17 @@ def build_documents(data: SiteData, generated_at: datetime) -> Dict[str, Any]:
         )
         for program in data.programs
     ]
-    documents = {"index.json": build_index_document(data, program_documents, generated_at)}
+    budget_documents = [
+        build_budget_document(budget, data.budget_txns_by_slug.get(budget["budget_slug"], []))
+        for budget in data.budgets
+    ]
+    documents = {
+        "index.json": build_index_document(
+            data, program_documents, budget_documents, generated_at
+        )
+    }
     for document in program_documents:
+        documents[document["json"]] = document
+    for document in budget_documents:
         documents[document["json"]] = document
     return documents

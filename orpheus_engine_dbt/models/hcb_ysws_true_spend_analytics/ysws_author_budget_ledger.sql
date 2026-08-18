@@ -5,8 +5,8 @@
 
 /*
     Individual YSWS budget pot ledger — every main-ledger transaction (both
-    directions) of every personal `ysws-budget-*` HCB org, for per-person staff
-    spend in the leadership dashboard (map slug/org_name -> person downstream).
+    directions) of every personal YSWS budget HCB org (the universe defined by
+    ysws_budget_orgs, which also carries whose pot it is).
 
     budget_bucket:
       external_spend     outflow to the outside world ......... personal spend
@@ -24,10 +24,12 @@
 */
 
 WITH pots AS (
-    SELECT event_id, slug, name, balance_cents,
-           card_grants_total_cents, card_grants_active_cents
-    FROM {{ ref('orgs') }}
-    WHERE slug LIKE 'ysws-budget-%'
+    -- The pot universe lives in ysws_budget_orgs, which claims pots by slug,
+    -- by HCB display name and by roster link. Filtering on the slug pattern
+    -- here instead used to drop six real pots (~$45.7K of personal spend).
+    SELECT budget_event_id AS event_id, budget_slug AS slug, budget_name AS name,
+           balance_cents, card_grants_total_cents, card_grants_active_cents
+    FROM {{ ref('ysws_budget_orgs') }}
 )
 
 SELECT

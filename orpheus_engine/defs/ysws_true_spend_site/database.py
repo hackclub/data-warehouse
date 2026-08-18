@@ -9,7 +9,8 @@ rather write SQL than walk 266 JSON files:
     SELECT name, true_spend_dollars FROM programs ORDER BY 2 DESC LIMIT 10;
 
 Tables mirror the documents: programs, program_orgs, spend_transactions,
-revenue_transactions, unmatched_orgs, unlinked_programs, metadata.
+revenue_transactions, unmatched_orgs, unlinked_programs, budgets,
+budget_transactions, people_without_budget, metadata.
 """
 
 import tempfile
@@ -81,8 +82,43 @@ def _flat_transactions(
     return rows
 
 
+def _flat_budgets(budget_documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = []
+    for document in budget_documents:
+        row = {
+            "budget_name": document["budget_name"],
+            "person_name": document["person_name"],
+            "slug": document["slug"],
+            "hcb_url": document["hcb_url"],
+            "matched_by": document["matched_by"],
+            "has_person": document["has_person"],
+            "is_also_program_root": document["is_also_program_root"],
+            "also_program_name": document["also_program_name"],
+            "first_activity_date": document["first_activity_date"],
+            "last_activity_date": document["last_activity_date"],
+        }
+        row.update(document["totals"])
+        rows.append(row)
+    return rows
+
+
+def _flat_budget_transactions(budget_documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = []
+    for document in budget_documents:
+        for key in ("spend_transactions", "funding_transactions"):
+            for txn in document[key]:
+                rows.append({
+                    "budget_name": document["budget_name"],
+                    "person_name": document["person_name"],
+                    "slug": document["slug"],
+                    **txn,
+                })
+    return rows
+
+
 def build_duckdb(index_document: Dict[str, Any],
-                 program_documents: List[Dict[str, Any]]) -> bytes:
+                 program_documents: List[Dict[str, Any]],
+                 budget_documents: List[Dict[str, Any]] = ()) -> bytes:
     """Return a DuckDB database file holding every published table."""
     import duckdb
     import polars as pl
@@ -110,6 +146,9 @@ def build_duckdb(index_document: Dict[str, Any],
             for o in index_document["hcb_orgs_no_program_claims"]
         ],
         "unlinked_programs": index_document["ysws_programs_with_no_linked_hcbs"],
+        "budgets": _flat_budgets(list(budget_documents)),
+        "budget_transactions": _flat_budget_transactions(list(budget_documents)),
+        "people_without_budget": index_document["ysws_people_with_no_linked_budget"],
     }
 
     with tempfile.TemporaryDirectory(prefix="ysws-duckdb-") as tmp:
