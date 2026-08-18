@@ -218,6 +218,7 @@ class TestJobGuardrails:
             "unified_ysws_15min_schedule",
             "hackatime_dau_hourly_schedule",
             "frequent_15min_schedule",
+            "project_search_2h_schedule",
         }
 
     def test_stardance_apm_telemetry_is_not_mirrored(self):

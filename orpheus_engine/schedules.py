@@ -175,6 +175,9 @@ HACKATIME_DAU_SELECTION = (
     dg.AssetSelection.assets(*HACKATIME_DAU_DBT_ASSETS)
 )
 
+# Project search (YSWS mention search + upstream processing deps)
+PROJECT_SEARCH_SELECTION = dg.AssetSelection.groups("unified_ysws_db_processing")
+
 # ---------------------------------------------------------------------------
 # Jobs
 #
@@ -185,6 +188,7 @@ HACKATIME_DAU_SELECTION = (
 #   frequent:      p50 ~3.5 min, p90 ~5 min   -> 60 min cap
 #   unified_ysws:  p50 ~4 min,   p90 ~6 min   -> 60 min cap
 #   hackatime_dau: p50 ~12 min,  p90 ~2.2 h   -> 4 h cap
+#   project_search: new job, no p50 data yet   -> 2 h cap
 #   all_assets:    takes hours                -> 6 h cap (its own cadence)
 # ---------------------------------------------------------------------------
 
@@ -200,6 +204,7 @@ materialize_all_assets_job = dg.define_asset_job(
         - UNIFIED_YSWS_SELECTION
         - FREQUENT_SELECTION
         - HACKATIME_DAU_SELECTION
+        - PROJECT_SEARCH_SELECTION
     ),
     tags={
         "dagster/max_runtime": "21600",  # 6 h
@@ -268,18 +273,36 @@ frequent_15min_schedule = _make_skip_if_running_schedule(
     cron_schedule="*/15 * * * *",                          # every 15 minutes
 )
 
-# 7. Wrap in a Definitions so Dagster can find it
+# 7. Project search job and schedule (every 2 hours)
+materialize_project_search_job = dg.define_asset_job(
+    name="materialize_project_search_job",
+    selection=PROJECT_SEARCH_SELECTION,
+    tags={
+        "dagster/max_runtime": "7200",  # 2 h
+        "orpheus/serial-job": "materialize_project_search_job",
+    },
+)
+
+project_search_2h_schedule = _make_skip_if_running_schedule(
+    name="project_search_2h_schedule",
+    job=materialize_project_search_job,
+    cron_schedule="50 */2 * * *",                          # offset from hackatime :10 and all-assets :30
+)
+
+# 8. Wrap in a Definitions so Dagster can find it
 defs = dg.Definitions(
     jobs=[
         materialize_all_assets_job,
         materialize_unified_ysws_job,
         materialize_hackatime_dau_job,
         materialize_frequent_job,
+        materialize_project_search_job,
     ],
     schedules=[
         materialize_all_assets_schedule,
         unified_ysws_15min_schedule,
         hackatime_dau_hourly_schedule,
         frequent_15min_schedule,
+        project_search_2h_schedule,
     ],
 )
