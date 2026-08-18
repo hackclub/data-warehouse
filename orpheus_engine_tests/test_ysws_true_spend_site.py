@@ -227,7 +227,6 @@ def test_expected_files_are_emitted():
     files = _render()
     for expected in (
         "index.html",
-        "unmatched.html",
         "programs/fallout.html",
         "data/programs.json",
         "data/programs/fallout.json",
@@ -320,15 +319,17 @@ def test_ago_formats_the_units_it_uses():
     assert ago(None, now) == ""
 
 
-def test_unmatched_page_lists_orgs_and_unlinked_programs():
+def test_unmatched_lives_at_the_bottom_of_the_homepage():
     files = _render()
-    page = files["unmatched.html"]
-    assert "som-sticker-shipments" in page
-    assert "A mapped program sent it money" in page
-    assert "Outpost" in page
-    assert "No HCB link on the Unified YSWS DB record" in page
-    # and the index points at it
-    assert 'href="unmatched.html"' in files["index.html"]
+    assert "unmatched.html" not in files
+    index = files["index.html"]
+    assert "som-sticker-shipments" in index
+    assert "A mapped program sent it money" in index
+    assert "Outpost" in index
+    assert "No HCB link on the Unified YSWS DB record" in index
+    # summary line up top jumps to it, and it really is last
+    assert 'href="#unmatched"' in index
+    assert index.index('id="unmatched"') > index.index('id="programs"')
 
 
 def test_no_methodology_page_anywhere():

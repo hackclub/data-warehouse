@@ -348,7 +348,8 @@ def _mapping_gap_note(data: SiteData) -> str:
         f'<p class="note">{len(orgs):,} HCB org(s) exchange money with mapped '
         f"programs but belong to none ({money0(received)} sent to them), and "
         f"{len(programs):,} Unified YSWS DB program(s) have no usable HCB link, so "
-        f'their spend is not attributed here. {_link("unmatched.html", "See what is unmatched")}.</p>'
+        f'their spend is not attributed here. {_link("#unmatched", "See what is unmatched")}'
+        " at the bottom of this page.</p>"
     )
 
 
@@ -476,6 +477,7 @@ def render_index(data: SiteData, generated_at: datetime) -> str:
         f"<tbody>{body}</tbody></table>",
         f'<p class="note">{_link("data/programs.json", "programs.json")} '
         "has the same numbers as JSON.</p>",
+        render_unmatched_section(data),
     ]
     return _page("YSWS true spend", "\n".join(out), script=True)
 
@@ -505,7 +507,13 @@ def _related(value: Any, limit: int = 4) -> str:
     return ", ".join(names[:limit]) + f", +{len(names) - limit} more"
 
 
-def render_unmatched(data: SiteData, generated_at: datetime) -> str:
+def render_unmatched_section(data: SiteData) -> str:
+    """
+    The fix-it list, at the bottom of the homepage: every HCB org that touches a
+    mapped program without belonging to one, and every Unified YSWS DB program
+    whose HCB link cannot be used. Shown rather than attributed, because the
+    only fix is a corrected Airtable link or a corrected HCB parent org.
+    """
     org_rows = "".join(
         "<tr>"
         f'<td>{_link(o["hcb_url"], o["org_slug"])}</td>'
@@ -532,23 +540,21 @@ def render_unmatched(data: SiteData, generated_at: datetime) -> str:
         (_dec(o["dollars_from_programs"]) for o in data.unmatched_orgs), Decimal(0)
     )
 
-    body = f"""
-<p>{_link("index.html", "← all programs")}</p>
-<h1>Unmatched</h1>
+    return f"""
+<h2 id="unmatched">Unmatched</h2>
 <p class="note">An HCB org counts as a program's money in exactly one way: the
 program's Unified YSWS DB record links to that org, and every sub-org beneath it
 comes along. Nothing else — no name matching, no guessing from who paid whom.
-Everything that falls outside that rule is listed here rather than attributed,
-so the fix is either a corrected Unified YSWS DB link or a corrected HCB parent
-organization.</p>
+Everything outside that rule is listed here instead of attributed, so the fix is
+either a corrected Unified YSWS DB link or a corrected HCB parent organization.</p>
 
-<h2>HCB orgs no program claims ({len(data.unmatched_orgs):,})</h2>
+<h3>HCB orgs no program claims ({len(data.unmatched_orgs):,})</h3>
 <p class="note">Listed because they are structurally or financially attached to a
 mapped program: {money(received)} was sent from mapped programs into these orgs.
-Fiscal-host and HQ-operations orgs (hq, bank, fines, hq-usps-ops) appear here
-too and are usually correct as-is — they are shown rather than filtered because
-deciding which orgs "count" would be exactly the kind of guess this page
-exists to avoid.</p>
+Fiscal-host and HQ-operations orgs (hq, bank, fines, hq-usps-ops) appear here too
+and are usually correct as-is — they are shown rather than filtered because
+deciding which orgs "count" would be exactly the kind of guess this list exists
+to avoid.</p>
 <table class="sortable"><thead><tr>
 <th data-type="text">Org</th><th data-type="text">Name</th>
 <th data-type="text">Why it is here</th><th data-type="text">HCB parent</th>
@@ -559,14 +565,13 @@ exists to avoid.</p>
 <th data-type="text">Related programs</th>
 </tr></thead><tbody>{org_rows}</tbody></table>
 
-<h2>Unified YSWS DB programs with no usable HCB link ({len(data.unlinked_programs):,})</h2>
+<h3>Unified YSWS DB programs with no usable HCB link ({len(data.unlinked_programs):,})</h3>
 <p class="note">None of their spend can be attributed until the link is fixed.</p>
 <table class="sortable"><thead><tr>
 <th data-type="text">Program</th><th data-type="text">Problem</th>
 <th data-type="text">hcb field</th>
 </tr></thead><tbody>{program_rows}</tbody></table>
 """
-    return _page("Unmatched — YSWS true spend", body, script=True)
 
 
 # --- program page -----------------------------------------------------------
@@ -814,8 +819,8 @@ sub-organizations and the fiscal host).
   revenue and true spend.
 - `programs/<slug>.html` — one page per program: category breakdown, org tree, and
   every transaction counted (and every one deliberately not counted).
-- `unmatched.html` — HCB orgs no program claims, and Unified YSWS DB programs
-  whose HCB link cannot be used, with the dollars at stake.
+- The bottom of `index.html` — HCB orgs no program claims, and Unified YSWS DB
+  programs whose HCB link cannot be used, with the dollars at stake.
 - `data/programs.json`, `data/programs/<slug>.json` — program totals and org
   trees as JSON (transaction-level detail is on the HTML pages).
 
@@ -873,7 +878,6 @@ def render_site(data: SiteData, generated_at: datetime) -> Dict[str, str]:
         ".nojekyll": "",
         "README.md": render_readme(data, generated_at),
         "index.html": render_index(data, generated_at),
-        "unmatched.html": render_unmatched(data, generated_at),
     }
 
     summaries = []
