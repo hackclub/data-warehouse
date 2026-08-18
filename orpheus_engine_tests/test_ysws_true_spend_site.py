@@ -14,6 +14,10 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from orpheus_engine.defs.ysws_true_spend_site.data import SiteData
+from orpheus_engine.defs.ysws_true_spend_site.definitions import (
+    COMMIT_EMAIL,
+    COMMIT_NAME,
+)
 from orpheus_engine.defs.ysws_true_spend_site.freshness import Freshness
 from orpheus_engine.defs.ysws_true_spend_site.site import (
     ago,
@@ -232,6 +236,12 @@ def _site_data_with_marketing() -> SiteData:
         _org("ysws-marketing", 20, None, 0, "100.00", "0.00")
     ]
     return data
+
+
+def test_commits_are_authored_by_the_warehouse():
+    """The public repo's history should name the system that writes it."""
+    assert COMMIT_NAME == "Hack Club Data Warehouse"
+    assert COMMIT_EMAIL.endswith("@hackclub.com")
 
 
 def test_money_formats_negatives_and_thousands():

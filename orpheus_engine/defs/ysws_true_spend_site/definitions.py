@@ -45,8 +45,9 @@ TOKEN_ENV_VAR = "YSWS_TRUE_SPEND_GITHUB_TOKEN"
 # serves the same content at a random *.pages.github.io host instead.
 PAGES_URL = "https://hackclub.github.io/ysws-true-spend/"
 
-COMMIT_NAME = "Orpheus Engine"
-COMMIT_EMAIL = "orpheus-engine@hackclub.com"
+# Identity on every commit this asset pushes to the site repo.
+COMMIT_NAME = "Hack Club Data Warehouse"
+COMMIT_EMAIL = "data-warehouse@hackclub.com"
 
 # dbt asset keys carry the model's custom schema as a prefix
 # (hcb_ysws_true_spend_analytics/ysws_spend_ledger), so spell them out rather
