@@ -671,7 +671,8 @@ def render_index(index_document: Dict[str, Any]) -> str:
             '<p class="note">One HCB org per person. Programs grant money into '
             "these, so a program funding a budget is not that program's spend — "
             "it is spend here, once it leaves for the outside world. The two are "
-            "never added together.</p>"
+            "never added together. Budgets nobody's roster record claims are "
+            "listed in the next section, not here.</p>"
             + _budgets_table(budgets, "budgets"),
         ))
     out.append(_section(
@@ -979,7 +980,7 @@ disagree.
 - `llms.txt` — the JSON layout and what the numbers mean.
 
 {len(linked)} programs · true spend {money(spend)} ·
-{len(index_document["ysws_individual_budgets"])} personal budgets · built
+{len(index_document["ysws_individual_budgets"]) + len(index_document["ysws_individual_budgets_with_no_linked_person"])} individual budgets · built
 {index_document["metadata"]["page_built"]}.
 
 ## Do not edit by hand

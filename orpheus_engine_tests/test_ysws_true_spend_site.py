@@ -860,7 +860,7 @@ def test_every_budget_gets_a_page_and_a_document():
         assert f"budgets/{slug}.json" in files
     index = files["index.html"]
     assert 'href="budgets/ysws-budget-robin.html"' in index
-    assert "YSWS Individual Budgets (2)" in index
+    assert "YSWS Individual Budgets (1)" in index
 
 
 def test_budget_page_totals_match_its_transactions():
@@ -920,6 +920,10 @@ def test_both_sides_of_a_broken_budget_link_are_published():
     orphans = document["ysws_individual_budgets_with_no_linked_person"]
     assert [b["slug"] for b in orphans] == ["ysws-budget-orphan"]
     assert orphans[0]["person_name"] is None
+    # and the main list is exactly the complement, never both
+    named = document["ysws_individual_budgets"]
+    assert [b["slug"] for b in named] == ["ysws-budget-robin"]
+    assert all(b["person_name"] for b in named)
 
     people = document["ysws_people_with_no_linked_individual_budget"]
     assert {p["name"] for p in people} == {"Sam Reviewer", "Tay Poe"}
@@ -933,12 +937,22 @@ def test_both_sides_of_a_broken_budget_link_are_published():
     assert "Robin Fisher" not in {p["name"] for p in people}
 
 
-def test_unlinked_budget_still_appears_in_the_main_budget_table():
-    """The gap list is a fix-it queue, not a place to hide a pot's spending."""
-    index = _render()["index.html"]
+def test_main_budget_list_is_only_the_ones_with_a_named_holder():
+    """
+    A budget nobody's roster record claims is a broken link, not a row with a
+    blank name -- it belongs in the gap list, with its page and numbers intact.
+    """
+    files = _render()
+    index = files["index.html"]
     main_table = index.split('id="budgets"')[1].split("</table>")[0]
-    assert "YSWS - Budget - Orphan" in main_table
-    assert "not linked" in main_table
+    assert "YSWS - Budget - Robin" in main_table
+    assert "YSWS - Budget - Orphan" not in main_table
+
+    gap_table = index.split('id="budgets-no-person"')[1].split("</table>")[0]
+    assert "YSWS - Budget - Orphan" in gap_table
+    # still a page of its own, still linked to from the gap list
+    assert "budgets/ysws-budget-orphan.html" in files
+    assert 'href="budgets/ysws-budget-orphan.html"' in gap_table
 
 
 def test_roster_pay_and_seniority_are_not_published():

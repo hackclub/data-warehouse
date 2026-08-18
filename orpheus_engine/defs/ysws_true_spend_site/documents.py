@@ -488,12 +488,13 @@ def build_index_document(
     marketing = [
         s for s, d in zip(summaries, program_documents) if not d["is_ysws_program"]
     ]
-    budgets = [budget_index_summary(d) for d in budget_documents]
-    # A pot with no roster link is a gap on both sides: nobody is named here,
-    # and the person (if they have a roster row at all) shows up in the list
-    # below with an empty field. Both lists are published so either end can be
-    # fixed.
-    budgets_without_person = [b for b, d in zip(budgets, budget_documents)
+    # The main list is the budgets we can name a holder for; a budget whose
+    # roster link is missing is a gap, not a row with a blank name, so it goes
+    # in its own list below (with its page and its numbers intact). The person
+    # end of the same break is the list after that.
+    all_budgets = [budget_index_summary(d) for d in budget_documents]
+    budgets = [b for b, d in zip(all_budgets, budget_documents) if d["has_person"]]
+    budgets_without_person = [b for b, d in zip(all_budgets, budget_documents)
                               if not d["has_person"]]
     people_without_budget = [
         {
