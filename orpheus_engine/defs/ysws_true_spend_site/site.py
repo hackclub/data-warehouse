@@ -465,7 +465,7 @@ def render_index(index_document: Dict[str, Any]) -> str:
 
     out = [
         "<h1>YSWS true spend</h1>",
-        _data_sentence(),
+        _machine_readable(),
         _freshness_table(index_document["metadata"]),
         _section(f"YSWS Programs w/ Linked HCBs ({len(linked):,})",
                  _programs_table(linked, "programs"), open_by_default=True),
@@ -482,7 +482,7 @@ def render_index(index_document: Dict[str, Any]) -> str:
         ))
     out.append(_section(f"HCB orgs no program claims ({len(unmatched):,})",
                         _unmatched_table(unmatched)))
-    out.append(_data_sentence())
+    out.append(_machine_readable())
     return _page("YSWS true spend", "\n".join(out), script=True)
 
 
@@ -661,7 +661,7 @@ def render_program_page(document: Dict[str, Any]) -> str:
             _revenue_table(document["intra_tree_transactions"]),
             "</details>",
         ]
-    out.append(_data_sentence(document["json"], base="../"))
+    out.append(_machine_readable(document["json"], base="../"))
     return _page(f'{document["name"]} — YSWS true spend', "\n".join(out), script=True)
 
 
@@ -721,21 +721,18 @@ Source: https://github.com/hackclub/data-warehouse (asset ysws_true_spend_site)
 """
 
 
-def _data_sentence(json_path: str = "index.json", base: str = "") -> str:
+def _machine_readable(json_path: str = "index.json", base: str = "") -> str:
     """
-    The pointer to the machine-readable data, as a sentence rather than a row of
-    links. Extractors that summarise a page keep sentences and drop link bars,
-    so the links have to sit inside prose to survive -- the per-program "· json"
-    link came through for exactly that reason, sitting in a line of other text.
-    Repeated in the footer as well: when you do not control the extractor,
-    redundancy beats prominence.
+    Where the data is: labelled, with a link to each surface. Rendered at the
+    top and the bottom of every page, because readers and extractors both
+    arrive at either end.
     """
     return (
-        '<p class="note">Every figure on this page is rendered from '
-        f'{_link(base + json_path, json_path)}; '
-        f'{_link(base + "llms.txt", "llms.txt")} describes the schema and the '
-        "classification rules, and the same data is in "
-        f'{_link(base + DUCKDB_FILENAME, DUCKDB_FILENAME)} for querying with SQL.</p>'
+        '<p class="note">Machine readable: '
+        f'{_link(base + json_path, json_path)} · '
+        f'{_link(base + "llms.txt", "llms.txt")} · '
+        f'{_link(base + DUCKDB_FILENAME, DUCKDB_FILENAME)} '
+        "(use duckdb if you can get access in your environment)</p>"
     )
 
 
