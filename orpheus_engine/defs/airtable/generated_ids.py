@@ -588,11 +588,6 @@ class AirtableIDs:
             record_id = "fld7m7AA0teKodijc"  # Name: Record ID
             id = "fldmLazalAjZ41o0u"  # Name: ID
             email = "fldmqHE7RIvjvglfX"  # Name: Email
-            referral_reason = "fld5YYWNTvtHp1xSq"  # Name: Referral Reason
-            how_did_you_hear_about_this = "flditN5yjq6VG7FyS"  # Name: How did you hear about this?
-            what_are_we_doing_well = "fldbIKqiQBvICSyPH"  # Name: What are we doing well?
-            how_can_we_improve = "fldnstXrVNfHMQyCo"  # Name: How can we improve?
-            age_when_approved = "fldAcWtAV0rzN3ZLA"  # Name: Age When Approved
             playable_url = "fld5plJTA93ugLnI2"  # Name: Playable URL
             code_url = "fldZhfNBM9GR0TR0R"  # Name: Code URL
             screenshot = "fld4vp6gwjwRQB4wM"  # Name: Screenshot
@@ -615,6 +610,11 @@ class AirtableIDs:
             ysws = "fldRWPZyaEPBDDz7x"  # Name: YSWS
             first_name = "fldVVfL6j9S5s2CSi"  # Name: First Name
             last_name = "fldUx3OeChK5PDBg3"  # Name: Last Name
+            referral_reason = "fld5YYWNTvtHp1xSq"  # Name: Referral Reason
+            how_did_you_hear_about_this = "flditN5yjq6VG7FyS"  # Name: How did you hear about this?
+            what_are_we_doing_well = "fldbIKqiQBvICSyPH"  # Name: What are we doing well?
+            how_can_we_improve = "fldnstXrVNfHMQyCo"  # Name: How can we improve?
+            age_when_approved = "fldAcWtAV0rzN3ZLA"  # Name: Age When Approved
             ysws_weighted_project_author_attribution_count = "fldAgVajme4ci52NH"  # Name: YSWS–Weighted Project Author Attribution Count
             ysws_weighted_project_contribution_per_author = "fldWcvCzG67uJoEV0"  # Name: YSWS–Weighted Project Contribution Per Author
             ysws_default_hours_per_grant = "fldszX7e87sog5S3y"  # Name: YSWS–Default Hours Per Grant
@@ -660,8 +660,14 @@ class AirtableIDs:
             email_trimmed_lowercased = "fld20if1DEDgTOpPH"  # Name: Email - Trimmed & Lowercased
             ysws_name_lookup = "fldLpxfl6aHEm5F40"  # Name: YSWS Name - Lookup
             ysws_spotchecks = "fldgxZK0licbDqBoo"  # Name: YSWS - Spotchecks
-            ysws_spotchecks_2 = "fldj8gebhYJfGSVAi"  # Name: YSWS - Spotchecks 2
             was_submitted_last_month = "fldPOV1ZbPbHVWyxm"  # Name: Was Submitted Last Month
+            last_updated_at = "fld9beFETCc1D1KeP"  # Name: Last Updated At
+            override_duplicate_justification = "fldAc6ho1UsLB4T4A"  # Name: Override Duplicate Justification
+            override_age_justification = "fldXIwD4XRFr5MOLH"  # Name: Override Age Justification
+            ysws_project_mentions_override_project_search = "fldPX8szfCmuz6Pyz"  # Name: YSWS Project Mentions - Override Project Search
+            msw_potential_viral_project = "fldEuvZE2Pfu6dsEB"  # Name: msw - potential viral project
+            msw_potential_viral_project_checked_at = "fldHq6fvSfw3WqH2P"  # Name: msw - potential viral project checked at
+            msw_priority_search = "fldzPcDtBbtYlws9B"  # Name: msw - priority search
 
         class ysws_programs:
             """IDs for Table 'ysws_programs' (ID: tblrGi9RARJy1A0c5)"""
@@ -681,6 +687,7 @@ class AirtableIDs:
             nps_median_estimated_hours = "fldsa0oY9TT5DE5hH"  # Name: NPS–Median Estimated Hours
             average_hours_per_grant = "fldZvx6LJBp9xVELO"  # Name: Average Hours Per Grant
             airtable_id = "fld7PmAuqC5hteumO"  # Name: Airtable ID
+            average_weight = "fldgEggvCPyiTCmWX"  # Name: Average weight
             slack_icon = "fldurCZZKmQAovBiT"  # Name: Slack Icon
             icon_last_hash = "fldomRhDRIk3yHRNr"  # Name: Icon – Last Hash
             icon_cdn_link = "fldP1FnevuLHRc2aP"  # Name: Icon – CDN Link
@@ -694,12 +701,14 @@ class AirtableIDs:
             sign_up_stats_override_prefix = "fldLenSCDJthFje4k"  # Name: Sign-Up Stats–Override Prefix
             cost_per_sign_up_new_to_hack_club_in_excess_of_5_hr_limit = "fldvFG8heXjNc3ob2"  # Name: Cost Per Sign Up New To Hack Club In Excess of $5/hr Limit
             over_budget = "fldIj9DfI1qAAXsOZ"  # Name: Over Budget
+            enable_payouts = "fldWsNxP1xyVtCKpw"  # Name: Enable payouts
             weighted_referral_count = "fldkzELMtOTOn7kek"  # Name: Weighted Referral Count
             total_fine_amount = "flddPJ4iAvQNK4ieg"  # Name: Total Fine Amount
             start_date = "fldhXx3ssxbsupTQZ"  # Name: Start Date
             end_date = "fld50kPb0OptYRc1y"  # Name: End Date
             unlisted = "fldTbUR3FY5QwNExX"  # Name: Unlisted
             website_url = "fldDnoo04QTvbNOQm"  # Name: Website URL
+            review_channel_id = "fldAW4i8WCQVI2xjx"  # Name: Review Channel ID
             unweighted_projects_2025 = "fldEgwrScoA7vDl5J"  # Name: Unweighted Projects–2025
             weighted_projects_this_past_7_days_rolling = "fldTXgejdYHGzmuqI"  # Name: Weighted Projects This Past 7 Days (rolling)
             unweighted_projects_this_month = "flduPo2OfV0dXzcxe"  # Name: Unweighted Projects This Month
@@ -710,7 +719,6 @@ class AirtableIDs:
             nps_detractor = "fldhcVd4h9ZvkUnR3"  # Name: NPS–Detractor %
             grants_awarded = "fldw177830TOPdm5X"  # Name: Grants Awarded
             nps = "flduxo3A7RNi6Mv5H"  # Name: NPS
-            average_weight = "fldgEggvCPyiTCmWX"  # Name: Average weight
             weighted_projects_jan_2025 = "fldpGZvT9OHb1Cn4g"  # Name: Weighted Projects–Jan 2025
             month_override = "fldCSuoy2Os4FkfAq"  # Name: Month Override
             avg_per_month = "fldgQX4bmCd4MRs3x"  # Name: Avg per month
@@ -721,17 +729,20 @@ class AirtableIDs:
             override_budget_per_hour = "fldFdTJq2qYYFMKkP"  # Name: Override budget per hour
             budget_per_hour = "fldv0Bw7QhFNh1dSS"  # Name: Budget per hour
             prior_payouts = "fldqRxVUYHDaEjoCr"  # Name: Prior Payouts
-            enable_payouts = "fldWsNxP1xyVtCKpw"  # Name: Enable payouts
             unique_shippers = "fld9c4tNzNYkZPYAP"  # Name: # Unique Shippers
             nps_needs_more_feedback = "fldoZgzdBXxT4WZJV"  # Name: NPS–Needs More Feedback?
             total_sign_ups_likely_missing_loops_events = "fldQedY9tfUy704jK"  # Name: Total Sign-Ups–Likely Missing Loops Events?
             total_sign_ups_override_confirm_has_loops_events_set = "fldzHpRUSrV1IPKFP"  # Name: Total Sign-Ups–Override, Confirm Has Loops Events Set
-            nps_copy = "fldjIZTQUjeWinpeF"  # Name: NPS copy
             unweighted_projects_2026 = "fldyWAYrguKjzb9a3"  # Name: Unweighted Projects–2026
             imported_table = "fld85Cdxyi73kbtRq"  # Name: Imported table
             eliminated_projects = "flds4Y5X4X2rku2qD"  # Name: Eliminated Projects
             eliminated_projects_2 = "fldASY9P7SruzkOn0"  # Name: Eliminated Projects 2
             referral_bonus_usd = "fldyTJEvZWAY1rRfE"  # Name: Referral Bonus USD
+            temp_enable_tabulator = "fldgPsoYI5TdQh3pN"  # Name: temp - Enable tabulator
+            temp_operating_cost = "fldAxx8lL3aAl7GiO"  # Name: temp - operating cost
+            temp_cost_hr = "fld9e89JInXGuJVtp"  # Name: temp - cost/hr
+            unweighted_projects_this_past_30_days_rolling = "fldY9E7N0M7PVgCSN"  # Name: Unweighted Projects This Past 30 Days (rolling)
+            record_created = "fldupWexPV8R0buZJ"  # Name: Record Created
 
         class ysws_authors:
             """IDs for Table 'ysws_authors' (ID: tblRf1BQs5H8298gW)"""
@@ -741,6 +752,7 @@ class AirtableIDs:
             unified_trust_level = "fld9Glia8BOi3YAmQ"  # Name: Unified Trust Level
             slack_url = "fldb79ToRvdcXeqze"  # Name: Slack URL
             slack_id = "fldojyNhEYyuZSo35"  # Name: Slack ID
+            hack_club_auth_email = "flduiMrSTRyXpbfK0"  # Name: Hack Club Auth Email
             weighted_grants_total = "fldllCyssGiFPi5mS"  # Name: Weighted Grants–Total
             hcb_budget_fund = "fldStVwvzbzx7Ambm"  # Name: HCB Budget Fund
             weighted_grants_2026 = "fldhTYpmDLsoDtyTy"  # Name: Weighted Grants–2026
@@ -888,6 +900,7 @@ class AirtableIDs:
             eliminated_record_id = "fldGENwz130XZ5Cga"  # Name: eliminated_record_id
             record_id = "fldLmQ7ihVPpjq5oF"  # Name: record_id
             second_review_at = "fldPbKjZb6iu9fCl4"  # Name: second_review_at
+            rejection_category = "flduHVTvOH37eV24t"  # Name: rejection_category
             needs_description = "fldsLxKuKbLSGfw9f"  # Name: needs_description
             needs_repo_url = "fldu3iW5YIwkhfHWY"  # Name: needs_repo_url
             needs_public_repo_url = "fldSc0HxScHayAgNL"  # Name: needs_public_repo_url
@@ -985,7 +998,7 @@ class AirtableIDs:
             ysws_project_mentions_search_count_copy = "fldVWfSMP96VleXl8"  # Name: YSWS Project Mentions - Search Count copy
             ysws_project_mentions_weighted_points = "fldN3VPUTdSfyVKto"  # Name: YSWS Project Mentions - Weighted Points
             ysws_project_mentions_top_link = "fldIHnuBrUEYNFVx5"  # Name: YSWS Project Mentions - Top Link
-            state = "fldgsPC2LkkyEKuN9"  # Name: State
+            state = "fldgsPC2LkkyEKuN9"  # Name: State 
             county_centralizing = "fldrfz7xswIhgu5Zz"  # Name: County - Centralizing
             email_trimmed_lowercased = "fldCUQu9gZIGzg10T"  # Name: Email - Trimmed & Lowercased
             ysws_name_lookup = "fldhFBOAZifRQi81p"  # Name: YSWS Name - Lookup
@@ -1005,6 +1018,7 @@ class AirtableIDs:
             fine_status = "fldlOFypwG8WvPGu4"  # Name: fine_status
             project_hours_spend = "fldWmySvDkAKKhokI"  # Name: project_hours_spend
             project_fine_amount = "fldDNI7LZwM2nWETB"  # Name: project_fine_amount
+            override_project_fine_amount = "fldsnDNjd2oW2ZXaH"  # Name: override_project_fine_amount
             ysws_spotchecks = "fld4KJ85Lyd4g7nNa"  # Name: YSWS - Spotchecks
             name_ysws_from_ysws_spotchecks = "fldOINnytjbBXLIrU"  # Name: name_ysws (from YSWS - Spotchecks)
             project_status = "fldfCw0SGEJkLkQuZ"  # Name: project_status
