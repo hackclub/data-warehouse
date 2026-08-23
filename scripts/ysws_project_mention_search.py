@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field
 
 
 # Configuration
-MCP_SERVER_URL = "https://better-brightdata-mcp.hackclub.com/mcp"
+MCP_SERVER_URL = "https://better-brightdata-mcp.hackclub.com/sse"
 MAX_ITEMS_PER_SEARCH = 15  # Maximum number of items to find per search
 
 
