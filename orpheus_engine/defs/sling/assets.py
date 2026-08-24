@@ -2789,7 +2789,6 @@ theseus_replication_config = {
                 "carrier", "service", "postage_cost", "weight",
                 "idempotency_key", "notify_on_dispatch", "batch_id",
                 "template_id", "metadata", "tags", "labor_cost", "contents_cost",
-                "created_via", "origin_batch_id",
             ],  # Excludes internal_notes, tracking_number, recipient_email
         },
         "public.warehouse_line_items": None,
