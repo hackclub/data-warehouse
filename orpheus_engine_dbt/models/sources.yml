@@ -632,3 +632,18 @@ sources:
       - name: repos
         description: "One row per scraped repo with scrape_status (ok/not_found/empty/error) and commit_count."
         meta: { dagster: { deps: ['highway_github_commits'] } }
+  - name: airtable_wrangler
+    schema: airtable_wrangler
+    tables:
+      - name: ysws_project_submission
+        description: "Wrangler ysws_project_submission table."
+        meta: {dagster: {deps: [wrangler_ysws_project_submission_warehouse]}}
+      - name: shop_queue
+        description: "Wrangler shop_queue table."
+        meta: {dagster: {deps: [wrangler_shop_queue_warehouse]}}
+      - name: currency
+        description: "Wrangler currency table."
+        meta: {dagster: {deps: [wrangler_currency_warehouse]}}
+      - name: ysws_config
+        description: "Wrangler ysws_config table."
+        meta: {dagster: {deps: [wrangler_ysws_config_warehouse]}}
