@@ -1,0 +1,27 @@
+{% extends "layout.html" %}
+
+{% block chrome %}
+  <span class="toolbar-user">&nbsp;&middot; SYNC CONFIGURATION</span>
+{% endblock %}
+
+{% block toolbar %}
+  {{ steps('sync_config') }}
+{% endblock %}
+
+{% block content %}
+<div class="wizard-card">
+  <div id="sync-configurator"
+       data-svelte-component="SyncConfigurator"
+       data-svelte-props='{{ {
+         "schema": ws.get("schema", []),
+         "selectedTables": ws.get("selected_tables", []),
+         "syncConfigs": ws.get("sync_configs", {}),
+         "formAction": wurl("wizard.update_sync_config", wid=wid),
+         "backUrl": wurl("wizard.tables", wid=wid),
+         "wid": wid,
+         "targetSchema": ws.get("target_schema", ""),
+         "csrfToken": "",
+       } | tojson }}'>
+  </div>
+</div>
+{% endblock %}

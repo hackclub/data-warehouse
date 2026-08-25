@@ -1,0 +1,41 @@
+{% extends "layout.html" %}
+
+{% block chrome %}
+  <span class="toolbar-user">&nbsp;&middot; SHIPPED</span>
+{% endblock %}
+
+{% block toolbar %}
+  {{ steps('done', ws.get('source_type') == 'airtable') }}
+{% endblock %}
+
+{% block content %}
+<div class="wizard-card">
+  <span class="page-title-lg">PR opened.</span>
+  <br><br>
+
+  <b>{{ ws.get('program_name', '') }}</b> is ready for review.
+  <br><br>
+
+  <table border="0" cellpadding="8" cellspacing="0">
+    <tr>
+      <td bgcolor="#111" class="action-cell-chrome">
+        <a href="{{ ws.get('pr_url', '#') }}" target="_blank" class="action-link-chrome">View Pull Request &rarr;</a>
+      </td>
+    </tr>
+  </table>
+  <br>
+
+  {% if ws.get('source_type') == 'airtable' %}
+    <span class="status-muted">A warehouse maintainer will review and merge. Field IDs for your base are already included in the PR. No connection URL to hand over &mdash; the sync reuses the shared Airtable token.</span>
+  {% else %}
+    {% set pr_number = ws.get('pr_url', '').rsplit('/', 1) | last %}
+    <span class="status-muted">A warehouse maintainer will review, then run dashbored's <tt>script/add_env_var.py {{ pr_number if pr_number.isdigit() else '<pr-number>' }}</tt>, which pulls the age-encrypted connection URL out of the PR body, decrypts it, and sets it as an environment variable on the Dagster deployment. Then they merge and redeploy.</span>
+  {% endif %}
+  {% if ws.get('dau_config', {}).get('custom_table') %}
+    <br><span class="status-muted">DAU SQL is a <b>draft</b>. Expect comments.</span>
+  {% endif %}
+  <br>
+
+  <a href="{{ url_for('auth.login') }}" class="btn-chrome">Go home</a>
+</div>
+{% endblock %}

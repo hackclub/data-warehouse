@@ -1,0 +1,56 @@
+{% extends "layout.html" %}
+{% block body_class %}terminal-mode{% endblock %}
+
+{% block content %}
+<span class="page-title" style="color: #66ff66">Hello, citizen!</span>
+<br><br>
+
+You have reached the <span class="highlight">dashbored</span> onboarding tool.
+This is meant for use by employees of Hack Club and designated collaborators.
+{% if not session.get('user') %}
+Please authenticate now. Hit the "back" button on your browser if you're
+not supposed to be here.
+<br><br>
+
+All access to this page is monitored.
+<br><br>
+
+<table border="0" cellpadding="8" cellspacing="0">
+  <tr>
+    <td bgcolor="#111" class="action-cell-terminal">
+      <a href="{{ url_for('auth.hackclub_auth') }}" class="action-link-terminal">Sign in with Hack Club</a>
+    </td>
+  </tr>
+</table>
+{% else %}
+<br>
+Welcome back, <span class="highlight">{{ session['user'].get('name', '') }}</span> ({{ session['user'].get('email', '') }}).
+<br><br>
+
+  {% if session.get('github_token') %}
+GitHub connected as <span class="highlight">{{ session['user'].get('github_username', '') }}</span>. You are cleared for access.
+<br><br>
+<table border="0" cellpadding="8" cellspacing="0">
+  <tr>
+    <td bgcolor="#111" class="action-cell-terminal">
+      <a href="{{ url_for('wizard.setup') }}" class="action-link-terminal">Enter dashbored &rarr;</a>
+    </td>
+  </tr>
+</table>
+  {% else %}
+Now connect your GitHub account for pull request creation.
+<br><br>
+<table border="0" cellpadding="8" cellspacing="0">
+  <tr>
+    <td bgcolor="#111" class="action-cell-terminal">
+      <a href="{{ url_for('auth.github_auth') }}" class="action-link-terminal">Connect GitHub</a>
+    </td>
+  </tr>
+</table>
+  {% endif %}
+{% endif %}
+
+<br>
+<hr noshade size="1" color="#1a1a1a">
+<span class="footer-note">Remember, the computer is your friend.</span>
+{% endblock %}

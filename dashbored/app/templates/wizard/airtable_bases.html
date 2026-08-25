@@ -1,0 +1,46 @@
+{% extends "layout.html" %}
+
+{% block chrome %}
+  <span class="toolbar-user">&nbsp;&middot; Pick a Base</span>
+{% endblock %}
+
+{% block toolbar %}
+  {{ steps('airtable_bases', true) }}
+{% endblock %}
+
+{% block content %}
+<div class="wizard-card">
+  <span class="page-title">Select Your Airtable Base</span>
+  <br>
+  These are the bases your Airtable connection can access.<br>Pick the one that holds your program's data.
+  <br><br>
+
+  {% if bases %}
+  <div id="base-picker"
+       data-svelte-component="BasePicker"
+       data-svelte-props='{{ {
+         "bases": bases,
+         "formAction": wurl("wizard.pick_base", wid=wid),
+         "wid": wid,
+       } | tojson }}'>
+  </div>
+  {% else %}
+  <span class="status-error">
+    No bases found. Your Airtable token may not have access to any bases, or you may need to grant base access during OAuth.
+  </span>
+  {% endif %}
+
+  <br>
+  <a href="{{ wurl('wizard.setup', wid=wid) }}" class="btn-back">&larr; Back to setup</a>
+</div>
+
+{% include "connecting.html" %}
+<script>
+  document.addEventListener('submit', function(e) {
+    if (e.target.querySelector('[name="base_id"]')) {
+      document.getElementById('connecting-text').textContent = 'CONNECTING TO YOUR AIRTABLE';
+      document.getElementById('connecting-overlay').style.display = '';
+    }
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,8 @@
+.git
+**/.venv
+**/node_modules
+.env*
+age-key.txt
+**/__pycache__
+**/*.pyc
+**/.pytest_cache

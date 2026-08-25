@@ -1,0 +1,25 @@
+{% extends "layout.html" %}
+{% block chrome %}
+  <span class="toolbar-user">&nbsp;&middot; SCHEMA BROWSER</span>
+{% endblock %}
+
+{% block toolbar %}
+  {{ steps('tables', ws.get('source_type') == 'airtable') }}
+{% endblock %}
+
+{% block content %}
+<div id="schema-explorer"
+     data-svelte-component="SchemaExplorer"
+     data-svelte-props='{{ {
+       "schema": ws.get("schema", []),
+       "selectedTables": ws.get("selected_tables", []),
+       "sensitiveColumns": ws.get("sensitive_columns", {}),
+       "programName": ws.get("program_name", "database"),
+       "isAirtable": ws.get("source_type") == "airtable",
+       "formAction": wurl("wizard.update_tables", wid=wid),
+       "backUrl": wurl("wizard.setup", wid=wid),
+       "wid": wid,
+       "csrfToken": "",
+     } | tojson }}'>
+</div>
+{% endblock %}

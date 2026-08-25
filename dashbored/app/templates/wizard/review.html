@@ -1,0 +1,26 @@
+{% extends "layout.html" %}
+
+{% block chrome %}
+  <span class="toolbar-user">&nbsp;&middot; REVIEW</span>
+{% endblock %}
+
+{% block toolbar %}
+  {{ steps('review', ws.get('source_type') == 'airtable') }}
+{% endblock %}
+
+{% block content %}
+<div class="wizard-card">
+  <div id="code-preview"
+       data-svelte-component="CodePreview"
+       data-svelte-props='{{ {
+         "generated": generated,
+         "programName": ws.get("program_name", ""),
+         "formAction": wurl("wizard.create_pr", wid=wid),
+         "backUrl": wurl("wizard.dau_preview", wid=wid),
+         "wid": wid,
+         "csrfToken": "",
+         "validateUrl": wurl("api.validate_code", wid=wid),
+       } | tojson }}'>
+  </div>
+</div>
+{% endblock %}

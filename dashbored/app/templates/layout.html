@@ -1,0 +1,82 @@
+{% macro steps(current, airtable=false) %}
+  {% set flow = 'airtable' if airtable else 'postgres' %}
+  {% set visible = [
+    {'key': 'setup',          'label': 'Setup',   'flow': 'both'},
+    {'key': 'airtable_bases', 'label': 'Base',    'flow': 'airtable'},
+    {'key': 'tables',         'label': 'Schema',  'flow': 'both'},
+    {'key': 'sync_config',    'label': 'Sync',    'flow': 'postgres'},
+    {'key': 'dau',            'label': 'DAU',     'flow': 'both'},
+    {'key': 'dau_preview',    'label': 'Preview', 'flow': 'both'},
+    {'key': 'review',         'label': 'Review',  'flow': 'both'},
+    {'key': 'done',           'label': 'Ship',    'flow': 'both'},
+  ] | selectattr('flow', 'in', ['both', flow]) | list %}
+  {% set keys = visible | map(attribute='key') | list %}
+  {% set at = keys.index(current) if current in keys else -1 %}
+  <table class="toolbar-steps" border="0" cellpadding="0" cellspacing="0"><tr>
+    {%- for step in visible %}
+    <td class="{{ 'done' if loop.index0 < at else 'active' if loop.index0 == at else '' }}">{{ loop.index }}. {{ step.label }}</td>
+    {%- endfor %}
+  </tr></table>
+{% endmacro -%}
+<!DOCTYPE html>
+<html>
+<head>
+  <title>{% block title %}dashbored{% endblock %}</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  {{ vite_tags() }}
+</head>
+{% set terminal = self.body_class() | trim | length > 0 and 'terminal' in self.body_class() %}
+{% set wid = wid | default('') %}
+<body class="{% block body_class %}{% endblock %}">
+
+<table width="100%" border="0" cellpadding="0" cellspacing="0">
+<tr><td align="center" bgcolor="{{ '#000000' if terminal else '#2c2c42' }}">
+
+  <table width="760" border="0" cellpadding="0" cellspacing="0">
+    <tr>
+      <td bgcolor="{{ '#0a0a0a' if terminal else '#0e0e18' }}" class="layout-header">
+        <table width="100%" border="0" cellpadding="0" cellspacing="0"><tr>
+          <td>
+            <b class="brand">dashbored</b>
+            {% block chrome %}{% endblock %}
+          </td>
+          <td align="right">
+            {% if session.get('user') %}
+              <span class="toolbar-user">{{ session['user'].get('name', '') }}</span>
+              &nbsp;<form action="{{ wurl('wizard.reset', wid=wid) }}" method="post" class="toolbar-form">{% if wid %}<input type="hidden" name="wid" value="{{ wid }}">{% endif %}<button type="submit" class="btn-reset" onclick="return confirm('Start over? This clears all your current progress.')">start over</button></form>
+              &nbsp;<form action="{{ url_for('auth.logout') }}" method="post" class="toolbar-form"><button type="submit" class="btn-signout">sign out</button></form>
+            {% endif %}
+          </td>
+        </tr></table>
+      </td>
+    </tr>
+
+    <tr>
+      <td bgcolor="{{ '#000000' if terminal else '#2c2c42' }}" class="layout-content" valign="top">
+        <font face="Verdana, Arial, sans-serif" size="2" color="{{ '#33ff33' if terminal else '#d8d0c0' }}">
+          {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+              {% if category == 'alert' %}
+                <table width="100%" border="0" cellpadding="4" cellspacing="0"><tr><td bgcolor="#ff4488"><font face="Verdana, Arial, sans-serif" size="2" color="#ffffff"><b>{{ message }}</b></font></td></tr></table><br>
+              {% else %}
+                <table width="100%" border="0" cellpadding="4" cellspacing="0"><tr><td bgcolor="#44cc88"><font face="Verdana, Arial, sans-serif" size="2" color="#000000"><b>{{ message }}</b></font></td></tr></table><br>
+              {% endif %}
+            {% endfor %}
+          {% endwith %}
+          {% block content %}{% endblock %}
+        </font>
+      </td>
+    </tr>
+
+    <tr>
+      <td bgcolor="{{ '#0a0a0a' if terminal else '#0e0e18' }}" class="layout-footer">
+        {% block toolbar %}&nbsp;{% endblock %}
+      </td>
+    </tr>
+  </table>
+
+</td></tr>
+</table>
+
+</body>
+</html>

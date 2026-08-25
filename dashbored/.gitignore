@@ -1,0 +1,11 @@
+node_modules
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+app/static/vite/
+app/static/assets/
+app/static/.vite/
+.env*
+age-key.txt
+tmp/

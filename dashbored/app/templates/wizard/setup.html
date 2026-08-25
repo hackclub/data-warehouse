@@ -1,0 +1,107 @@
+{% extends "layout.html" %}
+
+{% block chrome %}
+  <span class="toolbar-user">&nbsp;&middot; Program Setup</span>
+{% endblock %}
+
+{% block toolbar %}
+  {{ steps('setup', ws.get('source_type') == 'airtable') }}
+{% endblock %}
+
+{% block content %}
+<div class="wizard-card">
+  <span class="page-title">New Program</span>
+  <br>
+  Name your program and point us at the database.
+  <br><br>
+
+  <form action="{{ wurl('wizard.introspect', wid=wid) }}" method="post">
+    <input type="hidden" name="wid" value="{{ wid }}">
+    <table border="0" cellpadding="4" cellspacing="0">
+      <tr>
+        <td valign="top"><span class="field-label">Program Name</span></td>
+        <td>
+          <input type="text" name="program_name" value="{{ ws.get('program_name', '') }}"
+                 placeholder="my-cool-program" class="webtv-input webtv-input-fixed" required
+                 oninput="var v=this.value.toLowerCase().replace(/[^a-z0-9_-]/g,'');document.getElementById('name-preview').textContent=v?'→ schema: '+v.replace(/-/g,'_'):'';document.getElementById('name-preview').style.color=v!==this.value?'#e0c840':'#888';">
+          <br><span class="field-hint" id="name-preview">{{ '→ schema: ' + ws.get('program_name', '') if ws.get('program_name') else 'Lowercase, hyphens OK. Becomes your warehouse schema name.' }}</span>
+        </td>
+      </tr>
+      <tr><td colspan="2">&nbsp;</td></tr>
+      <tr>
+        <td valign="top"><span class="field-label">Data Source</span></td>
+        <td>
+          <div class="source-cards">
+            <label class="source-card">
+              <input type="radio" name="source_type" value="postgres"
+                     {{ 'checked' if ws.get('source_type', 'postgres') == 'postgres' }}
+                     onchange="document.getElementById('pg-fields').style.display='';document.getElementById('at-fields').style.display='none';document.getElementById('setup-submit').value='Connect →';">
+              <img src="{{ url_for('static', filename='img/postgres.svg') }}" class="source-card-icon" alt="">
+              <span class="source-card-label">PostgreSQL</span>
+            </label>
+            <label class="source-card">
+              <input type="radio" name="source_type" value="airtable"
+                     {{ 'checked' if ws.get('source_type') == 'airtable' }}
+                     onchange="document.getElementById('at-fields').style.display='';document.getElementById('pg-fields').style.display='none';document.getElementById('setup-submit').value='Continue →';">
+              <img src="{{ url_for('static', filename='img/airtable.png') }}" class="source-card-icon" alt="">
+              <span class="source-card-label">Airtable <span class="source-card-tag">(experimental)</span></span>
+            </label>
+          </div>
+        </td>
+      </tr>
+      <tr><td colspan="2">&nbsp;</td></tr>
+
+      <tbody id="pg-fields" style="{{ 'display:none' if ws.get('source_type') == 'airtable' else '' }}">
+        <tr>
+          <td valign="top"><span class="field-label">Connection URL</span></td>
+          <td>
+            <input type="password" name="connection_url" autocomplete="off"
+                   placeholder="postgres://user:pass@host:5432/dbname"
+                   class="webtv-input webtv-input-fixed">
+            <br><span class="field-hint">{% if ws.get('connection_url') %}<b>Type your connection URL again</b> &mdash; we never send it back to your browser, so this box starts empty every time. {% endif %}We'll connect read-only to introspect your schema. It's held in your server-side session for this wizard only and only leaves age-encrypted in the pull request.</span>
+          </td>
+        </tr>
+        <tr><td colspan="2">
+          <details class="collapsible">
+            <summary class="collapsible-summary">specify a custom warehouse schema name? (probably not!)</summary>
+            <div class="collapsible-body">
+              <input type="text" name="target_schema" value="{{ ws.get('target_schema', '') }}"
+                     placeholder="leave blank to use program name" class="webtv-input webtv-input-fixed">
+            </div>
+          </details>
+        </td></tr>
+      </tbody>
+
+      <tbody id="at-fields" style="{{ '' if ws.get('source_type') == 'airtable' else 'display:none' }}">
+        <tr>
+          <td valign="top"><span class="field-label">Airtable</span></td>
+          <td>
+            {% if session.get('airtable_token') %}
+              <span class="status-ok">&#10003; Connected to Airtable</span>
+            {% else %}
+              <span class="status-muted">You'll sign in to Airtable after entering your program name.</span>
+            {% endif %}
+          </td>
+        </tr>
+      </tbody>
+
+      <tr>
+        <td></td>
+        <td align="right">
+          <input type="submit" value="{{ 'Continue →' if ws.get('source_type') == 'airtable' else 'Connect →' }}" class="btn-chrome" id="setup-submit">
+        </td>
+      </tr>
+    </table>
+  </form>
+</div>
+
+{% include "connecting.html" %}
+<script>
+  document.querySelector('form[action*="introspect"]').addEventListener('submit', function() {
+    var src = document.querySelector('input[name="source_type"]:checked');
+    var label = (src && src.value === 'airtable') ? 'CONNECTING TO YOUR AIRTABLE' : 'CONNECTING TO YOUR DATABASE';
+    document.getElementById('connecting-text').textContent = label;
+    document.getElementById('connecting-overlay').style.display = '';
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "layout.html" %}
+
+{% block chrome %}
+  <span class="toolbar-user">&nbsp;&middot; DAU PREVIEW</span>
+{% endblock %}
+
+{% block toolbar %}
+  {{ steps('dau_preview', ws.get('source_type') == 'airtable') }}
+{% endblock %}
+
+{% block content %}
+<div class="wizard-card">
+  <div id="dau-preview"
+       data-svelte-component="DauPreview"
+       data-svelte-props='{{ {
+         "programName": ws.get("program_name", ""),
+         "previewUrl": wurl("api.preview_dau", wid=wid),
+         "formAction": wurl("wizard.review", wid=wid),
+         "backUrl": wurl("wizard.dau", wid=wid),
+         "wid": wid,
+         "csrfToken": "",
+       } | tojson }}'>
+  </div>
+</div>
+{% endblock %}

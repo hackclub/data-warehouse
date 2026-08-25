@@ -1,0 +1,28 @@
+{% extends "layout.html" %}
+
+{% block chrome %}
+  <span class="toolbar-user">&nbsp;&middot; DAU CONFIGURATION</span>
+{% endblock %}
+
+{% block toolbar %}
+  {{ steps('dau', ws.get('source_type') == 'airtable') }}
+{% endblock %}
+
+{% block content %}
+<div class="wizard-card">
+  <div id="dau-wizard"
+       data-svelte-component="DauWizard"
+       data-svelte-props='{{ {
+         "schema": ws.get("schema", []),
+         "selectedTables": ws.get("selected_tables", []),
+         "programName": ws.get("program_name", ""),
+         "dauConfig": ws.get("dau_config", {}),
+         "formAction": wurl("wizard.update_dau", wid=wid),
+         "backUrl": wurl("wizard.tables", wid=wid) if ws.get("source_type") == "airtable" else wurl("wizard.sync_config", wid=wid),
+         "testSqlUrl": wurl("api.test_sql", wid=wid),
+         "wid": wid,
+         "csrfToken": "",
+       } | tojson }}'>
+  </div>
+</div>
+{% endblock %}
