@@ -2807,16 +2807,17 @@ theseus_replication_config = {
         # --- Users ---
         "public.users": {
             "select": [
-                "id", "slack_id", "is_admin", "created_at", "updated_at",
+                "id", "slack_id", "email", "is_admin", "created_at", "updated_at",
                 "username", "can_warehouse", "can_impersonate_public",
                 "home_mid_id", "home_return_address_id", "hca_id",
                 "can_use_indicia",
-            ],  # Excludes email, icon_url
+            ],  # Excludes icon_url
         },
         "public.public_users": {
             "select": [
-                "id", "created_at", "updated_at", "opted_out_of_map", "hca_id",
-            ],  # Excludes email
+                "id", "email", "created_at", "updated_at", "opted_out_of_map",
+                "hca_id",
+            ],
         },
 
         # --- Tags ---
