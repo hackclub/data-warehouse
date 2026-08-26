@@ -2714,7 +2714,7 @@ attend_replication_config = {
 # large + contains object snapshots), schema_migrations, api_keys,
 # public_api_keys, hcb_oauth_connections, public_login_codes,
 # public_impersonations (auth/admin internals), usps_iv_mtr_raw_json_batches
-# (raw USPS payloads).
+# (raw USPS payloads), usps_indicia and usps_payment_accounts.
 #
 # Columns pinned via explicit select lists so future app migrations can't
 # accidentally leak secrets into the warehouse.
@@ -2824,16 +2824,9 @@ theseus_replication_config = {
         "public.source_tags": None,
 
         # --- USPS / postage ---
+        # usps_indicia and usps_payment_accounts excluded at maintainer request
+        # (contain check images and ACH details)
         "public.usps_mailer_ids": None,
-        "public.usps_payment_accounts": None,
-        "public.usps_indicia": {
-            "select": [
-                "id", "processing_category", "postage_weight", "nonmachinable",
-                "usps_sku", "postage", "mailing_date", "created_at", "updated_at",
-                "usps_payment_account_id", "letter_id", "flirted", "fees",
-                "hcb_payment_account_id", "hcb_transfer_id",
-            ],  # Excludes raw_json_response
-        },
         "public.usps_iv_mtr_events": {
             "select": [
                 "id", "happened_at", "letter_id", "batch_id", "opcode",
