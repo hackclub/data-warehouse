@@ -84,6 +84,38 @@ INBOUND_QUERY = """
     GROUP BY po_item->>'sku'
 """
 
+# Unit cost derived from purchase order lines rather than Zenventory's item
+# unit_cost field. Zenventory's item-level unit_cost is effectively "cost on the
+# most recent PO" and is 0 for items that have never been received, which breaks
+# the contract that every outgoing international package has a unit cost.
+#
+# Rule: quantity-weighted average of accepted (completed) POs; if the item has
+# no accepted POs, quantity-weighted average of incoming (open) POs. Lines with
+# no cost or no quantity are ignored so they don't drag the average to 0.
+UNIT_COST_QUERY = """
+    WITH po_lines AS (
+        SELECT
+            po.completed,
+            po_item->>'sku' AS sku,
+            (po_item->>'quantity')::numeric AS quantity,
+            (po_item->>'unitCost')::numeric AS unit_cost
+        FROM agh_fulfillment_zenventory.purchase_orders po,
+             jsonb_array_elements(po.items) AS po_item
+        WHERE po.deleted = false
+          AND po_item->>'sku' IS NOT NULL
+          AND (po_item->>'unitCost')::numeric > 0
+          AND (po_item->>'quantity')::numeric > 0
+    )
+    SELECT
+        sku,
+        SUM(quantity * unit_cost) FILTER (WHERE completed)
+            / NULLIF(SUM(quantity) FILTER (WHERE completed), 0) AS accepted_unit_cost,
+        SUM(quantity * unit_cost) FILTER (WHERE NOT completed)
+            / NULLIF(SUM(quantity) FILTER (WHERE NOT completed), 0) AS inbound_unit_cost
+    FROM po_lines
+    GROUP BY sku
+"""
+
 SHIPMENT_STATS_QUERY = """
     WITH order_skus AS (
         SELECT
@@ -223,6 +255,27 @@ def fetch_all_item_images(
     return image_urls
 
 
+def resolve_unit_cost(
+    po_costs: Optional[Dict[str, Optional[float]]], item_unit_cost: Optional[float]
+) -> tuple[Optional[float], str]:
+    """
+    Pick the unit cost for a SKU. Returns (rounded cost or None, source label).
+
+    Priority:
+      1. Weighted average of accepted (completed) POs
+      2. Weighted average of incoming (open) POs
+      3. Zenventory's item-level unit_cost (only when it is > 0)
+    """
+    if po_costs:
+        for key, label in (("accepted", "accepted_po"), ("inbound", "inbound_po")):
+            value = po_costs.get(key)
+            if value is not None and value > 0:
+                return round(float(value), 2), label
+    if item_unit_cost is not None and item_unit_cost > 0:
+        return round(float(item_unit_cost), 2), "item"
+    return None, "none"
+
+
 @asset(
     compute_kind="zenventory_airtable_sync",
     group_name="zenventory_inventory_airtable_sync",
@@ -262,6 +315,12 @@ def zenventory_inventory_airtable_sync(
             cur.execute(INBOUND_QUERY)
             inbound_by_sku = {row[0]: row[1] for row in cur.fetchall()}
 
+            cur.execute(UNIT_COST_QUERY)
+            po_unit_cost_by_sku = {
+                row[0]: {"accepted": row[1], "inbound": row[2]}
+                for row in cur.fetchall()
+            }
+
             cur.execute(SHIPMENT_STATS_QUERY)
             shipment_stats_by_sku = {
                 row[0]: {
@@ -278,6 +337,7 @@ def zenventory_inventory_airtable_sync(
     log.info(
         f"Read {len(inventory_rows)} items, "
         f"{len(inbound_by_sku)} inbound SKUs, "
+        f"{len(po_unit_cost_by_sku)} SKUs with PO unit costs, "
         f"{len(shipment_stats_by_sku)} SKUs with shipment stats"
     )
 
@@ -297,7 +357,8 @@ def zenventory_inventory_airtable_sync(
     # Build Airtable records
     now = datetime.now(timezone.utc).isoformat()
     records = []
-    for item_id, sku, description, unit_cost, in_stock in inventory_rows:
+    unit_cost_sources = {"accepted_po": 0, "inbound_po": 0, "item": 0, "none": 0}
+    for item_id, sku, description, item_unit_cost, in_stock in inventory_rows:
         fields = {
             "Name (Must Match Poster Requests)": description or sku,
             "SKU": sku,
@@ -305,12 +366,16 @@ def zenventory_inventory_airtable_sync(
             "Last Synced With Zenventory": now,
         }
 
-        if unit_cost is not None and unit_cost > 0:
-            fields["Unit Cost"] = round(float(unit_cost), 2)
+        unit_cost, source = resolve_unit_cost(
+            po_unit_cost_by_sku.get(sku), item_unit_cost
+        )
+        unit_cost_sources[source] += 1
+        if unit_cost is not None:
+            fields["Unit Cost"] = unit_cost
 
-        inbound = inbound_by_sku.get(sku)
-        if inbound:
-            fields["Inbound"] = inbound
+        # Always write Inbound so it clears once a PO is received; leaving it
+        # unset left stale inbound counts on SKUs with no open POs.
+        fields["Inbound"] = inbound_by_sku.get(sku) or 0
 
         stats = shipment_stats_by_sku.get(sku)
         if stats:
@@ -327,7 +392,10 @@ def zenventory_inventory_airtable_sync(
 
         records.append({"fields": fields})
 
-    log.info(f"Prepared {len(records)} records for Airtable sync ({len(image_by_sku)} with images)")
+    log.info(
+        f"Prepared {len(records)} records for Airtable sync "
+        f"({len(image_by_sku)} with images); unit cost sources: {unit_cost_sources}"
+    )
 
     # Sync to Airtable using batch_upsert with SKU as the key
     airtable_token = os.getenv("AIRTABLE_PERSONAL_ACCESS_TOKEN")
