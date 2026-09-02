@@ -407,7 +407,24 @@ airtable_config = AirtableServiceConfig(
                     table_id="tblNzmIj9lzOF8rst"
                 )
             }
-        )
+        ),
+        "wrangler": AirtableBaseConfig(
+            base_id="appznGjUoC1o6jLZd",
+            tables={
+                "ysws_project_submission": AirtableTableConfig(
+                    table_id="tblAv8vzzQClBi5xR"
+                ),
+                "shop_queue": AirtableTableConfig(
+                    table_id="tblb4ioz8nOlk9NEJ"
+                ),
+                "currency": AirtableTableConfig(
+                    table_id="tblhrthkzWrvLNg39"
+                ),
+                "ysws_config": AirtableTableConfig(
+                    table_id="tbls0agmh7GVPnlhK"
+                ),
+            }
+        ),
     }
 )
 
