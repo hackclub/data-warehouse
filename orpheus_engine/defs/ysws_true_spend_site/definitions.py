@@ -67,6 +67,7 @@ UPSTREAM_ASSETS = [
     AssetKey(["hcb_ysws_true_spend_analytics", "ysws_unmatched_orgs"]),
     AssetKey(["hcb_ysws_true_spend_analytics", "ysws_unlinked_programs"]),
     AssetKey(["hcb_analytics", "ledger"]),
+    AssetKey(["hcb_analytics", "hcb_code_enrichment"]),
     AssetKey(["hcb_analytics", "orgs"]),
 ]
 

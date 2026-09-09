@@ -27,8 +27,8 @@ from .documents import build_documents
 # the next publish, which is how it was silently wiped three times on 2026-08-18.
 CUSTOM_DOMAIN = "ysws-true-spend.hackclub.com"
 
-# Sensitive payment fields are withheld in documents.py for every format.
-INCLUDE_PERSONAL_FIELDS = False
+# Personal identities are withheld in documents.py; counterparties here are
+# only redacted merchant or organization labels, never bank recipient names.
 
 STYLE = """
 body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -567,8 +567,7 @@ def _budget_bucket_table(breakdown: List[Dict[str, Any]]) -> str:
 
 def _budget_txn_table(txns: List[Dict[str, Any]], counted_column: bool) -> str:
     head = ["Date", "Bucket", "Type", "Description"]
-    if INCLUDE_PERSONAL_FIELDS:
-        head += ["Counterparty", "Initiated by"]
+    head += ["Merchant / organization"]
     head += ["Amount"]
     if counted_column:
         head += ["Counted"]
@@ -585,9 +584,7 @@ def _budget_txn_table(txns: List[Dict[str, Any]], counted_column: bool) -> str:
             f'<td>{esc(txn["type"])}</td>',
             f'<td class="memo">{esc(txn["description"])}</td>',
         ]
-        if INCLUDE_PERSONAL_FIELDS:
-            cells.append(f'<td>{esc(txn["counterparty"])}</td>')
-            cells.append(f'<td>{esc(txn["initiated_by"])}</td>')
+        cells.append(f'<td>{esc(txn["counterparty"])}</td>')
         cells.append(f'<td class="n">{money(txn["amount_dollars"])}</td>')
         if counted_column:
             cells.append(f'<td>{"yes" if txn["counted_as_personal_spend"] else "no"}</td>')
@@ -773,8 +770,7 @@ def _withheld_note(document: Dict[str, Any], kind: str) -> str:
 
 def _spend_table(txns: List[Dict[str, Any]]) -> str:
     head = ["Date", "Org", "Cat", "Bucket", "Type", "Description"]
-    if INCLUDE_PERSONAL_FIELDS:
-        head += ["Counterparty", "Initiated by"]
+    head += ["Merchant / organization"]
     head += ["Amount", "Counted", "HCB"]
     header = "".join(
         f'<th class="n">{esc(h)}</th>' if h == "Amount" else f"<th>{esc(h)}</th>"
@@ -790,9 +786,7 @@ def _spend_table(txns: List[Dict[str, Any]]) -> str:
             f'<td>{esc(txn["type"])}</td>',
             f'<td class="memo">{esc(txn["description"])}</td>',
         ]
-        if INCLUDE_PERSONAL_FIELDS:
-            cells.append(f'<td>{esc(txn["counterparty"])}</td>')
-            cells.append(f'<td>{esc(txn["initiated_by"])}</td>')
+        cells.append(f'<td>{esc(txn["counterparty"])}</td>')
         cells += [
             f'<td class="n">{money(txn["amount_dollars"])}</td>',
             f'<td>{"yes" if txn["counted_as_spend"] else "no"}</td>',

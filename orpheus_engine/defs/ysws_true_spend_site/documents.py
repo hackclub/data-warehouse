@@ -15,7 +15,8 @@ Three documents, mirroring the three kinds of page:
                              breakdown, and every transaction behind them
 
 Redaction happens here rather than in the renderer, so the JSON is publishable
-under the same rules as the HTML: payment names and free-text memos withheld,
+under the same rules as the HTML: payment descriptions selectively redacted,
+direct payment identities withheld,
 email addresses stripped from other free text, and transactions of
 organizations outside HCB's transparency mode summarised instead of listed.
 """
@@ -27,6 +28,7 @@ from typing import Any, Dict, List, Optional
 
 from .data import SiteData
 from .freshness import Freshness
+from .privacy import PaymentRedactor
 
 HCB_ORG_URL = "https://hcb.hackclub.com/{slug}"
 
@@ -37,7 +39,6 @@ _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 EMAIL_PLACEHOLDER = "[email hidden]"
 REDACT_EMAILS = True
 HIDE_NON_TRANSPARENT_ORG_DETAIL = True
-PAYMENT_DETAIL_PLACEHOLDER = "[payment detail hidden]"
 
 CATEGORY_ORDER = ["A", "C", "M", "B", "D", "X", "I"]
 CATEGORY_LABELS = {
@@ -181,15 +182,15 @@ def _org_tree(orgs: List[Dict[str, Any]], include_revenue: bool = True) -> List[
 
 # --- transactions -----------------------------------------------------------
 
-def _spend_transaction(txn: Dict[str, Any]) -> Dict[str, Any]:
+def _spend_transaction(txn: Dict[str, Any], redactor: PaymentRedactor) -> Dict[str, Any]:
     return {
         "date": _iso(txn["transaction_date"]),
         "org_slug": txn["org_slug"],
         "category": txn["spend_category"],
         "bucket": txn["spend_bucket"],
         "type": txn["transaction_type"],
-        "description": PAYMENT_DETAIL_PLACEHOLDER,
-        "counterparty": None,
+        "description": redactor.text(txn.get("description"), txn),
+        "counterparty": redactor.text(txn.get("public_counterparty"), txn),
         "initiated_by": None,
         "amount_dollars": _money(txn["outflow_dollars"]),
         "counted_as_spend": bool(txn["is_true_spend"]),
@@ -198,13 +199,13 @@ def _spend_transaction(txn: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _revenue_transaction(txn: Dict[str, Any]) -> Dict[str, Any]:
+def _revenue_transaction(txn: Dict[str, Any], redactor: PaymentRedactor) -> Dict[str, Any]:
     return {
         "date": _iso(txn["transaction_date"]),
         "org_slug": txn["org_slug"],
         "type": txn["transaction_type"],
-        "source": None,
-        "description": PAYMENT_DETAIL_PLACEHOLDER,
+        "source": redactor.text(txn.get("public_source"), txn),
+        "description": redactor.text(txn.get("description"), txn),
         "amount_dollars": _money(txn["amount_dollars"]),
         "hcb_code": txn["hcb_code"],
         "hcb_url": txn["hcb_url"],
@@ -283,7 +284,7 @@ def _withheld(
 
 # --- documents --------------------------------------------------------------
 
-def _budget_transaction(txn: Dict[str, Any]) -> Dict[str, Any]:
+def _budget_transaction(txn: Dict[str, Any], redactor: PaymentRedactor) -> Dict[str, Any]:
     """
     One line of a pot's ledger. Outflows carry a positive amount and inflows a
     negative one on the ledger's own sign convention, so both are republished
@@ -295,8 +296,11 @@ def _budget_transaction(txn: Dict[str, Any]) -> Dict[str, Any]:
         "bucket": txn["budget_bucket"],
         "bucket_label": BUDGET_BUCKET_LABELS.get(txn["budget_bucket"], txn["budget_bucket"]),
         "type": txn["transaction_type"],
-        "description": PAYMENT_DETAIL_PLACEHOLDER,
-        "counterparty": None,
+        "description": redactor.text(txn.get("description"), txn),
+        "counterparty": redactor.text(
+            txn.get("public_counterparty") if txn["flow_direction"] == "outflow"
+            else txn.get("public_source"), txn
+        ),
         "initiated_by": None,
         "merchant_category": txn["merchant_category"],
         "amount_dollars": _money(
@@ -335,9 +339,11 @@ def _budget_bucket_breakdown(txns: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 
 
 def build_budget_document(
-    budget: Dict[str, Any], txns: List[Dict[str, Any]]
+    budget: Dict[str, Any], txns: List[Dict[str, Any]],
+    redactor: Optional[PaymentRedactor] = None,
 ) -> Dict[str, Any]:
     """One person's individual budget, with every transaction behind its total."""
+    redactor = redactor or PaymentRedactor(n for t in txns for n in PaymentRedactor.names_in(t))
     name = page_slug(budget["budget_slug"], budget["budget_event_id"])
     outflows = [t for t in txns if t["flow_direction"] == "outflow"]
     inflows = [t for t in txns if t["flow_direction"] != "outflow"]
@@ -364,8 +370,8 @@ def build_budget_document(
             "card_grants_unspent_dollars": _money(budget["card_grants_unspent_dollars"]),
         },
         "bucket_breakdown": _budget_bucket_breakdown(txns),
-        "spend_transactions": [_budget_transaction(t) for t in outflows],
-        "funding_transactions": [_budget_transaction(t) for t in inflows],
+        "spend_transactions": [_budget_transaction(t, redactor) for t in outflows],
+        "funding_transactions": [_budget_transaction(t, redactor) for t in inflows],
     }
 
 
@@ -395,8 +401,12 @@ def build_program_document(
     orgs: List[Dict[str, Any]],
     spend_txns: List[Dict[str, Any]],
     revenue_txns: List[Dict[str, Any]],
+    redactor: Optional[PaymentRedactor] = None,
 ) -> Dict[str, Any]:
     """One program, with everything its page shows."""
+    redactor = redactor or PaymentRedactor(
+        n for t in spend_txns + revenue_txns for n in PaymentRedactor.names_in(t)
+    )
     name = page_slug(program["root_slug"], program["root_event_id"])
     external = [t for t in revenue_txns if not t["is_intra_tree"]]
     intra = [t for t in revenue_txns if t["is_intra_tree"]]
@@ -439,13 +449,13 @@ def build_program_document(
         "orgs": _org_tree(orgs),
         "withheld_orgs": withheld,
         "spend_transactions": [
-            _spend_transaction(t) for t in spend_txns if t["org_slug"] not in private_slugs
+            _spend_transaction(t, redactor) for t in spend_txns if t["org_slug"] not in private_slugs
         ],
         "revenue_transactions": [
-            _revenue_transaction(t) for t in external if t["org_slug"] not in private_slugs
+            _revenue_transaction(t, redactor) for t in external if t["org_slug"] not in private_slugs
         ],
         "intra_tree_transactions": [
-            _revenue_transaction(t) for t in intra if t["org_slug"] not in private_slugs
+            _revenue_transaction(t, redactor) for t in intra if t["org_slug"] not in private_slugs
         ],
     }
 
@@ -517,8 +527,10 @@ def build_index_document(
             "spend_recalculated": _iso(fresh.recalculated_at),
             "page_built": _iso(generated_at),
             "transaction_detail": (
-                "Payment names, counterparties, sources and free-text memos withheld "
-                "from HTML, JSON and DuckDB. Organizations outside HCB transparency "
+                "Purchase descriptions and merchant/organization detail retained; known "
+                "personal names, emails, phone numbers and other identifiers redacted "
+                "before HTML, JSON and DuckDB generation. Payment identities and bank "
+                "details are not published. Organizations outside HCB transparency "
                 "mode summarised rather than listed. Roster and organization labels "
                 "are not anonymous; this report remains access-controlled."
             ),
@@ -558,17 +570,24 @@ def build_index_document(
 
 def build_documents(data: SiteData, generated_at: datetime) -> Dict[str, Any]:
     """Every document this run publishes, keyed by its path."""
+    names = [p.get("person_name") for p in data.budget_people + data.budgets]
+    for groups in (data.spend_by_program, data.revenue_by_program, data.budget_txns_by_slug):
+        for rows in groups.values():
+            for txn in rows:
+                names.extend(PaymentRedactor.names_in(txn))
+    redactor = PaymentRedactor(names)
     program_documents = [
         build_program_document(
             program,
             data.orgs_by_program.get(program["root_slug"], []),
             data.spend_by_program.get(program["root_slug"], []),
             data.revenue_by_program.get(program["root_slug"], []),
+            redactor,
         )
         for program in data.programs
     ]
     budget_documents = [
-        build_budget_document(budget, data.budget_txns_by_slug.get(budget["budget_slug"], []))
+        build_budget_document(budget, data.budget_txns_by_slug.get(budget["budget_slug"], []), redactor)
         for budget in data.budgets
     ]
     documents = {
