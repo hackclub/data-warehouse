@@ -1106,3 +1106,23 @@ def test_raw_counterparties_do_not_become_public_merchants():
     doc = json.loads(render_site(data, GENERATED_AT)["programs/fallout.json"])
     assert doc["spend_transactions"][0]["description"] == "Parts for a robot"
     assert doc["spend_transactions"][0]["counterparty"] is None
+
+
+def test_hcb_dbt_sources_wait_for_the_real_mirror_asset():
+    """meta.deps is not an asset-key mapping; it creates phantom hcb/* inputs."""
+    from pathlib import Path
+    import yaml
+    from dagster import AssetKey
+    from dagster_dbt import DagsterDbtTranslator
+
+    source_file = Path(__file__).parents[1] / "orpheus_engine_dbt/models/sources.yml"
+    sources = yaml.safe_load(source_file.read_text())["sources"]
+    source = next(s for s in sources if s["name"] == "hcb")
+    translator = DagsterDbtTranslator()
+    assert source["tables"]
+    for table in source["tables"]:
+        key = translator.get_asset_key({
+            "resource_type": "source", "source_name": "hcb",
+            "name": table["name"], "meta": table.get("meta", {}),
+        })
+        assert key == AssetKey(["hcb_warehouse_mirror"]), table["name"]
