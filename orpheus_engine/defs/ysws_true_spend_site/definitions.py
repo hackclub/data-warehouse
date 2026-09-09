@@ -3,7 +3,8 @@ YSWS True Spend static site.
 
 Reads the true-spend dbt models out of the warehouse, renders a plain static
 site (see site.py), and commits the result onto the `main` branch of
-https://github.com/hackclub/ysws-true-spend, which serves it on GitHub Pages.
+the private https://github.com/hackclub/ysws-true-spend repository. Orchard
+serves it behind password protection; do not enable public GitHub Pages.
 
 Nothing in the target repo is hand-maintained: every run replaces the entire
 tracked tree with what the renderer emitted, and a commit only happens when the
@@ -44,8 +45,8 @@ DEFAULT_REPO = "hackclub/ysws-true-spend"
 DEFAULT_BRANCH = "main"
 TOKEN_ENV_VAR = "YSWS_TRUE_SPEND_GITHUB_TOKEN"
 # The custom domain the renderer publishes in CNAME (see site.CUSTOM_DOMAIN).
-# While the repo is private, Pages also serves the same tree at a random
-# *.pages.github.io host.
+# Orchard enforces access control. A private repository alone does not make
+# GitHub Pages private, so Pages must remain disabled.
 PAGES_URL = "https://ysws-true-spend.hackclub.com/"
 
 # Identity on every commit this asset pushes to the site repo.
@@ -63,6 +64,8 @@ UPSTREAM_ASSETS = [
     AssetKey(["hcb_ysws_true_spend_analytics", "ysws_spend_by_program"]),
     AssetKey(["hcb_ysws_true_spend_analytics", "ysws_spend_org_tree"]),
     AssetKey(["hcb_ysws_true_spend_analytics", "ysws_spend_ledger"]),
+    AssetKey(["hcb_ysws_true_spend_analytics", "ysws_unmatched_orgs"]),
+    AssetKey(["hcb_ysws_true_spend_analytics", "ysws_unlinked_programs"]),
     AssetKey(["hcb_analytics", "ledger"]),
     AssetKey(["hcb_analytics", "orgs"]),
 ]

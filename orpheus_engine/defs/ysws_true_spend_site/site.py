@@ -27,14 +27,8 @@ from .documents import build_documents
 # the next publish, which is how it was silently wiped three times on 2026-08-18.
 CUSTOM_DOMAIN = "ysws-true-spend.hackclub.com"
 
-# Publication policy is enforced in documents.py (emails stripped, private orgs
-# summarised) so the JSON and the HTML are redacted identically. This flag only
-# controls whether the name columns are rendered at all.
-#
-# Measured 2026-08-18 against hcb.hackclub.com unauthenticated: every public
-# transaction carries a user object with full_name, so names are within HCB's
-# own disclosure; no email address appears anywhere on its public surface.
-INCLUDE_PERSONAL_FIELDS = True
+# Sensitive payment fields are withheld in documents.py for every format.
+INCLUDE_PERSONAL_FIELDS = False
 
 STYLE = """
 body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -894,7 +888,8 @@ host; this site classifies every outflow and counts only what left for the
 outside world.
 
 Every page is rendered from the JSON below, so the two never disagree. Static
-files, no auth. Amounts are US dollars, dates ISO-8601, timestamps UTC.
+files served behind host-level access control. Amounts are US dollars, dates
+ISO-8601, timestamps UTC.
 
 ## Data
 
