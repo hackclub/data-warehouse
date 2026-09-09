@@ -619,7 +619,7 @@ def test_payment_fields_are_withheld_before_rendering():
     files = render_site(data, GENERATED_AT)
     page, document = files["programs/fallout.html"], files["programs/fallout.json"]
     assert "maker@gmail.com" not in page and "maker@gmail.com" not in document
-    assert "[payment detail hidden]" in page and "[payment detail hidden]" in document
+    assert "Grant to [name hidden]" in page and "Grant to [name hidden]" in document
     # Even display names are withheld, not only transfer recipient names.
     assert "Test Operator" not in page
 
@@ -870,7 +870,7 @@ def test_budget_page_totals_match_its_transactions():
     page = _render()["budgets/ysws-budget-robin.html"]
     # external $100 + cards loaded $40 = $140; the $60 sent back is excluded
     assert "$140.00" in page
-    assert "[payment detail hidden]" in page     # amount listed, memo withheld
+    assert "Back to the program" in page          # purpose retained
     assert 'class="excluded"' in page             # but greyed out
 
     document = json.loads(_render()["budgets/ysws-budget-robin.json"])
@@ -974,7 +974,7 @@ def test_budget_page_redacts_emails_like_every_other_page():
     files = render_site(data, GENERATED_AT)
     page = files["budgets/ysws-budget-robin.html"]
     assert "robin@example.com" not in page
-    assert "[payment detail hidden]" in page
+    assert "reimbursed [email hidden]" in page
 
 
 def test_a_pot_that_is_also_a_program_says_so_on_both_ends():
@@ -1041,3 +1041,68 @@ def test_payment_privacy_covers_every_export(tmp_path):
     # Redaction must not alter the accounting.
     document = json.loads(files["programs/fallout.json"])
     assert document["totals"]["true_spend_dollars"] == 300.0
+
+
+def test_purchase_purpose_survives_privacy_redaction_in_all_formats(tmp_path):
+    import json
+    import duckdb
+
+    data = _site_data()
+    txn = data.spend_by_program["fallout"][0]
+    txn.update({
+        "transaction_type": "expense_payout",
+        "description": "Soldering irons for Synthetic Recipient; contact person@example.test; "
+                       "phone: +1 202 555 0199; address: 123 Example Street; "
+                       "account: 123456789; receipt https://example.test/private?id=123",
+        "private_recipient_name": "Synthetic Recipient",
+        "public_counterparty": "Acme Hardware",
+    })
+    files = render_site(data, GENERATED_AT)
+    doc = json.loads(files["programs/fallout.json"])
+    output = doc["spend_transactions"][0]
+    assert "Soldering irons" in output["description"]
+    assert output["counterparty"] == "Acme Hardware"
+    assert output["initiated_by"] is None
+    assert "Merchant / organization" in files["programs/fallout.html"]
+    assert "Soldering irons" in files["programs/fallout.html"]
+    for path, content in files.items():
+        if isinstance(content, str):
+            for secret in ("Synthetic Recipient", "person@example.test", "202 555",
+                           "123 Example Street", "123456789", "example.test/private",
+                           "private_recipient_name"):
+                assert secret not in content, (path, secret)
+    db = tmp_path / "public.duckdb"
+    db.write_bytes(files["ysws-true-spend.duckdb"])
+    with duckdb.connect(str(db), read_only=True) as con:
+        memo, merchant = con.execute(
+            "SELECT description, counterparty FROM spend_transactions WHERE hcb_code = ?",
+            [txn["hcb_code"]],
+        ).fetchone()
+        assert memo == output["description"]
+        assert merchant == "Acme Hardware"
+
+
+def test_payment_names_case_order_unicode_and_other_transactions():
+    from orpheus_engine.defs.ysws_true_spend_site.privacy import PaymentRedactor
+
+    txn = {"private_recipient_name": "Fictional Middle Recipient"}
+    r = PaymentRedactor(["Fictional Middle Recipient", "Synthetíc Person"])
+    for value in ("FICTIONAL RECIPIENT", "Recipient, Fictional", "Fictional M. Recipient"):
+        result = r.text("Tools for " + value, txn)
+        assert "Tools for" in result
+        assert "fictional" not in result.lower() and "recipient" not in result.lower()
+    assert r.text("Synthetíc Person bought batteries") == "[name hidden] bought batteries"
+    assert r.text("Grant to Unknown Person for circuit boards") == "Grant to [name hidden] for circuit boards"
+    assert r.text("Returning expired grant to UntrackedAlias") == "Returning expired grant to [name hidden]"
+    assert r.text("Acme Hardware, 2026-09-09, $123.45") == "Acme Hardware, 2026-09-09, $123.45"
+
+
+def test_raw_counterparties_do_not_become_public_merchants():
+    import json
+    data = _site_data()
+    t = data.spend_by_program["fallout"][0]
+    t.update(transaction_type="ach_transfer", description="Parts for a robot",
+             counterparty="Synthetic Legal Recipient", public_counterparty=None)
+    doc = json.loads(render_site(data, GENERATED_AT)["programs/fallout.json"])
+    assert doc["spend_transactions"][0]["description"] == "Parts for a robot"
+    assert doc["spend_transactions"][0]["counterparty"] is None

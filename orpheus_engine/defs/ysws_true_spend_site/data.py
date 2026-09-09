@@ -154,7 +154,9 @@ ORDER BY t.root_slug, t.depth, lower(t.org_name)
 """
 
 # Every classified outflow the true-spend model counted (or deliberately did
-# not count) for each program.
+# not count) for each program. Reimbursement expense memos are the public
+# description used by HCB HcbCode::Memo#reimbursement_expense_payout_memo;
+# recipient and sender values below are redaction inputs, never display fields.
 SPEND_TRANSACTIONS_SQL = f"""
 SELECT
     root_slug,
@@ -168,8 +170,12 @@ SELECT
     is_true_spend,
     is_synthetic_offset,
     ROUND(outflow_dollars::numeric, 2) AS outflow_dollars,
-    COALESCE(disbursement_name, display_memo) AS description,
+    COALESCE(reimbursement_expense_memo, disbursement_name, display_memo) AS description,
     COALESCE(dest_org_name, counterparty_name, transfer_recipient_name) AS counterparty,
+    transfer_recipient_name AS private_recipient_name,
+    transfer_recipient_email AS private_recipient_email,
+    transfer_sent_by_name AS private_sender_name,
+    dest_org_name AS public_counterparty,
     initiated_by_name,
     hcb_code,
     hcb_url,
@@ -195,6 +201,9 @@ SELECT
     COALESCE(l.display_memo, l.disbursement_name) AS description,
     COALESCE(l.source_org_name, l.counterparty_name, l.donor_name) AS source,
     l.source_org_slug,
+    l.source_org_name AS public_source,
+    l.donor_name AS private_donor_name,
+    l.transacting_user_name AS private_user_name,
     l.hcb_code,
     CASE WHEN l.hcb_code LIKE 'HCB-%'
          THEN 'https://hcb.hackclub.com/hcb/' || l.hcb_code END AS hcb_url,
@@ -287,10 +296,15 @@ SELECT
     is_personal_spend,
     ROUND(amount_dollars::numeric, 2) AS amount_dollars,
     ROUND(outflow_dollars::numeric, 2) AS outflow_dollars,
-    COALESCE(disbursement_name, display_memo) AS description,
+    COALESCE(reimbursement_expense_memo, disbursement_name, display_memo) AS description,
     COALESCE(dest_org_name, counterparty_name, transfer_recipient_name) AS counterparty,
     COALESCE(source_org_name, counterparty_name) AS source,
     source_org_slug,
+    source_org_name AS public_source,
+    transfer_recipient_name AS private_recipient_name,
+    transfer_recipient_email AS private_recipient_email,
+    transfer_sent_by_name AS private_sender_name,
+    dest_org_name AS public_counterparty,
     initiated_by_name,
     merchant_category,
     hcb_code,
@@ -320,6 +334,14 @@ ORDER BY grants_attributed_dollars DESC NULLS LAST, person_name
 """
 
 
+PAYMENT_MERCHANTS_SQL = f"""
+SELECT hcb_code, merchant_name, card_user_name, transfer_recipient_name,
+       transfer_sent_by_name
+FROM {HCB_SCHEMA}.hcb_code_enrichment
+WHERE hcb_code = ANY(%s)
+"""
+
+
 @dataclass
 class SiteData:
     """Everything the renderer needs, already grouped by program root slug."""
@@ -344,11 +366,11 @@ class SiteData:
         )
 
 
-def _rows(conn, sql: str) -> List[Dict[str, Any]]:
+def _rows(conn, sql: str, params=None) -> List[Dict[str, Any]]:
     import psycopg2.extras
 
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(sql)
+        cur.execute(sql, params)
         return [dict(r) for r in cur.fetchall()]
 
 
@@ -364,7 +386,7 @@ def _d(value: Any) -> Decimal:
 
 
 def fetch_site_data(conn) -> SiteData:
-    """Run the four queries and roll tree revenue up onto each program."""
+    """Fetch report rows and privacy metadata; roll revenue up per program."""
     programs = _rows(conn, PROGRAMS_SQL)
     orgs = _rows(conn, TREE_SQL)
     spend_txns = _rows(conn, SPEND_TRANSACTIONS_SQL)
@@ -374,6 +396,19 @@ def fetch_site_data(conn) -> SiteData:
     budgets = _rows(conn, BUDGETS_SQL)
     budget_txns = _rows(conn, BUDGET_TRANSACTIONS_SQL)
     budget_people = _rows(conn, BUDGET_PEOPLE_SQL)
+
+    # This set is bounded by the report's actual transactions. Enrichment is
+    # one row per HCB code, so it never changes ledger amounts or row counts.
+    all_txns = spend_txns + revenue_txns + budget_txns
+    codes = list({t["hcb_code"] for t in all_txns if t.get("hcb_code")})
+    merchants = {r["hcb_code"]: r for r in _rows(conn, PAYMENT_MERCHANTS_SQL, (codes,))}
+    for txn in all_txns:
+        detail = merchants.get(txn.get("hcb_code"), {})
+        txn["private_user_name"] = detail.get("card_user_name") or txn.get("private_user_name")
+        txn["private_recipient_name"] = detail.get("transfer_recipient_name") or txn.get("private_recipient_name")
+        txn["private_sender_name"] = detail.get("transfer_sent_by_name") or txn.get("private_sender_name")
+        if txn["transaction_type"] == "card_transaction":
+            txn["public_counterparty"] = detail.get("merchant_name")
 
     orgs_by_program = _group(orgs, "root_slug")
 
