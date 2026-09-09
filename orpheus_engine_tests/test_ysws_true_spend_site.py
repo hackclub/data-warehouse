@@ -112,7 +112,7 @@ def _spend_txn(**overrides):
         "outflow_dollars": Decimal("250.00"),
         "description": "Grant to a maker",
         "counterparty": "Fallout",
-        "initiated_by_name": "Sam Liu",
+        "initiated_by_name": "Test Operator",
         "hcb_code": "HCB-500-64019",
         "hcb_url": "https://hcb.hackclub.com/hcb/HCB-500-64019",
         "receipt_count": 0,
@@ -605,13 +605,13 @@ def test_no_methodology_page_anywhere():
         assert "methodology.html" not in content, path
 
 
-def test_publication_mirrors_hcb_transparency():
+def test_payment_fields_are_withheld_before_rendering():
     """
-    Measured against HCB's public API: names are published, emails never are.
+    Payment metadata is not safe merely because an org enables transparency.
     Redaction happens in the document, so the JSON is as clean as the HTML.
     """
     assert redact_text("Grant to person@example.com") == "Grant to [email hidden]"
-    assert redact_text("Grant to Youssef Ayman") == "Grant to Youssef Ayman"
+    assert redact_text("Grant to Test Recipient") == "Grant to Test Recipient"
 
     data = _site_data()
     data.spend_by_program["fallout"][0]["description"] = "Grant to maker@gmail.com"
@@ -619,9 +619,9 @@ def test_publication_mirrors_hcb_transparency():
     files = render_site(data, GENERATED_AT)
     page, document = files["programs/fallout.html"], files["programs/fallout.json"]
     assert "maker@gmail.com" not in page and "maker@gmail.com" not in document
-    assert "[email hidden]" in page and "[email hidden]" in document
-    # the name columns stay: HCB publishes full_name on every transaction
-    assert "Sam Liu" in page
+    assert "[payment detail hidden]" in page and "[payment detail hidden]" in document
+    # Even display names are withheld, not only transfer recipient names.
+    assert "Test Operator" not in page
 
 
 def test_private_orgs_are_summarised_not_listed():
@@ -678,10 +678,10 @@ def test_pages_custom_domain_is_published_not_hand_maintained():
 
 def test_html_is_escaped():
     data = _site_data()
-    data.spend_by_program["fallout"][0]["description"] = '<script>alert("x")</script>'
+    data.programs[0]["program_name"] = '<script>alert("x")</script>'
     files = render_site(data, GENERATED_AT)
     page = files["programs/fallout.html"]
-    # the page carries its own <script> block; the memo must not inject one
+    # The page carries its own script; an organization label must not inject one.
     assert "<script>alert" not in page
     assert "&lt;script&gt;alert" in page
 
@@ -870,7 +870,7 @@ def test_budget_page_totals_match_its_transactions():
     page = _render()["budgets/ysws-budget-robin.html"]
     # external $100 + cards loaded $40 = $140; the $60 sent back is excluded
     assert "$140.00" in page
-    assert "Back to the program" in page          # listed
+    assert "[payment detail hidden]" in page     # amount listed, memo withheld
     assert 'class="excluded"' in page             # but greyed out
 
     document = json.loads(_render()["budgets/ysws-budget-robin.json"])
@@ -974,7 +974,7 @@ def test_budget_page_redacts_emails_like_every_other_page():
     files = render_site(data, GENERATED_AT)
     page = files["budgets/ysws-budget-robin.html"]
     assert "robin@example.com" not in page
-    assert "[email hidden]" in page
+    assert "[payment detail hidden]" in page
 
 
 def test_a_pot_that_is_also_a_program_says_so_on_both_ends():
@@ -1013,3 +1013,31 @@ def test_duckdb_carries_the_budget_tables():
             assert spend == 140.0
         finally:
             con.close()
+
+
+def test_payment_privacy_covers_every_export(tmp_path):
+    """Synthetic legal-name canaries cannot escape via memos or downloads."""
+    import json
+    import duckdb
+
+    data = _site_data()
+    canary = "Synthetic Legal Recipient QZX"
+    for groups in (data.spend_by_program, data.revenue_by_program,
+                   data.budget_txns_by_slug):
+        for rows in groups.values():
+            for row in rows:
+                for key in ("description", "counterparty", "source", "initiated_by_name"):
+                    row[key] = canary
+    files = render_site(data, GENERATED_AT)
+    for path, content in files.items():
+        if isinstance(content, str):
+            assert canary not in content, path
+    db = tmp_path / "export.duckdb"
+    db.write_bytes(files["ysws-true-spend.duckdb"])
+    with duckdb.connect(str(db), read_only=True) as con:
+        for (table,) in con.execute("SHOW TABLES").fetchall():
+            rows = con.execute(f'SELECT * FROM "{table}"').fetchall()
+            assert canary not in json.dumps(rows, default=str), table
+    # Redaction must not alter the accounting.
+    document = json.loads(files["programs/fallout.json"])
+    assert document["totals"]["true_spend_dollars"] == 300.0

@@ -15,7 +15,8 @@ Three documents, mirroring the three kinds of page:
                              breakdown, and every transaction behind them
 
 Redaction happens here rather than in the renderer, so the JSON is publishable
-under the same rules as the HTML: email addresses stripped, and transactions of
+under the same rules as the HTML: payment names and free-text memos withheld,
+email addresses stripped from other free text, and transactions of
 organizations outside HCB's transparency mode summarised instead of listed.
 """
 
@@ -29,13 +30,14 @@ from .freshness import Freshness
 
 HCB_ORG_URL = "https://hcb.hackclub.com/{slug}"
 
-# See site.py's publication policy: HCB publishes names but never email
-# addresses, and publishes nothing at all for organizations outside
-# transparency mode.
+# Payment counterparties and memos can contain legal names, including names
+# not exposed by HCB transparency. Never publish those raw fields. This policy
+# applies before HTML, JSON, and DuckDB generation.
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 EMAIL_PLACEHOLDER = "[email hidden]"
 REDACT_EMAILS = True
 HIDE_NON_TRANSPARENT_ORG_DETAIL = True
+PAYMENT_DETAIL_PLACEHOLDER = "[payment detail hidden]"
 
 CATEGORY_ORDER = ["A", "C", "M", "B", "D", "X", "I"]
 CATEGORY_LABELS = {
@@ -186,9 +188,9 @@ def _spend_transaction(txn: Dict[str, Any]) -> Dict[str, Any]:
         "category": txn["spend_category"],
         "bucket": txn["spend_bucket"],
         "type": txn["transaction_type"],
-        "description": _text(txn["description"]),
-        "counterparty": _text(txn["counterparty"]),
-        "initiated_by": _text(txn["initiated_by_name"]),
+        "description": PAYMENT_DETAIL_PLACEHOLDER,
+        "counterparty": None,
+        "initiated_by": None,
         "amount_dollars": _money(txn["outflow_dollars"]),
         "counted_as_spend": bool(txn["is_true_spend"]),
         "hcb_code": txn["hcb_code"],
@@ -201,8 +203,8 @@ def _revenue_transaction(txn: Dict[str, Any]) -> Dict[str, Any]:
         "date": _iso(txn["transaction_date"]),
         "org_slug": txn["org_slug"],
         "type": txn["transaction_type"],
-        "source": _text(txn["source"]),
-        "description": _text(txn["description"]),
+        "source": None,
+        "description": PAYMENT_DETAIL_PLACEHOLDER,
         "amount_dollars": _money(txn["amount_dollars"]),
         "hcb_code": txn["hcb_code"],
         "hcb_url": txn["hcb_url"],
@@ -293,10 +295,9 @@ def _budget_transaction(txn: Dict[str, Any]) -> Dict[str, Any]:
         "bucket": txn["budget_bucket"],
         "bucket_label": BUDGET_BUCKET_LABELS.get(txn["budget_bucket"], txn["budget_bucket"]),
         "type": txn["transaction_type"],
-        "description": _text(txn["description"]),
-        "counterparty": _text(txn["counterparty"] if txn["flow_direction"] == "outflow"
-                              else txn["source"]),
-        "initiated_by": _text(txn["initiated_by_name"]),
+        "description": PAYMENT_DETAIL_PLACEHOLDER,
+        "counterparty": None,
+        "initiated_by": None,
         "merchant_category": txn["merchant_category"],
         "amount_dollars": _money(
             txn["outflow_dollars"] if txn["flow_direction"] == "outflow"
@@ -516,9 +517,10 @@ def build_index_document(
             "spend_recalculated": _iso(fresh.recalculated_at),
             "page_built": _iso(generated_at),
             "transaction_detail": (
-                "Mirrors hcb.hackclub.com: names published, email addresses "
-                "removed, organizations outside HCB transparency mode summarised "
-                "rather than listed."
+                "Payment names, counterparties, sources and free-text memos withheld "
+                "from HTML, JSON and DuckDB. Organizations outside HCB transparency "
+                "mode summarised rather than listed. Roster and organization labels "
+                "are not anonymous; this report remains access-controlled."
             ),
         },
         "ysws_programs_with_linked_hcbs": linked,
