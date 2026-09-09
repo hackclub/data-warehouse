@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import psycopg2
+import requests
 from dagster import (
     AssetExecutionContext,
     AssetKey,
@@ -139,6 +140,21 @@ def _clear_worktree(root: Path) -> None:
             entry.unlink()
 
 
+def _require_access_control() -> None:
+    """Fail closed if the report or any download is anonymously accessible.
+
+    This is a deployment regression check, not a replacement for ingress auth.
+    Never send credentials or follow redirects while testing anonymous access.
+    """
+    for path in ("", "index.json", "programs/fallout.html", "ysws-true-spend.duckdb"):
+        with requests.get(PAGES_URL + path, allow_redirects=False, stream=True, timeout=30) as response:
+            if response.status_code not in (301, 302, 303, 307, 308, 401, 403):
+                raise RuntimeError(
+                    "Refusing to publish: anonymous access is not blocked for "
+                    f"{path or '/'}. Restore the report's access control first."
+                )
+
+
 def publish_site(
     files: Dict[str, str],
     commit_message: str,
@@ -148,6 +164,7 @@ def publish_site(
     log=None,
 ) -> Dict[str, Any]:
     """Commit `files` as the entire content of `repo`@`branch`. Returns a summary."""
+    _require_access_control()
     token = token or os.getenv(TOKEN_ENV_VAR)
     if not token:
         raise ValueError(
