@@ -2,7 +2,8 @@
 
 Only public-style descriptions and merchant/organization labels are candidates
 for publication. Recipient, sender, bank and contact fields never become output.
-The report still requires access control; free text is not provably anonymous.
+The owner approved public publication of this redacted report after preview.
+Free text is not provably anonymous; roster and organization labels remain.
 """
 
 import html

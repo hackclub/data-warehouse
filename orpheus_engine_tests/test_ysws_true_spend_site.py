@@ -1127,35 +1127,3 @@ def test_hcb_dbt_sources_wait_for_the_real_mirror_asset():
         })
         assert key == AssetKey(["hcb_warehouse_mirror"]), table["name"]
 
-
-def test_publish_refuses_anonymously_accessible_report(monkeypatch):
-    import pytest
-    from contextlib import nullcontext
-    from types import SimpleNamespace
-    from orpheus_engine.defs.ysws_true_spend_site import definitions as module
-
-    calls = []
-    def get(url, **kwargs):
-        calls.append((url, kwargs))
-        return nullcontext(SimpleNamespace(status_code=200))
-    monkeypatch.setattr(module.requests, 'get', get)
-    monkeypatch.setattr(module, '_git', lambda *a, **kw: pytest.fail('must not push'))
-    with pytest.raises(RuntimeError, match='Refusing to publish'):
-        module.publish_site({}, 'synthetic test', token='synthetic-token')
-    assert calls[0][1] == dict(allow_redirects=False, stream=True, timeout=30)
-
-
-def test_publish_access_check_covers_downloads(monkeypatch):
-    import pytest
-    from contextlib import nullcontext
-    from types import SimpleNamespace
-    from orpheus_engine.defs.ysws_true_spend_site import definitions as module
-
-    calls = []
-    def get(url, **kwargs):
-        calls.append(url)
-        return nullcontext(SimpleNamespace(status_code=200 if url.endswith('.duckdb') else 403))
-    monkeypatch.setattr(module.requests, 'get', get)
-    with pytest.raises(RuntimeError, match='duckdb'):
-        module._require_access_control()
-    assert len(calls) == 4
