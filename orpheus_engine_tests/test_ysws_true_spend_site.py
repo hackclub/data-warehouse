@@ -1126,4 +1126,3 @@ def test_hcb_dbt_sources_wait_for_the_real_mirror_asset():
             "name": table["name"], "meta": table.get("meta", {}),
         })
         assert key == AssetKey(["hcb_warehouse_mirror"]), table["name"]
-
