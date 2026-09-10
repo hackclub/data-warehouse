@@ -3,34 +3,57 @@
     materialized='table'
 ) }}
 
-WITH fee_revenue AS (
+-- One row per month for a trailing 24-month window (the current month plus
+-- the 23 before it), so the dashboard can show history rather than only the
+-- current fiscal year. Revenue components come from the HCB ledger (fees,
+-- interest, grants) and the finance team's sheet (major gifts, other revenue,
+-- HQ interest). `has_sheet_month` says whether the sheet's monthly_finances
+-- tab has a row for the month: expenses and "other" revenue only exist for
+-- those months, so a month without one is revenue-only, not zero spend.
+
+WITH bounds AS (
   SELECT
-    DATE_TRUNC('month', date) AS month,
-    SUM(amount_cents) / 100.0 AS hcb_fee_revenue
-  FROM {{ source('hcb', 'canonical_transactions') }}
-  WHERE hcb_code ILIKE 'HCB-702%'
-    AND (amount_cents > 0 OR date > '2024-02-26')
-    AND EXTRACT(YEAR FROM date) = 2026
-  GROUP BY DATE_TRUNC('month', date)
+    (DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '23 months')::date AS window_start,
+    (DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month')::date AS window_end
 ),
 
+months AS (
+  SELECT generate_series(window_start, window_end - INTERVAL '1 month', INTERVAL '1 month')::date AS month
+  FROM bounds
+),
+
+fee_revenue AS (
+  SELECT
+    DATE_TRUNC('month', date)::date AS month,
+    SUM(amount_cents) / 100.0 AS hcb_fee_revenue
+  FROM {{ source('hcb', 'canonical_transactions') }}, bounds
+  WHERE hcb_code ILIKE 'HCB-702%'
+    AND (amount_cents > 0 OR date > '2024-02-26')
+    AND date >= bounds.window_start
+    AND date < bounds.window_end
+  GROUP BY DATE_TRUNC('month', date)::date
+),
+
+-- Gift dates are parsed once, in the major_gifts model (it handles both
+-- 2- and 4-digit years); rolling up from there keeps the two in agreement.
 major_gifts_received AS (
   SELECT
-    DATE_TRUNC('month', TO_DATE(received_at, 'MM/DD/YYYY')) AS month,
+    DATE_TRUNC('month', date)::date AS month,
     SUM(amount) AS major_gift_total
-  FROM {{ source('finance_2026', 'major_gifts') }}
-  WHERE received_at IS NOT NULL
-  GROUP BY DATE_TRUNC('month', TO_DATE(received_at, 'MM/DD/YYYY'))
+  FROM {{ ref('major_gifts') }}
+  WHERE status = 'Received'
+    AND date IS NOT NULL
+  GROUP BY DATE_TRUNC('month', date)::date
 ),
 
 revenue_awaiting_receipt AS (
   SELECT
-    DATE_TRUNC('month', TO_DATE(leadership_flagged_donation_at, 'MM/DD/YYYY')) AS month,
+    DATE_TRUNC('month', date)::date AS month,
     SUM(amount) AS awaiting_total
-  FROM {{ source('finance_2026', 'major_gifts') }}
-  WHERE received_at IS NULL
-    AND leadership_flagged_donation_at IS NOT NULL
-  GROUP BY DATE_TRUNC('month', TO_DATE(leadership_flagged_donation_at, 'MM/DD/YYYY'))
+  FROM {{ ref('major_gifts') }}
+  WHERE status = 'Awaiting Receipt'
+    AND date IS NOT NULL
+  GROUP BY DATE_TRUNC('month', date)::date
 ),
 
 monthly AS (
@@ -40,6 +63,7 @@ monthly AS (
     revenue_other,
     revenue_hq_interest
   FROM {{ source('finance_2026', 'monthly_finances') }}
+  WHERE NULLIF(BTRIM(month), '') IS NOT NULL
 ),
 
 hcb_exp AS (
@@ -49,11 +73,13 @@ hcb_exp AS (
     hcb_revenue_from_bank_interest AS hcb_interest,
     hcb_revenue_from_grants AS hcb_grants
   FROM {{ source('finance_2026', 'hcb_expense_reporting') }}
-  WHERE EXTRACT(YEAR FROM TO_DATE(month, 'Mon YYYY')) = 2026
+  WHERE NULLIF(BTRIM(month), '') IS NOT NULL
 )
 
 SELECT
-  TO_CHAR(COALESCE(m.month, f.month, g.month, h.month), 'Mon YYYY') AS month,
+  TO_CHAR(mo.month, 'Mon YYYY') AS month,
+  mo.month AS month_start,
+  (m.month IS NOT NULL) AS has_sheet_month,
 
   COALESCE(f.hcb_fee_revenue, 0)
     + COALESCE(g.major_gift_total, 0)
@@ -86,11 +112,10 @@ SELECT
     - COALESCE(m.total_expenses, 0)
     AS net_revenue
 
-FROM monthly m
-FULL OUTER JOIN fee_revenue f ON m.month = f.month
-FULL OUTER JOIN major_gifts_received g ON COALESCE(m.month, f.month) = g.month
-FULL OUTER JOIN hcb_exp h ON COALESCE(m.month, f.month, g.month) = h.month
-FULL OUTER JOIN revenue_awaiting_receipt a ON COALESCE(m.month, f.month, g.month, h.month) = a.month
-
-WHERE EXTRACT(YEAR FROM COALESCE(m.month, f.month, g.month, h.month)) = 2026
-ORDER BY COALESCE(m.month, f.month, g.month, h.month)
+FROM months mo
+LEFT JOIN monthly m ON m.month = mo.month
+LEFT JOIN fee_revenue f ON f.month = mo.month
+LEFT JOIN major_gifts_received g ON g.month = mo.month
+LEFT JOIN hcb_exp h ON h.month = mo.month
+LEFT JOIN revenue_awaiting_receipt a ON a.month = mo.month
+ORDER BY mo.month
