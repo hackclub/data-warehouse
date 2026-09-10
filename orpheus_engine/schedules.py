@@ -85,6 +85,7 @@ def _make_skip_if_running_schedule(
 
 # Unified YSWS refresh, daily Parquet backup, and warehouse assets
 UNIFIED_YSWS_SELECTION = (
+    dg.AssetSelection.groups("ysws_true_spend_sync") |
     dg.AssetSelection.groups("airtable_unified_ysws_projects_db_refresh") |
     dg.AssetSelection.groups("dlt_airtable_unified_ysws") |
     dg.AssetSelection.assets("unified_ysws_ysws_programs_weighted_referral_count")
