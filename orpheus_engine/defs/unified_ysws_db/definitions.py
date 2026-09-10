@@ -26,6 +26,7 @@ from ..airtable.resources import AirtableResource
 from ..airtable.definitions import airtable_config
 from ..geocoder.resources import GeocoderResource, GeocodingError
 from ..airtable.generated_ids import AirtableIDs
+from .true_spend_sync import ysws_programs_hcb_stats, ysws_programs_true_spend_update_status
 from ..shared.address_utils import build_address_string_from_airtable_row
 from ..shared.daily_backups import (
     ParquetBackupFile,
@@ -749,219 +750,6 @@ def ysws_programs_sign_up_stats_candidates(
             "preview": preview_metadata
         }
     )
-
-
-@asset(
-    group_name="unified_ysws_db_processing",
-    description="Prepares YSWS programs with HCB data by extracting HCB IDs from URLs",
-    compute_kind="data_preparation",
-    deps=[AssetKey(["airtable", "unified_ysws_projects_db", "ysws_programs"])],
-    required_resource_keys={"airtable"},
-)
-def ysws_programs_hcb_candidates(
-    context: AssetExecutionContext,
-) -> Output[pl.DataFrame]:
-    """
-    Loads YSWS programs and extracts HCB IDs from HCB URLs.
-    
-    Returns:
-        DataFrame with id, hcb (URL), and hcb_id (extracted ID)
-    """
-    log = context.log
-    airtable: AirtableResource = context.resources.airtable
-    
-    # Get the ysws_programs data from airtable
-    programs_df = airtable.get_all_records_as_polars(
-        context=context,
-        base_key="unified_ysws_projects_db",
-        table_key="ysws_programs",
-    )
-    
-    log.info(f"Processing {programs_df.height} YSWS programs for HCB data")
-    
-    # Get the HCB field ID
-    hcb_field_id = UnifiedYSWS.ysws_programs.hcb
-    
-    if hcb_field_id not in programs_df.columns:
-        log.warning(f"HCB field {hcb_field_id} not found in programs data")
-        # Return empty DataFrame with correct schema
-        return Output(
-            pl.DataFrame(schema={
-                "id": pl.Utf8,
-                "hcb": pl.Utf8,
-                "hcb_id": pl.Utf8
-            }),
-            metadata={"num_programs": 0, "num_with_hcb": 0}
-        )
-    
-    # Filter for programs that have HCB field set and extract HCB IDs
-    processed_df = programs_df.filter(
-        (pl.col(hcb_field_id).is_not_null()) & 
-        (pl.col(hcb_field_id) != "")
-    ).with_columns([
-        pl.col(hcb_field_id).map_elements(
-            lambda x: _extract_hcb_id_from_url(x) if x else "",
-            return_dtype=pl.Utf8
-        ).alias("hcb_id")
-    ]).select([
-        pl.col("id"),
-        pl.col(hcb_field_id).alias("hcb"),
-        pl.col("hcb_id")
-    ]).filter(
-        # Only include programs with valid HCB IDs (skip malformed URLs)
-        pl.col("hcb_id") != ""
-    )
-    
-    log.info(f"Found {processed_df.height} programs with valid HCB URLs out of {programs_df.height} total programs")
-    if processed_df.height > 0:
-        log.info(f"Sample HCB data: {processed_df.head(3).to_dicts()}")
-    
-    # Generate preview metadata
-    if processed_df.height > 0:
-        try:
-            preview_metadata = MetadataValue.md(processed_df.head(10).to_pandas().to_markdown(index=False))
-        except Exception:
-            preview_metadata = MetadataValue.text(str(processed_df.head(10)))
-    else:
-        preview_metadata = MetadataValue.text("No programs with valid HCB URLs found")
-    
-    return Output(
-        processed_df,
-        metadata={
-            "num_programs": programs_df.height,
-            "num_with_hcb": processed_df.height,
-            "hcb_ids": processed_df["hcb_id"].to_list(),
-            "preview": preview_metadata
-        }
-    )
-
-
-@asset(
-    group_name="unified_ysws_db_processing",
-    description="Fetches HCB financial data and calculates total spent from HCB fund",
-    compute_kind="api_request",
-)
-def ysws_programs_hcb_stats(
-    context: AssetExecutionContext,
-    ysws_programs_hcb_candidates: pl.DataFrame,
-) -> Output[pl.DataFrame]:
-    """
-    Fetches HCB organization data and calculates total spent from HCB fund.
-    
-    Returns:
-        DataFrame with id and total_spent_from_hcb_fund field for Airtable updates
-    """
-    log = context.log
-    input_df = ysws_programs_hcb_candidates
-    
-    total_spent_field_id = UnifiedYSWS.ysws_programs.total_spent_from_hcb_fund
-
-    if input_df.height == 0:
-        log.info("No HCB candidates to process.")
-        return Output(
-            pl.DataFrame(schema={
-                "id": pl.Utf8,
-                total_spent_field_id: pl.Float64,
-            }),
-            metadata={"num_processed": 0, "num_successful": 0, "num_failed": 0}
-        )
-
-    log.info(f"Processing HCB data for {input_df.height} programs")
-
-    successful_records = []
-    failures = []
-
-    for row in input_df.iter_rows(named=True):
-        program_id = row.get("id")
-        hcb_id = row.get("hcb_id")
-        hcb_url = row.get("hcb")
-
-        if not hcb_id:
-            log.warning(f"No HCB ID for program {program_id} (url={hcb_url!r})")
-            failures.append({"id": program_id, "hcb_url": hcb_url, "reason": "No HCB ID extracted"})
-            continue
-
-        try:
-            api_url = f"https://hcb.hackclub.com/api/v3/organizations/{hcb_id}"
-            log.debug(f"Fetching HCB data for {hcb_id}: {api_url}")
-
-            response = requests.get(
-                api_url,
-                headers={"Accept": "application/json"},
-                timeout=30
-            )
-
-            if response.status_code != 200:
-                try:
-                    error_data = response.json()
-                    error_message = error_data.get("message", f"HTTP {response.status_code}")
-                except Exception:
-                    error_message = f"HTTP {response.status_code}"
-
-                log.warning(f"HCB API returned {response.status_code} for {hcb_id}: {response.text}")
-                failures.append({"id": program_id, "hcb_url": hcb_url, "reason": error_message})
-                continue
-
-            data = response.json()
-            balances = data.get("balances", {})
-            total_raised = balances.get("total_raised", 0)
-            balance_cents = balances.get("balance_cents", 0)
-            total_spent_dollars = (total_raised - balance_cents) / 100.0
-
-            successful_records.append({
-                "id": program_id,
-                total_spent_field_id: total_spent_dollars,
-            })
-
-            log.info(f"Successfully processed {hcb_id}: total_raised={total_raised}, balance_cents={balance_cents}, total_spent=${total_spent_dollars:.2f}")
-
-        except requests.exceptions.RequestException as e:
-            log.error(f"Request failed for HCB ID {hcb_id}: {e}")
-            failures.append({"id": program_id, "hcb_url": hcb_url, "reason": f"Request failed: {e}"})
-        except (KeyError, ValueError, TypeError) as e:
-            log.error(f"Error parsing HCB data for {hcb_id}: {e}")
-            failures.append({"id": program_id, "hcb_url": hcb_url, "reason": f"Data parsing error: {e}"})
-        except Exception as e:
-            log.error(f"Unexpected error processing HCB ID {hcb_id}: {e}")
-            failures.append({"id": program_id, "hcb_url": hcb_url, "reason": f"Unexpected error: {e}"})
-
-    if successful_records:
-        output_df = pl.DataFrame(successful_records)
-    else:
-        output_df = pl.DataFrame(schema={
-            "id": pl.Utf8,
-            total_spent_field_id: pl.Float64,
-        })
-
-    successful_count = len(successful_records)
-    failed_count = len(failures)
-    log.info(f"HCB processing completed. Successful: {successful_count}, Failed: {failed_count}")
-    
-    # Generate preview metadata
-    if output_df.height > 0:
-        try:
-            preview_metadata = MetadataValue.md(output_df.head(10).to_pandas().to_markdown(index=False))
-        except Exception:
-            preview_metadata = MetadataValue.text(str(output_df.head(10)))
-    else:
-        preview_metadata = MetadataValue.text("No HCB data processed successfully")
-    
-    metadata = {
-        "num_processed": input_df.height,
-        "num_successful": successful_count,
-        "num_failed": failed_count,
-        "success_rate": round((successful_count / max(input_df.height, 1)) * 100, 2),
-        "preview": preview_metadata,
-    }
-    if failures:
-        try:
-            metadata["failures"] = MetadataValue.md(
-                pl.DataFrame(failures).to_pandas().to_markdown(index=False)
-            )
-        except Exception:
-            metadata["failures"] = MetadataValue.text(str(failures))
-
-    return Output(output_df, metadata=metadata)
 
 
 def _get_signup_analysis_data(search_terms: List[str]) -> pl.DataFrame:
@@ -1839,16 +1627,15 @@ def ysws_programs_sign_up_stats(
 
 @asset(
     group_name="unified_ysws_db_processing",
-    description="Prepares YSWS programs data for Airtable batch update by merging sign-up stats and HCB data.",
+    description="Prepares YSWS programs data for Airtable batch update from sign-up stats. True-spend updates run separately after dbt.",
     compute_kind="data_preparation",
 )
 def ysws_programs_prepared_for_update(
     context: AssetExecutionContext,
     ysws_programs_sign_up_stats: pl.DataFrame,
-    ysws_programs_hcb_stats: pl.DataFrame,
 ) -> Output[pl.DataFrame]:
     """
-    Merges sign-up stats and HCB data for YSWS programs and prepares for Airtable batch update.
+    Prepares sign-up stats for YSWS programs and prepares for Airtable batch update.
     
     Checks for conflicts: if multiple inputs provide different non-null values 
     for the same field for a given program ID, an error is raised. 
@@ -1857,13 +1644,12 @@ def ysws_programs_prepared_for_update(
     log = context.log
     
     # --- 1. Collect and Filter Input DataFrames ---
-    dfs = [ysws_programs_sign_up_stats, ysws_programs_hcb_stats]
+    dfs = [ysws_programs_sign_up_stats]
     
     input_heights = {
         "sign_up_stats": ysws_programs_sign_up_stats.height,
-        "hcb_stats": ysws_programs_hcb_stats.height,
     }
-    log.info(f"Input counts - Sign-up stats: {input_heights['sign_up_stats']}, HCB stats: {input_heights['hcb_stats']}")
+    log.info(f"Input counts - Sign-up stats: {input_heights['sign_up_stats']}")
 
     dfs = [df for df in dfs if not df.is_empty()]
 
@@ -1992,7 +1778,6 @@ def ysws_programs_prepared_for_update(
         metadata={
             "num_records_prepared": final_df.height,
             "num_sign_up_stats_input": input_heights["sign_up_stats"],
-            "num_hcb_stats_input": input_heights["hcb_stats"],
             "update_columns": list(final_df.columns),
             "preview": preview_metadata
         }
@@ -2001,7 +1786,7 @@ def ysws_programs_prepared_for_update(
 
 @asset(
     group_name="unified_ysws_db_processing",
-    description="Updates YSWS programs in Airtable with merged sign-up stats and HCB data.",
+    description="Updates YSWS programs in Airtable with sign-up stats (true-spend costs have a separate post-dbt writer).",
     required_resource_keys={"airtable"},
     compute_kind="airtable_update",
 )
@@ -2010,7 +1795,7 @@ def ysws_programs_update_status(
     ysws_programs_prepared_for_update: pl.DataFrame,
 ) -> Output[None]:
     """
-    Performs batch update of YSWS programs in Airtable with merged sign-up stats and HCB data.
+    Performs batch update of YSWS programs in Airtable with sign-up stats (true-spend costs have a separate post-dbt writer).
     """
     log = context.log
     airtable: AirtableResource = context.resources.airtable
@@ -2443,8 +2228,8 @@ defs = Definitions(
         approved_projects_mention_search_batch,
         ysws_programs_sign_up_stats_candidates,
         ysws_programs_sign_up_stats,
-        ysws_programs_hcb_candidates,
         ysws_programs_hcb_stats,
+        ysws_programs_true_spend_update_status,
         ysws_programs_prepared_for_update,
         ysws_programs_update_status,
         unified_ysws_db_processing_done,
