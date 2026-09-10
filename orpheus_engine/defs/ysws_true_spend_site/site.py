@@ -882,7 +882,7 @@ host; this site classifies every outflow and counts only what left for the
 outside world.
 
 Every page is rendered from the JSON below, so the two never disagree. Static
-files served behind host-level access control. Amounts are US dollars, dates
+files with redacted payment identities. Amounts are US dollars, dates
 ISO-8601, timestamps UTC.
 
 ## Data

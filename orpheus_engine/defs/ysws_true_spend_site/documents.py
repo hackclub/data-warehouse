@@ -532,7 +532,7 @@ def build_index_document(
                 "before HTML, JSON and DuckDB generation. Payment identities and bank "
                 "details are not published. Organizations outside HCB transparency "
                 "mode summarised rather than listed. Roster and organization labels "
-                "are not anonymous; this report remains access-controlled."
+                "remain identifying; free-text redaction is not a guarantee of anonymity."
             ),
         },
         "ysws_programs_with_linked_hcbs": linked,
