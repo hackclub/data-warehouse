@@ -10,18 +10,20 @@ that the current HCB link still matches the snapshot's root.
 
 ## One-time Airtable schema change
 
-In Unified YSWS Projects DB → YSWS Programs, add:
+Replace the existing columns in place. **Do not create additional fields.**
+The previous two-field approval request is superseded and should not be approved.
 
-- `True Spend — Weighted Hours`: number (4 decimal display places).
-- `True Spend — Cost Per Weighted Hour`: currency (2 decimal places).
+Keep `Total Spent From HCB Fund` as the writable spend column; it now receives
+canonical **true spend**, not gross HCB outflow.
 
-Keep `Total Spent From HCB Fund` as the writable spend column for compatibility;
-it now receives canonical **true spend**, not gross HCB outflow.
-
-Change the existing **Cost Per Hour** formula (keep its field ID):
+Convert the existing **Cost Per Hour** field from formula to currency (2 decimal
+places), preserving its name and field ID. The pipeline writes the mart's
+`cost_per_weighted_hour` directly into this field. This keeps shared-root rates
+identical to the website without changing existing project-hour rollups.
+Before conversion, save the old formula for rollback:
 
 ```text
-IF({True Spend — Weighted Hours} > 0, {True Spend — Cost Per Weighted Hour}, BLANK())
+IF(AND({Total Spend}, {Weighted–Total} > 0), {Total Spend} / {Weighted–Total} / 10)
 ```
 
 Change the existing **Total Spend** formula (keep its field ID):
@@ -36,14 +38,14 @@ longer add the estimate on top of the reconciled ledger.
 
 ## Deployment / verification
 
-1. Create the two fields through the reviewed schema-change path.
+1. Confirm browser access to edit the existing Airtable fields.
 2. Deploy the code: the legacy gross-spend writer is removed. The new writer
-   refuses writes until the existing formula dependencies have been updated.
-3. Update the two formulas above in Airtable's UI (the API cannot edit formulas).
+   refuses writes until Cost Per Hour is writable and Total Spend no longer adds postage.
+3. Convert Cost Per Hour and update Total Spend in Airtable's UI (the API cannot change field types or edit formulas).
 4. Materialize `ysws_programs_hcb_stats` and
    `ysws_programs_true_spend_update_status`. No unrelated signup or project
    processing needs to run for this cutover.
-5. Reconcile every matched record's spend, hours and displayed cost/hour against
+5. Reconcile every matched record's spend and displayed cost/hour against
    its canonical mart row. Check zero spend, zero/missing hours, removed HCB
    links, and shared roots. Unknown mappings clear old derived numbers to blank;
    they never fall back to gross spend.

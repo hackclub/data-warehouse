@@ -5,7 +5,7 @@ import polars as pl
 import pytest
 
 from orpheus_engine.defs.unified_ysws_db.true_spend_sync import (
-    PROGRAMS, SPEND_FIELD, HOURS_FIELD, RATE_FIELD, SOURCE_ASSET,
+    PROGRAMS, SPEND_FIELD, RATE_FIELD, SOURCE_ASSET,
     build_true_spend_updates, write_true_spend_updates, ysws_programs_hcb_stats,
 )
 
@@ -26,13 +26,12 @@ def test_shared_root_copies_canonical_rate_without_reallocating_or_recalculating
     assert len(rows) == 2
     for r in rows:
         assert r[SPEND_FIELD] == 120.25
-        assert r[HOURS_FIELD] == 30.0
         assert r[RATE_FIELD] == 4.01  # Direct rounded mart value, not 120.25 / 30.
 
 
 def test_unknown_program_is_null_not_zero_or_old_gross_spend():
     r = build_true_spend_updates(programs("unmatched"), costs()).row(0, named=True)
-    assert all(r[f] is None for f in (SPEND_FIELD, HOURS_FIELD, RATE_FIELD))
+    assert all(r[f] is None for f in (SPEND_FIELD, RATE_FIELD))
 
 
 @pytest.mark.parametrize('url', [None, '', 'https://example.invalid/synthetic-root',
@@ -80,10 +79,8 @@ class FakeTable:
     def schema(self, force=False):
         assert force
         return SimpleNamespace(fields=[] if self.missing else [
-            SimpleNamespace(name=HOURS_FIELD, id="synthetic-hours-field"),
-            SimpleNamespace(name=RATE_FIELD, id="synthetic-rate-field"),
-            SimpleNamespace(name="Cost Per Hour", id=PROGRAMS.cost_per_hour,
-                            options=SimpleNamespace(referenced_field_ids=["synthetic-hours-field", "synthetic-rate-field"])),
+            SimpleNamespace(name="Total Spent From HCB Fund", id=SPEND_FIELD, type="currency"),
+            SimpleNamespace(name="Cost Per Hour", id=RATE_FIELD, type="currency"),
             SimpleNamespace(name="Total Spend", id=PROGRAMS.total_spend,
                             options=SimpleNamespace(referenced_field_ids=[SPEND_FIELD])),
         ])
@@ -97,13 +94,13 @@ def test_writer_preserves_explicit_nulls_and_only_writes_owned_fields():
     updates = build_true_spend_updates(programs("unmatched"), costs())
     assert write_true_spend_updates(table, updates) == 1
     assert table.records == [{"id": "unmatched", "fields": {
-        SPEND_FIELD: None, "synthetic-hours-field": None, "synthetic-rate-field": None,
+        SPEND_FIELD: None, RATE_FIELD: None,
     }}]
 
 
 def test_missing_schema_blocks_writes():
     table = FakeTable(missing=True)
-    with pytest.raises(ValueError, match="approved Airtable field"):
+    with pytest.raises(ValueError, match="writable currency"):
         write_true_spend_updates(table, build_true_spend_updates(programs("record-a"), costs()))
     assert table.records is None
 
@@ -113,6 +110,16 @@ def test_legacy_formulas_block_cutover_before_any_writes():
     schema = table.schema(force=True)
     schema.fields[-1].options.referenced_field_ids.append("synthetic-postage-field")
     table.schema = lambda **kwargs: schema
-    with pytest.raises(ValueError, match="formulas"):
+    with pytest.raises(ValueError, match="formula"):
+        write_true_spend_updates(table, build_true_spend_updates(programs("record-a"), costs()))
+    assert table.records is None
+
+
+def test_old_cost_formula_blocks_writes_until_in_place_conversion():
+    table = FakeTable()
+    schema = table.schema(force=True)
+    schema.fields[1].type = "formula"
+    table.schema = lambda **kwargs: schema
+    with pytest.raises(ValueError, match="writable currency"):
         write_true_spend_updates(table, build_true_spend_updates(programs("record-a"), costs()))
     assert table.records is None

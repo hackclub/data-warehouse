@@ -18,11 +18,9 @@ from ..airtable.generated_ids import AirtableIDs
 
 PROGRAMS = AirtableIDs.unified_ysws_projects_db.ysws_programs
 SPEND_FIELD = PROGRAMS.total_spent_from_hcb_fund
-# Airtable accepts field names in updates. Resolve these approved schema fields
-# at execution time so no fabricated field IDs enter the generated IDs file.
-HOURS_FIELD = "True Spend — Weighted Hours"
-RATE_FIELD = "True Spend — Cost Per Weighted Hour"
-SYNC_FIELDS = (SPEND_FIELD, HOURS_FIELD, RATE_FIELD)
+# Replace the existing columns in place; preserve their IDs and consumers.
+RATE_FIELD = PROGRAMS.cost_per_hour
+SYNC_FIELDS = (SPEND_FIELD, RATE_FIELD)
 SOURCE_ASSET = AssetKey(["hcb_ysws_true_spend_analytics", "ysws_spend_by_program"])
 SOURCE_SQL = """
 SELECT root_slug, member_ids, true_spend_dollars, weighted_hours,
@@ -65,7 +63,6 @@ def build_true_spend_updates(programs: pl.DataFrame, costs: pl.DataFrame) -> pl.
         rows.append({
             "id": program["id"],
             SPEND_FIELD: float(cost["true_spend_dollars"]) if cost else None,
-            HOURS_FIELD: float(cost["weighted_hours"]) if cost and cost["weighted_hours"] is not None else None,
             RATE_FIELD: float(cost["cost_per_weighted_hour"]) if cost and cost["cost_per_weighted_hour"] is not None else None,
         })
     return pl.DataFrame(rows, schema={"id": pl.String, **{f: pl.Float64 for f in SYNC_FIELDS}})
@@ -102,24 +99,18 @@ def ysws_programs_hcb_stats(context: AssetExecutionContext) -> Output[pl.DataFra
 
 def write_true_spend_updates(table, updates: pl.DataFrame) -> int:
     schema = table.schema(force=True)
-    fields = {f.name: f.id for f in schema.fields}
-    for name in (HOURS_FIELD, RATE_FIELD):
-        if name not in fields:
-            raise ValueError(f"Create the approved Airtable field first: {name}")
     by_id = {f.id: f for f in schema.fields}
-    expected_references = {
-        PROGRAMS.cost_per_hour: {fields[HOURS_FIELD], fields[RATE_FIELD]},
-        PROGRAMS.total_spend: {SPEND_FIELD},
-    }
-    for field_id, expected in expected_references.items():
-        field = by_id.get(field_id)
-        actual = set(getattr(getattr(field, "options", None), "referenced_field_ids", None) or [])
-        if actual != expected:
-            raise ValueError("Update Airtable Cost Per Hour and Total Spend formulas to canonical true spend before syncing")
+    for field_id in SYNC_FIELDS:
+        if getattr(by_id.get(field_id), "type", None) not in ("currency", "number"):
+            raise ValueError("Existing spend and Cost Per Hour columns must be writable currency fields before syncing")
+    field = by_id.get(PROGRAMS.total_spend)
+    actual = set(getattr(getattr(field, "options", None), "referenced_field_ids", None) or [])
+    if actual != {SPEND_FIELD}:
+        raise ValueError("Update existing Total Spend formula to use only true spend before syncing")
     # Explicit nulls are intentional clears. The generic resource helper drops
     # None, which would leave old rates after hours or HCB mappings disappear.
     records = [{"id": row["id"], "fields": {
-        fields.get(k, k): row[k] for k in SYNC_FIELDS
+        k: row[k] for k in SYNC_FIELDS
     }} for row in updates.iter_rows(named=True)]
     if not records:
         return 0
