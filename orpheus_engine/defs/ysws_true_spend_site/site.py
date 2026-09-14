@@ -868,11 +868,14 @@ def render_program_page(document: Dict[str, Any]) -> str:
 
 def render_llms_txt(index_document: Dict[str, Any], example_slug: str) -> str:
     """
-    Barebones map for machines, per the llms.txt convention: what this is, and
-    where the JSON is. The JSON is self-describing, so this does not restate its
-    fields -- a field list here would be one more thing to drift.
+    Map for machines, per the llms.txt convention: what this is, how to query
+    it, and where the files are. DuckDB comes first because an agent that can
+    run SQL gets every answer from one 8 MB file instead of walking hundreds of
+    JSON documents. The JSON is self-describing, so its fields are not restated
+    here -- a field list would be one more thing to drift.
     """
     meta = index_document["metadata"]
+    db_url = f"https://{CUSTOM_DOMAIN}/{DUCKDB_FILENAME}"
     return f"""# YSWS true spend
 
 What each Hack Club YSWS program actually spent, published from the Hack Club
@@ -884,6 +887,64 @@ outside world.
 Every page is rendered from the JSON below, so the two never disagree. Static
 files with redacted payment identities. Amounts are US dollars, dates
 ISO-8601, timestamps UTC.
+
+## How to query this (agents: read this first)
+
+If you can run DuckDB (the `duckdb` CLI, the Python `duckdb` package, or any
+DuckDB client, 1.0 or newer), use the database and skip the JSON. It is the
+same data as every page and JSON file, already flattened into tables, and one
+query answers questions that would otherwise take hundreds of HTTP fetches.
+The HTML and JSON are for people and for environments with no DuckDB.
+
+Query it in place over HTTPS (the host supports range requests, so only the
+pages you touch are fetched):
+
+    INSTALL httpfs; LOAD httpfs;
+    ATTACH '{db_url}' AS ts (READ_ONLY);
+    SELECT name, true_spend_dollars, cost_per_weighted_hour
+    FROM ts.programs ORDER BY true_spend_dollars DESC LIMIT 10;
+
+Or download it once (about 8 MB) and open it locally, which is faster for
+anything beyond a couple of queries:
+
+    curl -sLO {db_url}
+    duckdb {DUCKDB_FILENAME} "SELECT name, true_spend_dollars FROM programs ORDER BY 2 DESC LIMIT 10"
+
+In Python: `duckdb.connect("{DUCKDB_FILENAME}", read_only=True).sql("...")`.
+
+Tables, one row per:
+
+- metadata: the single row of freshness timestamps (hcb_data_pulled,
+  spend_recalculated, page_built) and the transaction-detail notice.
+- programs: program. true_spend_dollars is the headline number; the other
+  *_dollars columns are the buckets it was separated from (author_fund,
+  returned_to_hq, intra_tree, internal_cost, ...). gross_outflow_dollars is
+  what HCB would report. weighted_hours and cost_per_weighted_hour come from
+  the Unified YSWS DB. is_ysws_program is false for marketing-style rows.
+- program_orgs: HCB org in a program's tree, with parent_org_slug and depth.
+- spend_transactions: outflow across all programs. category (A-D, I, X) and
+  bucket classify it; counted_as_spend is whether it is in true_spend_dollars.
+  Filter on counted_as_spend for spend questions.
+- revenue_transactions: inflow; is_intra_tree marks money from inside the
+  same program tree, which is not external revenue.
+- withheld_orgs: orgs whose detail is summarised, not listed.
+- unmatched_orgs: HCB orgs no program claims.
+- unlinked_programs: YSWS programs with no HCB link.
+- budgets: one person's YSWS individual budget (see the rule below).
+- budget_transactions: its inflows and outflows, with counted_as_personal_spend.
+- people_without_budget: people the roster expects a budget for but none links.
+
+Rules that matter for correct SQL:
+
+- Never add budgets.personal_spend_dollars to programs.true_spend_dollars.
+  A program funding a budget is not the program's spend, and a budget sending
+  money back to an org is not the person's spend.
+- date columns are ISO-8601 strings; CAST(date AS DATE) to do arithmetic.
+- programs.true_spend_dollars = sum of spend_transactions.amount_dollars
+  where counted_as_spend, plus withheld_orgs.spend_dollars for that program
+  (orgs outside HCB transparency mode are summarised, not listed row by row).
+- Use describe / information_schema.columns for the full column list; the
+  tables are the source of truth, not this file.
 
 ## Data
 
@@ -906,14 +967,9 @@ NOT the program's spend, and the two sets of dollars must never be added
 together. Money a budget sends back to an HCB org is likewise not counted as
 that person's spend, because the receiving org's ledger already counts it.
 
-The same data is also published as a DuckDB database at /{DUCKDB_FILENAME}, for
-querying rather than walking the JSON, with tables programs, program_orgs,
-spend_transactions, revenue_transactions, withheld_orgs, unmatched_orgs,
-unlinked_programs, budgets, budget_transactions, people_without_budget and
-metadata:
-
-    duckdb {DUCKDB_FILENAME}
-    SELECT name, true_spend_dollars FROM programs ORDER BY 2 DESC LIMIT 10;
+The DuckDB database at /{DUCKDB_FILENAME} is a third rendering of these same
+documents: nothing is in it that is not on a page, and nothing on a page is
+missing from it.
 
 ## Mapping contract
 
@@ -942,7 +998,7 @@ def _machine_readable(json_path: str = "index.json", base: str = "") -> str:
         f'{_link(base + json_path, json_path)} · '
         f'{_link(base + "llms.txt", "llms.txt")} · '
         f'{_link(base + DUCKDB_FILENAME, DUCKDB_FILENAME)} '
-        "(use duckdb if you can get access in your environment)</p>"
+        "(prefer the DuckDB file if you can run duckdb; llms.txt shows how)</p>"
     )
 
 
@@ -966,7 +1022,10 @@ disagree.
   breakdown, HCB org tree, and every transaction counted.
 - `budgets/<slug>.json` / `.html` — one person's YSWS individual budget:
   totals, bucket breakdown, and every transaction behind them.
-- `llms.txt` — the JSON layout and what the numbers mean.
+- `ysws-true-spend.duckdb` — every table above in one file; query it
+  in place with DuckDB's httpfs or download it. Preferred for agents.
+- `llms.txt` — how to query the DuckDB, the JSON layout, and what the
+  numbers mean.
 
 {len(linked)} programs · true spend {money(spend)} ·
 {len(index_document["ysws_individual_budgets"]) + len(index_document["ysws_individual_budgets_with_no_linked_person"])} individual budgets · built
