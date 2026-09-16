@@ -759,7 +759,10 @@ def _withheld_note(document: Dict[str, Any], kind: str) -> str:
     lines = "".join(
         f'<li>{esc(w["org_name"])} <span class="note">({esc(w["org_slug"])})</span>: '
         f'{w[f"{kind}_transaction_count"]:,} {label} totalling '
-        f'{money(w[f"{kind}_dollars"])}</li>'
+        f'{money(w[f"{kind}_dollars"])}'
+        + (f'; {w["true_spend_transaction_count"]:,} counted as true spend '
+           f'totalling {money(w["true_spend_dollars"])}' if kind == "spend" else "")
+        + '</li>'
         for w in withheld
     )
     return ('<p class="note">Not listed below, because HCB does not publish them '
@@ -925,6 +928,12 @@ hcb_orgs_no_program_claims.
 ## Transaction detail
 
 {meta["transaction_detail"]}
+
+For every program, sum spend_transactions.amount_dollars where counted_as_spend
+is true, then add withheld_orgs.true_spend_dollars to reconcile with
+totals.true_spend_dollars. With no withheld true spend, the listed rows alone
+must equal the headline. withheld_orgs.spend_dollars is gross outflow, not true
+spend; do not use it for this reconciliation. Negative marketing offsets count.
 
 Site: https://github.com/hackclub/ysws-true-spend
 Source: https://github.com/hackclub/data-warehouse (asset ysws_true_spend_site)

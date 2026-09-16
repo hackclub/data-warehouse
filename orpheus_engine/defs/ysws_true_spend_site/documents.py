@@ -275,6 +275,10 @@ def _withheld(
             "hcb_url": HCB_ORG_URL.format(slug=slug),
             "reason": "not in HCB transparency mode",
             "spend_transaction_count": len(spend),
+            "true_spend_transaction_count": sum(bool(t["is_true_spend"]) for t in spend),
+            "true_spend_dollars": _money(sum(
+                (_dec(t["outflow_dollars"]) for t in spend if t["is_true_spend"]), Decimal(0)
+            )),
             "spend_dollars": _money(sum((_dec(t["outflow_dollars"]) for t in spend), Decimal(0))),
             "revenue_transaction_count": len(revenue),
             "revenue_dollars": _money(sum((_dec(t["amount_dollars"]) for t in revenue), Decimal(0))),

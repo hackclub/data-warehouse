@@ -1126,3 +1126,112 @@ def test_hcb_dbt_sources_wait_for_the_real_mirror_asset():
             "name": table["name"], "meta": table.get("meta", {}),
         })
         assert key == AssetKey(["hcb_warehouse_mirror"]), table["name"]
+
+
+def test_reconciliation_checks_every_index_program_and_negative_offsets():
+    from copy import deepcopy
+    import pytest
+    from orpheus_engine.defs.ysws_true_spend_site.reconciliation import reconcile_programs
+
+    data = _site_data()
+    data.spend_by_program["fallout"].append(_spend_txn(
+        spend_category="M", outflow_dollars=Decimal("-27.07"),
+    ))
+    data.programs[0]["true_spend_dollars"] -= Decimal("27.07")
+    documents = build_documents(data, GENERATED_AT)
+    # A second, marketing program must be checked as well, not just the first
+    # linked program. All data is synthetic.
+    other = deepcopy(documents["programs/fallout.json"])
+    other.update(root_slug="synthetic-marketing", json="programs/synthetic-marketing.json")
+    documents[other["json"]] = other
+    documents["index.json"]["ysws_marketing"].append({
+        "root_slug": other["root_slug"], "json": other["json"],
+        "true_spend_dollars": other["totals"]["true_spend_dollars"],
+    })
+    rows = reconcile_programs(documents)
+    assert len(rows) == 2
+    assert rows[0]["listed"] == Decimal("272.93")
+    assert rows[0]["withheld"] == 0
+    # A missing child row/cap must fail, even if all other programs match.
+    other["spend_transactions"].pop(1)
+    with pytest.raises(ValueError, match="synthetic-marketing"):
+        reconcile_programs(documents)
+
+
+def test_private_child_true_spend_reconciles_without_publishing_detail():
+    import json
+    import pytest
+    from orpheus_engine.defs.ysws_true_spend_site.reconciliation import validate_site_files
+
+    data = _site_data()
+    data.orgs_by_program["fallout"][1]["is_public"] = False
+    # Model a child with many true-spend rows plus a non-spend internal leg.
+    data.spend_by_program["fallout"] = [data.spend_by_program["fallout"][0]] + [
+        _spend_txn(org_slug="fallout-sub", outflow_dollars=Decimal("1.01"),
+                   description="PRIVATE SYNTHETIC CANARY") for _ in range(113)
+    ] + [_spend_txn(org_slug="fallout-sub", outflow_dollars=Decimal("41.81"),
+                   spend_category="I", is_true_spend=False)]
+    data.programs[0]["true_spend_dollars"] = Decimal("364.13")
+    files = render_site(data, GENERATED_AT)
+    rows = validate_site_files(files)
+    assert rows[0]["listed"] == Decimal("250")
+    assert rows[0]["withheld"] == Decimal("114.13")
+    doc = json.loads(files["programs/fallout.json"])
+    withheld = doc["withheld_orgs"][0]
+    assert withheld["true_spend_transaction_count"] == 113
+    assert withheld["spend_transaction_count"] == 114
+    assert withheld["spend_dollars"] == 155.94
+    assert all(t["org_slug"] != "fallout-sub" for t in doc["spend_transactions"])
+    assert "PRIVATE SYNTHETIC CANARY" not in files["programs/fallout.json"]
+    assert "113 counted as true spend totalling $114.13" in files["programs/fallout.html"]
+    # An empty withhold declaration cannot excuse missing rows.
+    doc["withheld_orgs"] = []
+    files["programs/fallout.json"] = json.dumps(doc)
+    with pytest.raises(ValueError, match="fallout"):
+        validate_site_files(files)
+
+
+def test_public_child_rows_are_never_capped_or_dropped_by_redaction():
+    from orpheus_engine.defs.ysws_true_spend_site.reconciliation import reconcile_programs
+
+    data = _site_data()
+    data.spend_by_program["fallout"] = [
+        _spend_txn(org_slug="fallout-sub", outflow_dollars=Decimal("1.01"),
+                   private_recipient_name="Synthetic Recipient",
+                   description="Parts for Synthetic Recipient") for _ in range(113)
+    ]
+    data.programs[0]["true_spend_dollars"] = Decimal("114.13")
+    docs = build_documents(data, GENERATED_AT)
+    txns = docs["programs/fallout.json"]["spend_transactions"]
+    assert len(txns) == 113
+    assert all("Synthetic Recipient" not in t["description"] for t in txns)
+    assert reconcile_programs(docs)[0]["listed"] == Decimal("114.13")
+
+
+def test_publication_build_rejects_unexplained_spend_gap(monkeypatch):
+    import pytest
+    from orpheus_engine.defs.ysws_true_spend_site import definitions
+
+    class Connection:
+        def close(self):
+            pass
+
+    data = _site_data()
+    data.spend_by_program["fallout"].pop(1)
+    monkeypatch.setattr(definitions, "_get_db_connection", Connection)
+    monkeypatch.setattr(definitions, "fetch_site_data", lambda conn: data)
+    with pytest.raises(ValueError, match="fallout"):
+        definitions.build_site_files(GENERATED_AT)
+
+
+def test_reconciliation_rejects_index_total_drift_and_missing_program():
+    import pytest
+    from orpheus_engine.defs.ysws_true_spend_site.reconciliation import reconcile_programs
+
+    docs = build_documents(_site_data(), GENERATED_AT)
+    docs["index.json"]["ysws_programs_with_linked_hcbs"][0]["true_spend_dollars"] = 301
+    with pytest.raises(ValueError, match="fallout"):
+        reconcile_programs(docs)
+    del docs["programs/fallout.json"]
+    with pytest.raises(KeyError):
+        reconcile_programs(docs)

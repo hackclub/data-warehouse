@@ -40,6 +40,7 @@ from dagster import (
 from .data import fetch_site_data
 from .freshness import dagster_times_from_db, dagster_times_from_instance
 from .site import render_site
+from .reconciliation import validate_site_files
 
 DEFAULT_REPO = "hackclub/ysws-true-spend"
 DEFAULT_BRANCH = "main"
@@ -235,6 +236,7 @@ def build_site_files(
         data.freshness.recalculated_at = recalculated
 
     files = render_site(data, generated_at)
+    validate_site_files(files)
     total_spend = sum(
         (Decimal(str(p["true_spend_dollars"] or 0)) for p in data.programs), Decimal(0)
     )
