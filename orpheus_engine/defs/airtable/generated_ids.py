@@ -3090,4 +3090,94 @@ class AirtableIDs:
             ai_screenplay_error = "fldXsSqMNpcz1aCEL"  # Name: AI - Screenplay Error
 
 
+    class wrangler:
+        """IDs for Base 'wrangler' (ID: appznGjUoC1o6jLZd)"""
+        BASE_ID = "appznGjUoC1o6jLZd"
+
+        class ysws_project_submission:
+            """IDs for Table 'ysws_project_submission' (ID: tblAv8vzzQClBi5xR)"""
+            TABLE_ID = "tblAv8vzzQClBi5xR"
+
+            code_url = "fldzfiDez5YPeGCuC"  # Name: Code URL
+            playable_url = "fldGrp8IDHny71VGW"  # Name: Playable URL
+            how_did_you_hear_about_this = "fldf5uEkUU0liAZ0H"  # Name: How did you hear about this?
+            what_are_we_doing_well = "fld13s9c5Dae7Mrco"  # Name: What are we doing well?
+            how_can_we_improve = "fldb8Y1ysHEEes39l"  # Name: How can we improve?
+            first_name = "fldif0TQkq3aWdJ9b"  # Name: First Name
+            last_name = "fld3rdb40cgCkjtz5"  # Name: Last Name
+            email = "fldexMLda66MbQuTf"  # Name: Email
+            phone = "fldAAXPoGOkzoaX5d"  # Name: Phone
+            screenshot = "fldfrDLbu4MtznQUu"  # Name: Screenshot
+            description = "fldVOT6IT4q5kqjeY"  # Name: Description
+            git_hub_username = "fld5PDzo9R4IWqMQg"  # Name: GitHub Username
+            shipping_first_name = "fldA9U9JClGLMjGRE"  # Name: Shipping First Name
+            shipping_last_name = "fldKnIGAQwMBRhhFa"  # Name: Shipping Last Name
+            address_line_1 = "fld2YEcMnMtS7fXmA"  # Name: Address (Line 1)
+            address_line_2 = "fldSGl7fG9dc9ovql"  # Name: Address (Line 2)
+            city = "fldZ0szHx38mYum0x"  # Name: City
+            state_province = "fld4vRJLJtcxCaFG9"  # Name: State / Province
+            country = "fldqdA0rPO2LAow3T"  # Name: Country
+            zip_postal_code = "fldbrhEnaZajRCoOY"  # Name: ZIP / Postal Code
+            birthday = "fldTJGyCHumdkg19N"  # Name: Birthday
+            linked_lapse_lookout_hackatime_links = "fldb1ZC2rnxUGe8Nn"  # Name: Linked lapse/lookout/hackatime links
+            ai_usage_disclaimer = "fldX30uQp3bxWglaT"  # Name: AI usage disclaimer
+            hours_claimed = "fldKdjdbD1JKDvPYi"  # Name: Hours claimed
+            optional_override_hours_spent = "fldvVS8bt2FBQf8m9"  # Name: Optional - Override Hours Spent
+            optional_override_hours_spent_justification = "fldqBWaZaAXIW2HCX"  # Name: Optional - Override Hours Spent Justification
+            automation_unified_justification = "fldq0fSVuGsIOGCF1"  # Name: Automation - Unified Justification
+            justification_hackatime_project_name_s_date_range_s = "fldE1oolMJwLAQ3HA"  # Name: Justification - Hackatime Project Name(s) + Date Range(s)
+            justification_submitter_hackatime_id = "fldfxRTCYGJCajVzo"  # Name: Justification - Submitter Hackatime ID
+            justification_lapse_links_comma_separated = "fldmbmsSsbiBdypl6"  # Name: Justification - Lapse Links, comma-separated
+            justification_specific_technical_features = "fld6qk67nNnYH3dCF"  # Name: Justification - Specific Technical Features
+            justification_deflation_justification = "fldSz5Ex5cYzAptGi"  # Name: Justification - Deflation Justification
+            justification_alternate_tracking_method = "fldZWkFIsrHNkLo5w"  # Name: Justification - Alternate Tracking Method
+            justification_additional_justification = "fldQW1HY50t9zIA7K"  # Name: Justification - Additional Justification
+            optional_override_duplicate_justification = "fldwtmsBpysJqsjwA"  # Name: Optional - Override Duplicate Justification
+            optional_override_age_justification = "fldKKaSeYlLzXQ8Oe"  # Name: Optional - Override Age Justification
+            automation_submit_to_unified_ysws = "fld2HOwglKY4FR31N"  # Name: Automation - Submit to Unified YSWS
+            automation_error = "fldgtvRggjo9LSzxI"  # Name: Automation - Error
+            automation_first_submitted_at = "fldx5r3R6U0JBBmNc"  # Name: Automation - First Submitted At
+            automation_last_updated_at = "fldduS82Ib3onJlhR"  # Name: Automation - Last Updated At
+            automation_ysws_record_id = "fldnv9yi061JyDRFr"  # Name: Automation - YSWS Record ID
+            loops_special_set_full_name = "fldW49rQug6OUesx2"  # Name: Loops - Special - setFullName
+            loops_birthday = "fldGkQFiaT70raplK"  # Name: Loops - birthday
+            loops_special_set_full_address = "fld4rj0adG8IGen2f"  # Name: Loops - Special - setFullAddress
+            automation_status = "fldvya1GU1tyf7cAA"  # Name: Automation - Status
+            review_status = "fldTizXoFOyq70FMP"  # Name: Review status
+
+        class shop_queue:
+            """IDs for Table 'shop_queue' (ID: tblb4ioz8nOlk9NEJ)"""
+            TABLE_ID = "tblb4ioz8nOlk9NEJ"
+
+            item = "flduxJRxLyr4ndyfI"  # Name: Item
+            cost = "fldgTITd5sCfN7tFx"  # Name: Cost
+            email = "fldNzl71hmFmlkO4b"  # Name: Email
+            shop_hours_from_currency = "fldvHiAxXxGSF3gMA"  # Name: Shop hours (from currency)
+            currency = "fldNsznCZ8Zzyn0eC"  # Name: currency
+            status = "fldamNCOdH8vFC9tV"  # Name: status
+
+        class currency:
+            """IDs for Table 'currency' (ID: tblhrthkzWrvLNg39)"""
+            TABLE_ID = "tblhrthkzWrvLNg39"
+
+            email = "fld2yqfS9d0o2criQ"  # Name: Email
+            accepted_hours = "fldL4gY7mr7xvWWTe"  # Name: Accepted hours
+            rejected_hours = "fldc7oKPbdoi3TZ9E"  # Name: Rejected hours
+            pending_hours = "fld7raQR7LdpT4uXZ"  # Name: Pending hours
+            manual_hours_added = "fldOozFXzdgPrMocM"  # Name: Manual hours added
+            shop_hours = "fldJWi3OgWSf0Abfh"  # Name: Shop hours
+            spent_hours = "fldDGjbjlSYbkOkl6"  # Name: Spent hours
+            loops_wrangler_sign_up_at = "fld32R7IzjdgroPa4"  # Name: Loops - wranglerSignUpAt
+            loops_wrangler_shopped_at = "fldbHd7ReZUgUbET1"  # Name: Loops - wranglerShoppedAt
+            loops_list_wrangler = "fldGXVfqYk5u0a3N4"  # Name: Loops List - Wrangler
+            shop_queue = "fldifnCxEte5VNKvi"  # Name: shop queue
+
+        class ysws_config:
+            """IDs for Table 'ysws_config' (ID: tbls0agmh7GVPnlhK)"""
+            TABLE_ID = "tbls0agmh7GVPnlhK"
+
+            key = "fldKYQXqaxsukzgFj"  # Name: Key
+            value = "fld0p2vciXHyUrYQF"  # Name: Value
+
+
 # fmt: on

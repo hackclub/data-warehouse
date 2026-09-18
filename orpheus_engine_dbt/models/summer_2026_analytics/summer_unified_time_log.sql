@@ -228,7 +228,7 @@ WITH program_windows AS (
         -- Juice has no Hackatime alias so it shares only same-repo-same-day URL
         -- dedup, which is negligible across these distinct programs.
         ('juice',      TIMESTAMP WITH TIME ZONE '2025-01-24 00:00:00+00',
-                       TIMESTAMP WITH TIME ZONE '2025-05-12 00:00:00+00')
+                       TIMESTAMP WITH TIME ZONE '2025-05-12 00:00:00+00'),
         -- Hackatime + custom devlog/journal time for coding programs is the
         -- credited-hours core of this model, but it is now the SINGLE activity
         -- log for ALL Summer 2026 programs: the daily-grain and activity-only
@@ -241,6 +241,9 @@ WITH program_windows AS (
         -- switches to app-native user_daily_activity (section 6b) from
         -- 2026-04-22 onward; the run window below closes the Hackatime path at
         -- the handoff so the two never overlap.
+        ('wrangler', TIMESTAMP WITH TIME ZONE '2026-08-10 00:00:00+00',
+                   TIMESTAMP WITH TIME ZONE '2026-09-30 00:00:00+00')
+    
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -1516,6 +1519,21 @@ high_seas_ht_claims AS (
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
+wrangler_ht_claims AS (
+    SELECT 'wrangler'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(hp."email"))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(hp."email")), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(hp."email")), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(hp."email")), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(hp."linked_lapse_lookout_hackatime_links")) AS hackatime_alias,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        TIMESTAMP WITH TIME ZONE '2026-08-10 00:00:00+00' AS claim_start_ts
+    FROM {{ source('airtable_wrangler', 'ysws_project_submission') }} hp
+    WHERE hp."linked_lapse_lookout_hackatime_links" IS NOT NULL AND hp."linked_lapse_lookout_hackatime_links" <> ''
+),
+
 all_claims_raw AS (
     SELECT * FROM stardance_ht_claims
     UNION ALL SELECT * FROM flavortown_ht_claims
@@ -1534,6 +1552,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM carnival_ht_claims
     UNION ALL SELECT * FROM moonshot_ht_claims
     UNION ALL SELECT * FROM high_seas_ht_claims
+    UNION ALL SELECT * FROM wrangler_ht_claims
 ),
 
 all_claims AS (
