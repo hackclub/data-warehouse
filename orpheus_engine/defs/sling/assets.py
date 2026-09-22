@@ -81,6 +81,7 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "CARNIVAL_COOLIFY_URL",
     "ATTEND_COOLIFY_URL",
     "THESEUS_COOLIFY_URL",
+    "HALF_LIFE_DATABASE_URL",
     "WAREHOUSE_COOLIFY_URL",
 ]
 
@@ -319,6 +320,11 @@ hcb_db_connection = SlingConnectionResource(
     ssh_tunnel=EnvVar("HCB_SSH_TUNNEL"),
     ssh_private_key=_get_hcb_ssh_private_key(),
 )
+half_life_db_connection = SlingConnectionResource(
+    name="HALF_LIFE_DB",
+    type="postgres",
+    connection_string=EnvVar("HALF_LIFE_DATABASE_URL"),
+)
 
 # 2. Target Connection (Warehouse Database)
 warehouse_db_connection = SlingConnectionResource(
@@ -359,6 +365,7 @@ sling_replication_resource = SlingResource(
         joe_db_connection,
         auth_db_connection,
         hcb_db_connection,
+        half_life_db_connection,
         warehouse_db_connection,
     ]
 )
@@ -3782,6 +3789,80 @@ def auth_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=auth_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+half_life_replication_config = {
+    "source": "HALF_LIFE_DB",
+    "target": "WAREHOUSE_DB",
+
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "half_life.{stream_table}",
+    },
+
+    "streams": {
+        "public.hackatime_link": {
+            "select": [
+                "id", "themeProjectId", "hackatimeProject", "createdAt",
+            ],
+        },
+        "public.post": {
+            "select": [
+                "id", "userId", "themeProjectId", "status", "publishedAt",
+                "createdAt", "updatedAt", "deletedAt", "kind",
+            ],
+        },
+        "public.program_settings": {
+            "select": [
+                "id", "eventStartDate", "programTimezone", "updatedAt",
+            ],
+        },
+        "public.session_timelapse": {
+            "select": [
+                "id", "workSessionId", "provider", "coveredSeconds",
+                "createdAt",
+            ],
+        },
+        "public.theme_project": {
+            "select": [
+                "id", "userId", "title", "githubRepo", "createdAt",
+                "updatedAt", "deletedAt",
+            ],
+        },
+        "public.user": {
+            "select": [
+                "id", "email", "createdAt", "updatedAt", "slackId",
+                "hackatimeUserId", "joinedProgramAt", "fraudFlagged",
+            ],
+        },
+        "public.work_session": {
+            "select": [
+                "id", "themeProjectId", "hoursClaimed", "hoursSource",
+                "effectiveDate", "createdAt", "updatedAt", "deletedAt",
+            ],
+        },
+    },
+}
+
+@dg.asset(
+    name="half_life_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def half_life_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the entire Half Life DB → warehouse in a single shot."""
+    context.log.info("Starting Half Life → warehouse Sling replication")
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=half_life_replication_config,
     ):
         pass
 
