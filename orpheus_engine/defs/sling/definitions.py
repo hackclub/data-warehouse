@@ -35,6 +35,7 @@ from .assets import (
     # points somewhere real; see the config comment in assets.py.
     joe_warehouse_mirror,
     auth_warehouse_mirror,  # absolute minimum permissions for monthly active stats
+    phantom_warehouse_mirror,
     sling_replication_resource,
 )
 
@@ -69,6 +70,7 @@ defs = Definitions(
         hcb_warehouse_mirror,
         # review_warehouse_mirror: source DB gone, see import comment above.
         joe_warehouse_mirror,
+        phantom_warehouse_mirror,
         auth_warehouse_mirror,
     ],
     resources={

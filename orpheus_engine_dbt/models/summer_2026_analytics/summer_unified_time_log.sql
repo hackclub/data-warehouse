@@ -228,7 +228,7 @@ WITH program_windows AS (
         -- Juice has no Hackatime alias so it shares only same-repo-same-day URL
         -- dedup, which is negligible across these distinct programs.
         ('juice',      TIMESTAMP WITH TIME ZONE '2025-01-24 00:00:00+00',
-                       TIMESTAMP WITH TIME ZONE '2025-05-12 00:00:00+00')
+                       TIMESTAMP WITH TIME ZONE '2025-05-12 00:00:00+00'),
         -- Hackatime + custom devlog/journal time for coding programs is the
         -- credited-hours core of this model, but it is now the SINGLE activity
         -- log for ALL Summer 2026 programs: the daily-grain and activity-only
@@ -241,6 +241,9 @@ WITH program_windows AS (
         -- switches to app-native user_daily_activity (section 6b) from
         -- 2026-04-22 onward; the run window below closes the Hackatime path at
         -- the handoff so the two never overlap.
+        ('phantom', TIMESTAMP WITH TIME ZONE '2026-09-17 00:00:00+00',
+                   NULL::timestamptz)
+    
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -1516,6 +1519,23 @@ high_seas_ht_claims AS (
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
+phantom_ht_claims AS (
+    SELECT 'phantom'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u."email"))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u."email")), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u."email")), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u."email")), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias_val)) AS hackatime_alias,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        hp."created_at" AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('phantom', 'projects') }} hp
+    JOIN {{ source('phantom', 'users') }} u ON u."id" = hp."user_id"
+    CROSS JOIN LATERAL unnest(string_to_array(hp."hackatime_projects", ',')) AS alias_val
+    WHERE alias_val IS NOT NULL AND alias_val <> ''
+),
+
 all_claims_raw AS (
     SELECT * FROM stardance_ht_claims
     UNION ALL SELECT * FROM flavortown_ht_claims
@@ -1534,6 +1554,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM carnival_ht_claims
     UNION ALL SELECT * FROM moonshot_ht_claims
     UNION ALL SELECT * FROM high_seas_ht_claims
+    UNION ALL SELECT * FROM phantom_ht_claims
 ),
 
 all_claims AS (
