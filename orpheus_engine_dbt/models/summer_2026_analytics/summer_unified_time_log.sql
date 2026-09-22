@@ -228,7 +228,7 @@ WITH program_windows AS (
         -- Juice has no Hackatime alias so it shares only same-repo-same-day URL
         -- dedup, which is negligible across these distinct programs.
         ('juice',      TIMESTAMP WITH TIME ZONE '2025-01-24 00:00:00+00',
-                       TIMESTAMP WITH TIME ZONE '2025-05-12 00:00:00+00')
+                       TIMESTAMP WITH TIME ZONE '2025-05-12 00:00:00+00'),
         -- Hackatime + custom devlog/journal time for coding programs is the
         -- credited-hours core of this model, but it is now the SINGLE activity
         -- log for ALL Summer 2026 programs: the daily-grain and activity-only
@@ -241,6 +241,9 @@ WITH program_windows AS (
         -- switches to app-native user_daily_activity (section 6b) from
         -- 2026-04-22 onward; the run window below closes the Hackatime path at
         -- the handoff so the two never overlap.
+        ('half_life', TIMESTAMP WITH TIME ZONE '2026-09-14 00:00:00+00',
+                   NULL::timestamptz)
+    
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -1516,6 +1519,92 @@ high_seas_ht_claims AS (
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
+-- Half Life: DAU = Hackatime activity on explicitly linked aliases OR a
+-- non-deleted journal/devlog OR attached timelapse OR published participant reel.
+-- Starts 2026-09-14 in America/New_York, no end date; timestamps are stored UTC.
+-- Journals tagged HACKATIME_TRACKED and timelapse evidence mark activity with
+-- zero extra hours, preventing the same coding/work time from being added twice.
+-- Use the warehouse's hardware_build path to retain zero-hour activity markers.
+-- Source audit 2026-09-22: 2 users, 0 fraud flags, 0 sessions/claimed hours,
+-- 0 Hackatime links, 1 published IDEA reel. Excluded fraud hours currently 0.
+-- MANUAL hours are server-validated to 0..24 per entry; the warehouse additionally
+-- caps custom time per user-day. Project soft deletion is not a fraud signal.
+half_life_users_norm AS (
+    SELECT id,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(email)), '+', 1)
+        END AS user_email
+    FROM {{ source('half_life', 'user') }}
+    WHERE NOT COALESCE("fraudFlagged", FALSE)
+      AND NULLIF(BTRIM(email), '') IS NOT NULL
+),
+half_life_ht_claims AS (
+    SELECT DISTINCT
+        'half_life'::text AS program_name,
+        u.user_email,
+        LOWER(BTRIM(h."hackatimeProject"))::text AS hackatime_alias,
+        p.title::text AS project_name,
+        NULLIF(BTRIM(p."githubRepo"), '')::text AS code_url,
+        GREATEST(h."createdAt" AT TIME ZONE 'UTC',
+                 TIMESTAMPTZ '2026-09-14 00:00:00 America/New_York') AS claim_start_ts
+    FROM {{ source('half_life', 'hackatime_link') }} h
+    JOIN {{ source('half_life', 'theme_project') }} p ON p.id = h."themeProjectId"
+    JOIN half_life_users_norm u ON u.id = p."userId"
+    WHERE NULLIF(BTRIM(h."hackatimeProject"), '') IS NOT NULL
+),
+half_life_activity_events AS (
+    SELECT s."createdAt" AT TIME ZONE 'UTC' AS activity_ts,
+           u.user_email, p.title::text AS project_name,
+           NULLIF(BTRIM(p."githubRepo"), '')::text AS code_url,
+           CASE WHEN s."hoursSource"::text = 'MANUAL'
+                THEN GREATEST(s."hoursClaimed"::numeric, 0)
+                ELSE 0::numeric END AS hours,
+           'work_session'::text AS event_source
+    FROM {{ source('half_life', 'work_session') }} s
+    JOIN {{ source('half_life', 'theme_project') }} p ON p.id = s."themeProjectId"
+    JOIN half_life_users_norm u ON u.id = p."userId"
+    WHERE s."deletedAt" IS NULL
+    UNION ALL
+    -- Timelapses are evidence for a journal's hours, not an additional hours pot.
+    -- The attachment timestamp marks activity; the original recording time is
+    -- not available in this schema, so it is not reconstructed from duration.
+    SELECT t."createdAt" AT TIME ZONE 'UTC', u.user_email, p.title::text,
+           NULLIF(BTRIM(p."githubRepo"), '')::text, 0::numeric, 'session_timelapse'::text
+    FROM {{ source('half_life', 'session_timelapse') }} t
+    JOIN {{ source('half_life', 'work_session') }} s ON s.id = t."workSessionId"
+    JOIN {{ source('half_life', 'theme_project') }} p ON p.id = s."themeProjectId"
+    JOIN half_life_users_norm u ON u.id = p."userId"
+    WHERE s."deletedAt" IS NULL
+    UNION ALL
+    -- Published participant progress/idea/submission/freeform reels are devlogs;
+    -- announcements and unfinished/hidden/removed/deleted posts do not qualify.
+    SELECT r."publishedAt" AT TIME ZONE 'UTC', u.user_email, p.title::text,
+           NULLIF(BTRIM(p."githubRepo"), '')::text, 0::numeric, 'post'::text
+    FROM {{ source('half_life', 'post') }} r
+    JOIN half_life_users_norm u ON u.id = r."userId"
+    LEFT JOIN {{ source('half_life', 'theme_project') }} p ON p.id = r."themeProjectId"
+    WHERE r."deletedAt" IS NULL
+      AND r.status::text = 'PUBLISHED'
+      AND r.kind::text <> 'ANNOUNCEMENT'
+      AND r."publishedAt" IS NOT NULL
+),
+half_life_custom_hourly AS (
+    SELECT
+        DATE_TRUNC('hour', activity_ts) AS activity_hour,
+        'half_life'::text AS program_name,
+        user_email, project_name, code_url,
+        ROUND(SUM(hours)::numeric, 4) AS raw_hours_logged,
+        'hardware_build'::text AS logging_method,
+        'half_life.' || STRING_AGG(DISTINCT event_source, '+')
+            || '; entries=' || COUNT(*)::text AS source_detail
+    FROM half_life_activity_events
+    WHERE activity_ts >= TIMESTAMPTZ '2026-09-14 00:00:00 America/New_York'
+      AND activity_ts <= CURRENT_TIMESTAMP
+    GROUP BY 1, 2, 3, 4, 5
+),
+
 all_claims_raw AS (
     SELECT * FROM stardance_ht_claims
     UNION ALL SELECT * FROM flavortown_ht_claims
@@ -1534,6 +1623,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM carnival_ht_claims
     UNION ALL SELECT * FROM moonshot_ht_claims
     UNION ALL SELECT * FROM high_seas_ht_claims
+    UNION ALL SELECT * FROM half_life_ht_claims
 ),
 
 all_claims AS (
@@ -1632,6 +1722,7 @@ custom_in_window AS (
             UNION ALL SELECT * FROM shiba_custom_hourly
             UNION ALL SELECT * FROM arcade_custom_hourly
             UNION ALL SELECT * FROM juice_custom_hourly
+            UNION ALL SELECT * FROM half_life_custom_hourly
         ) c
         JOIN program_windows w
             ON w.program_name = c.program_name
