@@ -658,3 +658,21 @@ sources:
       - name: work_session
         description: "Half Life work_session table."
         meta: {dagster: {deps: [half_life_warehouse_mirror]}}
+  - name: airtable_snowglobe
+    schema: airtable_snowglobe
+    tables:
+      - name: projects
+        description: "Snowglobe projects table."
+        meta: {dagster: {deps: [snowglobe_projects_warehouse]}}
+      - name: activity
+        description: "Snowglobe activity table."
+        meta: {dagster: {deps: [snowglobe_activity_warehouse]}}
+      - name: orders
+        description: "Snowglobe orders table."
+        meta: {dagster: {deps: [snowglobe_orders_warehouse]}}
+      - name: posts
+        description: "Snowglobe posts table."
+        meta: {dagster: {deps: [snowglobe_posts_warehouse]}}
+      - name: users
+        description: "Snowglobe users table."
+        meta: {dagster: {deps: [snowglobe_users_warehouse]}}

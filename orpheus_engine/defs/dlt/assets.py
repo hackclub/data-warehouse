@@ -698,6 +698,12 @@ daydream_ops_assets = create_airtable_sync_assets(
     description="Loads daydream_ops data into the warehouse.airtable_daydream_ops schema."
 )
 
+snowglobe_assets = create_airtable_sync_assets(
+    base_name="snowglobe",
+    tables=["projects", "activity", "orders", "posts", "users"],
+    description="Loads snowglobe data into the warehouse.airtable_snowglobe schema."
+)
+
 # --- DLT Asset: Loads Data into Warehouse using DLT ---
 @asset(
     compute_kind="dlt", # Tagging the compute type for UI clarity

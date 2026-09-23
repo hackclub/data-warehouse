@@ -407,7 +407,27 @@ airtable_config = AirtableServiceConfig(
                     table_id="tblNzmIj9lzOF8rst"
                 )
             }
-        )
+        ),
+        "snowglobe": AirtableBaseConfig(
+            base_id="appP8Yyjc3WshfvJg",
+            tables={
+                "projects": AirtableTableConfig(
+                    table_id="tblXdL7yPFPwJnPZb"
+                ),
+                "activity": AirtableTableConfig(
+                    table_id="tbl3S7kRNQIQdprAr"
+                ),
+                "orders": AirtableTableConfig(
+                    table_id="tbl5d2WVmoYrQomYY"
+                ),
+                "posts": AirtableTableConfig(
+                    table_id="tblNZrp0kN8iPydvE"
+                ),
+                "users": AirtableTableConfig(
+                    table_id="tbl3TNrvJEQ68zhLr"
+                ),
+            }
+        ),
     }
 )
 

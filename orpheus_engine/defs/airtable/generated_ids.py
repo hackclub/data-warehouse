@@ -3090,4 +3090,164 @@ class AirtableIDs:
             ai_screenplay_error = "fldXsSqMNpcz1aCEL"  # Name: AI - Screenplay Error
 
 
+    class snowglobe:
+        """IDs for Base 'snowglobe' (ID: appP8Yyjc3WshfvJg)"""
+        BASE_ID = "appP8Yyjc3WshfvJg"
+
+        class projects:
+            """IDs for Table 'projects' (ID: tblXdL7yPFPwJnPZb)"""
+            TABLE_ID = "tblXdL7yPFPwJnPZb"
+
+            id = "fldoeO835ueZRdoap"  # Name: id
+            name = "fldsEPMf4DTNBXKtq"  # Name: name
+            github_repo = "fld0PeUaAt1BDUGsU"  # Name: github_repo
+            user = "fldx6lNn5mstVDirG"  # Name: user
+            description = "fldBGxEyLZBj6T07I"  # Name: description
+            demo_link = "fldGeNMi8Ijx6JzM7"  # Name: demo_link
+            screenshot = "fld0wHAa9jcl0LKpk"  # Name: screenshot
+            hackatime_proj_name = "fldNq0zzBRha0XXCT"  # Name: hackatime_proj_name
+            project_status = "fldW9WsjQlkoupswq"  # Name: project_status
+            devlog_count = "fldh8lJdq8iX7wD06"  # Name: devlog_count
+            comments = "fldJ9vJnytQLJF64W"  # Name: comments
+            activity = "fldmtePAr7hT6R5lM"  # Name: activity
+            likes = "fld1zAzXXeRjuQZhr"  # Name: likes
+            likes_count = "fldKpLpPw7WU2MmdN"  # Name: likes_count
+            total_hours = "fldd5t8a0GKUe2R9D"  # Name: total_hours
+            posts = "fldJwURPzdRZpQuUg"  # Name: posts
+            ari_note_to_maker = "fldXNJdOdEHJPTh0K"  # Name: ari_note_to_maker
+            ari_delivery_id = "fldNUv3pZXfHguGQm"  # Name: ari_delivery_id
+            ari_approved_hours_paid = "fld7d5Y1eufMqrMhb"  # Name: ari_approved_hours_paid
+            first_name = "fldbKf2ZhkyIzlUSs"  # Name: first_name
+            last_name = "fldCDWP7Fp0b50kgz"  # Name: last_name
+            email = "fldYLJWJ53SziyAUO"  # Name: email
+            github_username = "fldwQA2ImShA7Qa58"  # Name: github_username
+            address_1 = "fld91Ku7UaO5zqSNT"  # Name: address_1
+            address_2 = "fldHhNp4Cg1TGOGd9"  # Name: address_2
+            zip_code = "fld1RZV1wWXCRFuD0"  # Name: zip_code
+            state_province = "fldnzDeHJNooZXsvi"  # Name: state_province
+            country = "fldDAdt3k5SHDaBWh"  # Name: country
+            city = "fldFq36larLe8yKwm"  # Name: city
+            birthday = "fldyyYnBqFirUFJS8"  # Name: birthday
+            ari_audit_note = "fld68zFmYsbSlEFUO"  # Name: ari_audit_note
+            ari_technical_features = "fldyRbhlHUYvE0Ujq"  # Name: ari_technical_features
+            ari_deflation_reason = "fldLKpJP9LS1Azx3B"  # Name: ari_deflation_reason
+            ari_hackatime_justification = "fld79muhecTBYaf2M"  # Name: ari_hackatime_justification
+            ari_hackatime_user_id = "flduB7dgccgAeRheA"  # Name: ari_hackatime_user_id
+            ari_lapse_links = "fldiRivUN3YqCpwn7"  # Name: ari_lapse_links
+            ari_justification_extra = "flduy8Lz3T8I8ZUCK"  # Name: ari_justification_extra
+            loops_snowglobe_project_creation_time = "fldMP6Ptt3oZ1abs3"  # Name: Loops - snowglobeProjectCreationTime
+            loops_snowglobe_ship_time_at = "fldSChSQ6rV8Z8w99"  # Name: Loops - snowglobeShipTimeAt
+            hackatime_id = "fldhVmCRXTTTz9cdO"  # Name: hackatime_id
+            slack_id = "fldb1nQ4jEZlTuJmn"  # Name: slack_id
+            loops_snowglobe_review_requested_at = "flddxtb2PCLai3YxM"  # Name: Loops - snowglobeReviewRequestedAt
+            hackatime_last_activity_at = "fldlcrd1WE3xQ0IIk"  # Name: hackatime_last_activity_at
+            hackatime_name = "fldkF9mRrrVm32eMK"  # Name: hackatime_name
+
+        class activity:
+            """IDs for Table 'activity' (ID: tbl3S7kRNQIQdprAr)"""
+            TABLE_ID = "tbl3S7kRNQIQdprAr"
+
+            id = "fldJmaSBBB4V4NdKg"  # Name: id
+            user = "flde1QgO2RipLydRt"  # Name: user
+            first_name_from_user = "fldQGBMJRQJehiD9R"  # Name: first_name (from user)
+            type = "fld2vtVDBpzSwbrzl"  # Name: type
+            associated_project = "flduJtMr90qtEYWQA"  # Name: associated_project
+            id_from_associated_project = "fldQRCnsvLmUkY7Ns"  # Name: id (from associated_project)
+            screenshot_from_associated_project = "fldpDTUj3zyzL8yTv"  # Name: screenshot (from associated_project)
+
+        class orders:
+            """IDs for Table 'orders' (ID: tbl5d2WVmoYrQomYY)"""
+            TABLE_ID = "tbl5d2WVmoYrQomYY"
+
+            order_label = "fldMvhZVkjo8XE4n5"  # Name: order_label
+            shop_item = "fldPUtW4BNnahrMb5"  # Name: shop_item
+            user = "fldgQuxboBTWDoDNI"  # Name: user
+            snowflakes_cost = "fldqsrDaPN5IYHVvn"  # Name: snowflakes_cost
+            status = "fldGogbXU44xdZscl"  # Name: status
+            shipping_name = "fldZyFVpl7c0byyk7"  # Name: shipping_name
+            shipping_address_1 = "fldD8Ub36StxdrPCn"  # Name: shipping_address_1
+            shipping_address_2 = "fld3AI4GePeBval6a"  # Name: shipping_address_2
+            shipping_city = "fldG7ZJoJfHZ5IRHY"  # Name: shipping_city
+            shipping_state_province = "fld7hoU7NfVXCgpAx"  # Name: shipping_state_province
+            shipping_country = "fldJCwX6a02nI7LZn"  # Name: shipping_country
+            shipping_zip = "fldOOWZkFfjPXajXW"  # Name: shipping_zip
+            notes = "fldzcAkoLPPpntfGR"  # Name: notes
+            order_id = "fldPZhouV2v3QYwHQ"  # Name: order_id
+
+        class posts:
+            """IDs for Table 'posts' (ID: tblNZrp0kN8iPydvE)"""
+            TABLE_ID = "tblNZrp0kN8iPydvE"
+
+            title = "fldNNVmfeRZve9NX5"  # Name: title
+            content = "fldfRHEIqoDbRz5Mv"  # Name: content
+            associated_project = "fldvbtzRkIdx9wcKK"  # Name: associated_project
+            user = "fldlq5MKup7lQg7K3"  # Name: user
+            hours_at_post = "fldUHnZoVAb9xRUOC"  # Name: hours_at_post
+            screenshot = "fldealeirG5s2fVZT"  # Name: screenshot
+
+        class users:
+            """IDs for Table 'users' (ID: tbl3TNrvJEQ68zhLr)"""
+            TABLE_ID = "tbl3TNrvJEQ68zhLr"
+
+            openid = "fldaDQg1pM30Zw3OQ"  # Name: openid
+            first_name = "fld71YxGb5MOhLRDK"  # Name: first_name
+            username = "fldWMRnrFGoXLKs7X"  # Name: username
+            last_name = "fldHYCVc8sCgLZDTC"  # Name: last_name
+            email = "fldkpPaOXLlAWHREM"  # Name: email
+            verification_status = "fldQJCsu5YodYq6eL"  # Name: verification_status
+            slack_id = "fldL0ATqAV5Vi4HBJ"  # Name: slack_id
+            pronouns = "fldLUJo2Ph64F1JnD"  # Name: pronouns
+            date_of_birth = "fldZ9xP1sDP1H0pNd"  # Name: date_of_birth
+            preferred_name = "fldxbUlGrwD1QBZU8"  # Name: preferred_name
+            ysws_project_submission = "fldFm749FPNOJoAs5"  # Name: YSWS Project Submission
+            age_bracket = "fldvaxiIQKyjmQbTf"  # Name: age_bracket
+            gender = "fld1F8ORHoPIJKtEs"  # Name: gender
+            avatar_color = "fldnuxVzlWb10sYVO"  # Name: avatar_color
+            experience = "fld6U0xth0oxsWx23"  # Name: experience
+            interest = "fld4iIURfKxcDpbXH"  # Name: interest
+            profile_picture_half = "fldhrIwIqY74G74Qa"  # Name: profile_picture_half
+            onboarded = "fldBSWRXQqFI2IOOI"  # Name: onboarded
+            projects = "flduVp6PDD8On6KAA"  # Name: projects
+            entered_email = "fldb77l5x0Dk8JS7l"  # Name: entered_email
+            hackatime_access_token = "fld4RIgJ3Yk5tEdBZ"  # Name: hackatime_access_token
+            hackatime_user_id = "fldvJ3677A0IYZOau"  # Name: hackatime_user_id
+            percentage_qualified = "fldLPe7M2hFCzsN5c"  # Name: percentage_qualified
+            super_admin = "fldKDdPtASsLSa4G7"  # Name: super_admin
+            announcements = "fldWKPGTTvDTnfwzy"  # Name: announcements
+            comments = "fldA5CbRkiGCdVKMh"  # Name: comments
+            activity = "fldtCJOT8vhF4Gote"  # Name: activity
+            followers = "fldJiwiSjIB6wX2P4"  # Name: followers
+            following = "fld1O118w2jX0bWYH"  # Name: following
+            liked_projects = "fldZVDZ5cFbW01SDu"  # Name: liked_projects
+            bio = "fldW5SUC7CLFrYfyh"  # Name: bio
+            rsvped = "fldTICbYneO0laxrc"  # Name: rsvped
+            penguin_hat_name = "fldS3sHyL8avPcU1V"  # Name: penguin_hat_name
+            penguin_body_name = "fldVmOwMJr2cz30OF"  # Name: penguin_body_name
+            penguin_shoes_name = "fldz1u5ZpCSyM7kow"  # Name: penguin_shoes_name
+            profile_picture_full = "fldz0MPU34f9Wyzhe"  # Name: profile_picture_full
+            orders = "fld1DFoXWwDXNoIOc"  # Name: orders
+            snowflakes = "fldtmBtRLjTHvBsWN"  # Name: snowflakes
+            penguin_face_name = "fldn3Lep9SGF3eErd"  # Name: penguin_face_name
+            penguin_handheld_name = "fldp86hxxHudYHu64"  # Name: penguin_handheld_name
+            penguin_dress_name = "fldRgMlWYCgNsXPV3"  # Name: penguin_dress_name
+            penguin_wings_name = "fld4Vl5FDMCcQzxBx"  # Name: penguin_wings_name
+            total_snowflakes = "fldMkh1Q9SN8j9wCf"  # Name: total_snowflakes
+            posts = "fldjW8B6hCNJ4FLWa"  # Name: posts
+            loops_list_snowglobe = "fldo9MCJhOfyWTGMh"  # Name: Loops List - Snowglobe
+            loops_snowglobe_sign_up_at = "fldoUCynFnjPURER0"  # Name: Loops - snowglobeSignUpAt
+            github_username = "fldM21uYZADVeRRXn"  # Name: github_username
+            shipping_name = "fld7EQmG9T2dla6pB"  # Name: shipping_name
+            shipping_address_1 = "flddywoxAzEcx9Mu0"  # Name: shipping_address_1
+            shipping_address_2 = "fldKrjGbSAgSCmsC1"  # Name: shipping_address_2
+            shipping_city = "fldBb1GVbflwKY2E0"  # Name: shipping_city
+            shipping_state_province = "fldqhIfnBAQPMEU6w"  # Name: shipping_state_province
+            shipping_country = "fld5JP0YAGVY34mKc"  # Name: shipping_country
+            shipping_zip = "fldxK5Lczr3EiaSf9"  # Name: shipping_zip
+            spent_snowflakes = "fldqzohVHCbNlzLAf"  # Name: spent_snowflakes
+            penguin_items_earned = "fld8nY057gOGiLn84"  # Name: penguin_items_earned
+            loops_snowglobe_last_coded_at = "fldTxIqoIC0OtJgZ4"  # Name: Loops - snowglobeLastCodedAt
+            coded_last_24h = "fldx3qtCUtWfJCkk7"  # Name: coded_last_24h
+            hackatime_name = "fldCytoGmwRyGQbIM"  # Name: hackatime_name
+
+
 # fmt: on
