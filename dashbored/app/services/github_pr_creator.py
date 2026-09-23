@@ -438,8 +438,12 @@ def patch_assets_py(source: str, program: str, generated: dict) -> str:
         tree, "warehouse_db_connection", generated["connection_resource"]
     )
 
-    suffix = f'\n\n{generated["replication_config"]}\n\n{generated["asset_function"]}\n'
-    new_stmts = cst.parse_module(suffix).body
+    suffix = f'{generated["replication_config"]}\n\n{generated["asset_function"]}\n'
+    new_stmts = list(cst.parse_module(suffix).body)
+    if new_stmts:
+        new_stmts[0] = new_stmts[0].with_changes(
+            leading_lines=[cst.EmptyLine(), cst.EmptyLine()]
+        )
     tree = tree.with_changes(body=(*tree.body, *new_stmts))
 
     return tree.code

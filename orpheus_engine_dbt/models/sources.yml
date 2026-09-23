@@ -695,3 +695,29 @@ sources:
       - name: submissions
         description: "Phantom submissions table."
         meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+  - name: half_life
+    schema: half_life
+    quoting:
+      identifier: true
+    tables:
+      - name: hackatime_link
+        description: "Half Life hackatime_link table."
+        meta: {dagster: {deps: [half_life_warehouse_mirror]}}
+      - name: post
+        description: "Half Life post table."
+        meta: {dagster: {deps: [half_life_warehouse_mirror]}}
+      - name: program_settings
+        description: "Half Life program_settings table."
+        meta: {dagster: {deps: [half_life_warehouse_mirror]}}
+      - name: session_timelapse
+        description: "Half Life session_timelapse table."
+        meta: {dagster: {deps: [half_life_warehouse_mirror]}}
+      - name: theme_project
+        description: "Half Life theme_project table."
+        meta: {dagster: {deps: [half_life_warehouse_mirror]}}
+      - name: user
+        description: "Half Life user table."
+        meta: {dagster: {deps: [half_life_warehouse_mirror]}}
+      - name: work_session
+        description: "Half Life work_session table."
+        meta: {dagster: {deps: [half_life_warehouse_mirror]}}

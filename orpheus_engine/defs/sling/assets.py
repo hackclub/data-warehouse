@@ -82,6 +82,7 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "ATTEND_COOLIFY_URL",
     "THESEUS_COOLIFY_URL",
     "PHANTOM_DATABASE_URL",
+    "HALF_LIFE_DATABASE_URL",
     "WAREHOUSE_COOLIFY_URL",
 ]
 
@@ -324,6 +325,10 @@ phantom_db_connection = SlingConnectionResource(
     name="PHANTOM_DB",
     type="postgres",
     connection_string=EnvVar("PHANTOM_DATABASE_URL"),
+half_life_db_connection = SlingConnectionResource(
+    name="HALF_LIFE_DB",
+    type="postgres",
+    connection_string=EnvVar("HALF_LIFE_DATABASE_URL"),
 )
 
 # 2. Target Connection (Warehouse Database)
@@ -366,6 +371,7 @@ sling_replication_resource = SlingResource(
         auth_db_connection,
         hcb_db_connection,
         phantom_db_connection,
+        half_life_db_connection,
         warehouse_db_connection,
     ]
 )
@@ -3797,6 +3803,8 @@ def auth_warehouse_mirror(
     return None
 phantom_replication_config = {
     "source": "PHANTOM_DB",
+half_life_replication_config = {
+    "source": "HALF_LIFE_DB",
     "target": "WAREHOUSE_DB",
 
     "defaults": {
@@ -3851,6 +3859,48 @@ phantom_replication_config = {
                 "approver_id", "awarded_seconds", "public_message",
                 "justification", "created_at", "update_declaration",
                 "notes_for_reviewer",
+        "object": "half_life.{stream_table}",
+    },
+
+    "streams": {
+        "public.hackatime_link": {
+            "select": [
+                "id", "themeProjectId", "hackatimeProject", "createdAt",
+            ],
+        },
+        "public.post": {
+            "select": [
+                "id", "userId", "themeProjectId", "status", "publishedAt",
+                "createdAt", "updatedAt", "deletedAt", "kind",
+            ],
+        },
+        "public.program_settings": {
+            "select": [
+                "id", "eventStartDate", "programTimezone", "updatedAt",
+            ],
+        },
+        "public.session_timelapse": {
+            "select": [
+                "id", "workSessionId", "provider", "coveredSeconds",
+                "createdAt",
+            ],
+        },
+        "public.theme_project": {
+            "select": [
+                "id", "userId", "title", "githubRepo", "createdAt",
+                "updatedAt", "deletedAt",
+            ],
+        },
+        "public.user": {
+            "select": [
+                "id", "email", "createdAt", "updatedAt", "slackId",
+                "hackatimeUserId", "joinedProgramAt", "fraudFlagged",
+            ],
+        },
+        "public.work_session": {
+            "select": [
+                "id", "themeProjectId", "hoursClaimed", "hoursSource",
+                "effectiveDate", "createdAt", "updatedAt", "deletedAt",
             ],
         },
     },
@@ -3871,6 +3921,20 @@ def phantom_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=phantom_replication_config,
+    name="half_life_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def half_life_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the entire Half Life DB → warehouse in a single shot."""
+    context.log.info("Starting Half Life → warehouse Sling replication")
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=half_life_replication_config,
     ):
         pass
 
