@@ -217,7 +217,7 @@ midnight_db_connection = SlingConnectionResource(
 thirdspace_db_connection = SlingConnectionResource(
     name="THIRDSPACE_DB",
     type="postgres",
-    connection_string=EnvVar("THIRDSPACE_K8S_URL"),
+    connection_string=_sling_connection_url("THIRDSPACE_K8S_URL"),
 )
 
 stack_db_connection = SlingConnectionResource(
@@ -3454,7 +3454,7 @@ def thirdspace_warehouse_mirror(
     sling: SlingResource,
 ) -> Nothing:
     """Replicates analytics-safe thirdspace DB columns into the warehouse."""
-    context.log.info("Starting thridspace → warehouse Sling replication")
+    context.log.info("Starting thirdspace → warehouse Sling replication")
     _ensure_incremental_target_indexes(context, thirdspace_replication_config)
 
     for _ in sling.replicate(
