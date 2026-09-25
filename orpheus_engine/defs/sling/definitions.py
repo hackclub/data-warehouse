@@ -37,6 +37,7 @@ from .assets import (
     auth_warehouse_mirror,  # absolute minimum permissions for monthly active stats
     phantom_warehouse_mirror,
     half_life_warehouse_mirror,
+    crescent_warehouse_mirror,
     sling_replication_resource,
 )
 
@@ -73,6 +74,7 @@ defs = Definitions(
         joe_warehouse_mirror,
         phantom_warehouse_mirror,
         half_life_warehouse_mirror,
+        crescent_warehouse_mirror,
         auth_warehouse_mirror,
     ],
     resources={

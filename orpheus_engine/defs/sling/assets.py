@@ -83,6 +83,7 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "THESEUS_COOLIFY_URL",
     "PHANTOM_DATABASE_URL",
     "HALF_LIFE_DATABASE_URL",
+    "CRESCENT_DATABASE_URL",
     "WAREHOUSE_COOLIFY_URL",
 ]
 
@@ -331,6 +332,11 @@ half_life_db_connection = SlingConnectionResource(
     type="postgres",
     connection_string=EnvVar("HALF_LIFE_DATABASE_URL"),
 )
+crescent_db_connection = SlingConnectionResource(
+    name="CRESCENT_DB",
+    type="postgres",
+    connection_string=EnvVar("CRESCENT_DATABASE_URL"),
+)
 
 # 2. Target Connection (Warehouse Database)
 warehouse_db_connection = SlingConnectionResource(
@@ -373,6 +379,7 @@ sling_replication_resource = SlingResource(
         hcb_db_connection,
         phantom_db_connection,
         half_life_db_connection,
+        crescent_db_connection,
         warehouse_db_connection,
     ]
 )
@@ -3955,6 +3962,125 @@ def half_life_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=half_life_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+crescent_replication_config = {
+    "source": "CRESCENT_DB",
+    "target": "WAREHOUSE_DB",
+
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "crescent.{stream_table}",
+    },
+
+    "streams": {
+        "public.active_storage_attachments": None,
+        "public.active_storage_blobs": None,
+        "public.active_storage_variant_records": {
+            "select": [
+                "id", "blob_id",
+            ],
+        },
+        "public.activity_events": None,
+        "public.adjustments": None,
+        "public.airtable_syncs": None,
+        "public.announcement_blocks": None,
+        "public.blazer_audits": None,
+        "public.blazer_checks": None,
+        "public.blazer_dashboard_queries": None,
+        "public.blazer_dashboards": None,
+        "public.blazer_queries": None,
+        "public.card_definitions": None,
+        "public.card_offers": None,
+        "public.checklist_completions": None,
+        "public.flipper_features": None,
+        "public.flipper_gates": None,
+        "public.guides": None,
+        "public.hcb_connections": {
+            "select": [
+                "id", "connected_at", "connected_by_id", "created_at",
+                "organization_slug", "updated_at",
+            ],
+        },
+        "public.hcb_grants": None,
+        "public.hcb_ledger_entries": None,
+        "public.orders": None,
+        "public.project_hackatime_links": None,
+        "public.projects": None,
+        "public.queue_snapshots": None,
+        "public.rate_weeks": None,
+        "public.review_escalations": None,
+        "public.review_metrics": None,
+        "public.reviewer_metrics": None,
+        "public.reviews": {
+            "select": [
+                "id", "action_items", "admin_content", "approved_seconds",
+                "author_id", "authorized_by_id", "boost_multiplier_applied",
+                "card_multiplier_applied", "content", "created_at",
+                "deleted_at", "fields", "golden", "hours_edit_reason",
+                "project_id", "rate_applied", "review_type", "reward_amount",
+                "ship_id", "terminal", "updated_at", "user_id",
+            ],
+        },
+        "public.settings": None,
+        "public.ships": {
+            "select": [
+                "id", "autoreview", "change_description", "claim_expires_at",
+                "claimed_by_actor", "created_at", "decided_at",
+                "delta_seconds", "fraud_signals",
+                "hackatime_seconds_at_ship", "hours_paid_at", "prescreen",
+                "prescreen_version", "project_id", "project_snapshot",
+                "queue_lane", "status", "submitted_at", "updated_at",
+                "user_id",
+            ],
+        },
+        "public.shop_item_price_changes": None,
+        "public.shop_items": None,
+        "public.user_activity_days": None,
+        "public.user_notes": None,
+        "public.users": {
+            "select": [
+                "id", "avatar_url", "banned_at", "banned_reason", "birthday",
+                "created_at", "deleted_at", "display_name", "email",
+                "fatal_rejection", "first_heartbeat_seen_at", "first_name",
+                "hackatime_id", "hackatime_linked_at",
+                "hackatime_trust_checked_at", "hackatime_trust_level",
+                "hca_id", "hca_ysws_eligible", "invited_to_slack_at",
+                "is_system", "last_active_at", "last_name",
+                "manual_ysws_override", "onboarded_at",
+                "pending_verification_seen_at",
+                "pending_verification_status", "region_override",
+                "reviewer_handle", "role", "slack_guest_flagged_at",
+                "slack_id", "slack_invite_error", "theme", "tour_seen",
+                "updated_at", "verification_checked_at",
+                "verification_status", "verification_status_changed_at",
+                "verification_status_reason", "ysws_eligible_confirmed_at",
+            ],
+        },
+        "public.versions": None,
+        "public.warehouse_packages": None,
+    },
+}
+
+@dg.asset(
+    name="crescent_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def crescent_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the entire Crescent DB → warehouse in a single shot."""
+    context.log.info("Starting Crescent → warehouse Sling replication")
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=crescent_replication_config,
     ):
         pass
 

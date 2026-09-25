@@ -718,3 +718,123 @@ sources:
       - name: work_session
         description: "Half Life work_session table."
         meta: {dagster: {deps: [half_life_warehouse_mirror]}}
+  - name: crescent
+    schema: crescent
+    tables:
+      - name: active_storage_attachments
+        description: "Crescent active_storage_attachments table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: active_storage_blobs
+        description: "Crescent active_storage_blobs table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: active_storage_variant_records
+        description: "Crescent active_storage_variant_records table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: activity_events
+        description: "Crescent activity_events table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: adjustments
+        description: "Crescent adjustments table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: airtable_syncs
+        description: "Crescent airtable_syncs table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: announcement_blocks
+        description: "Crescent announcement_blocks table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: blazer_audits
+        description: "Crescent blazer_audits table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: blazer_checks
+        description: "Crescent blazer_checks table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: blazer_dashboard_queries
+        description: "Crescent blazer_dashboard_queries table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: blazer_dashboards
+        description: "Crescent blazer_dashboards table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: blazer_queries
+        description: "Crescent blazer_queries table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: card_definitions
+        description: "Crescent card_definitions table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: card_offers
+        description: "Crescent card_offers table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: checklist_completions
+        description: "Crescent checklist_completions table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: flipper_features
+        description: "Crescent flipper_features table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: flipper_gates
+        description: "Crescent flipper_gates table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: guides
+        description: "Crescent guides table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: hcb_connections
+        description: "Crescent hcb_connections table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: hcb_grants
+        description: "Crescent hcb_grants table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: hcb_ledger_entries
+        description: "Crescent hcb_ledger_entries table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: orders
+        description: "Crescent orders table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: project_hackatime_links
+        description: "Crescent project_hackatime_links table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: projects
+        description: "Crescent projects table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: queue_snapshots
+        description: "Crescent queue_snapshots table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: rate_weeks
+        description: "Crescent rate_weeks table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: review_escalations
+        description: "Crescent review_escalations table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: review_metrics
+        description: "Crescent review_metrics table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: reviewer_metrics
+        description: "Crescent reviewer_metrics table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: reviews
+        description: "Crescent reviews table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: settings
+        description: "Crescent settings table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: ships
+        description: "Crescent ships table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: shop_item_price_changes
+        description: "Crescent shop_item_price_changes table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: shop_items
+        description: "Crescent shop_items table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: user_activity_days
+        description: "Crescent user_activity_days table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: user_notes
+        description: "Crescent user_notes table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: users
+        description: "Crescent users table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: versions
+        description: "Crescent versions table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
+      - name: warehouse_packages
+        description: "Crescent warehouse_packages table."
+        meta: {dagster: {deps: [crescent_warehouse_mirror]}}
