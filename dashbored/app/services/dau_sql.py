@@ -237,6 +237,11 @@ def _user_email(dau: dict, src: DauSource, table: str, alias: str, keys: dict) -
     return email_normalize_expr(src.col("u", email_col)), join
 
 
+def _ts_literal(date_str: str, tz: str | None) -> str:
+    suffix = f" {tz}" if tz else "+00"
+    return f"TIMESTAMP WITH TIME ZONE {sql_str(f'{date_str} 00:00:00{suffix}')}"
+
+
 def program_window(dau: dict, src: DauSource) -> str | None:
     if not dau:
         return None
@@ -245,16 +250,13 @@ def program_window(dau: dict, src: DauSource) -> str | None:
     if not start:
         return None
 
+    tz = opt(dau, "timezone")
     end = opt(dau, "end_date")
-    end_expr = (
-        f"TIMESTAMP WITH TIME ZONE {sql_str(f'{end} 00:00:00+00')}"
-        if end
-        else "NULL::timestamptz"
-    )
+    end_expr = _ts_literal(end, tz) if end else "NULL::timestamptz"
 
     return (
         f"-- program_windows entry:\n"
-        f"({sql_str(src.program)}, TIMESTAMP WITH TIME ZONE {sql_str(f'{start} 00:00:00+00')},\n"
+        f"({sql_str(src.program)}, {_ts_literal(start, tz)},\n"
         f"                   {end_expr}),"
     )
 
@@ -299,11 +301,9 @@ def ht_claims(dau: dict, src: DauSource) -> str | None:
         lateral_clause = f"    CROSS JOIN LATERAL {unnest_fn} AS alias_val\n"
 
     claim_start_date = opt(dau, "claim_start_date")
+    tz = opt(dau, "timezone")
     if opt(dau, "claim_start_source", "column") == "fixed_date" and claim_start_date:
-        ts_expr = (
-            f"TIMESTAMP WITH TIME ZONE {sql_str(f'{claim_start_date} 00:00:00+00')}"
-            f" AS claim_start_ts"
-        )
+        ts_expr = f"{_ts_literal(claim_start_date, tz)} AS claim_start_ts"
     else:
         claim_start_column = opt(dau, "claim_start_column", "created_at")
         ts_expr = f"{src.col('hp', claim_start_column)} AT TIME ZONE 'UTC' AS claim_start_ts"

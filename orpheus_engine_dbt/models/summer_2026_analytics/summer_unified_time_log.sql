@@ -241,12 +241,12 @@ WITH program_windows AS (
         -- switches to app-native user_daily_activity (section 6b) from
         -- 2026-04-22 onward; the run window below closes the Hackatime path at
         -- the handoff so the two never overlap.
+        ('phantom', TIMESTAMP WITH TIME ZONE '2026-09-17 00:00:00+00',
+                   NULL::timestamptz),
         ('half_life', TIMESTAMP WITH TIME ZONE '2026-09-14 00:00:00+00',
                    NULL::timestamptz),
         ('crescent', TIMESTAMP WITH TIME ZONE '2026-09-22 00:00:00+00',
                    NULL::timestamptz)
-    
-    
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -1522,6 +1522,22 @@ high_seas_ht_claims AS (
 -- ============================================================
 -- 4. MERGE CLAIMS & FILTER BAD ALIASES
 -- ============================================================
+phantom_ht_claims AS (
+    SELECT 'phantom'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u."email"))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u."email")), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u."email")), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u."email")), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias_val)) AS hackatime_alias,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        hp."created_at" AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('phantom', 'projects') }} hp
+    JOIN {{ source('phantom', 'users') }} u ON u."id" = hp."user_id"
+    CROSS JOIN LATERAL unnest(string_to_array(hp."hackatime_projects", ',')) AS alias_val
+    WHERE alias_val IS NOT NULL AND alias_val <> ''
+),
 -- Half Life: DAU = Hackatime activity on explicitly linked aliases OR a
 -- non-deleted journal/devlog OR attached timelapse OR published participant reel.
 -- Starts 2026-09-14 in America/New_York, no end date; timestamps are stored UTC.
@@ -1570,9 +1586,6 @@ half_life_activity_events AS (
     JOIN half_life_users_norm u ON u.id = p."userId"
     WHERE s."deletedAt" IS NULL
     UNION ALL
-    -- Timelapses are evidence for a journal's hours, not an additional hours pot.
-    -- The attachment timestamp marks activity; the original recording time is
-    -- not available in this schema, so it is not reconstructed from duration.
     SELECT t."createdAt" AT TIME ZONE 'UTC', u.user_email, p.title::text,
            NULLIF(BTRIM(p."githubRepo"), '')::text, 0::numeric, 'session_timelapse'::text
     FROM {{ source('half_life', 'session_timelapse') }} t
@@ -1581,8 +1594,6 @@ half_life_activity_events AS (
     JOIN half_life_users_norm u ON u.id = p."userId"
     WHERE s."deletedAt" IS NULL
     UNION ALL
-    -- Published participant progress/idea/submission/freeform reels are devlogs;
-    -- announcements and unfinished/hidden/removed/deleted posts do not qualify.
     SELECT r."publishedAt" AT TIME ZONE 'UTC', u.user_email, p.title::text,
            NULLIF(BTRIM(p."githubRepo"), '')::text, 0::numeric, 'post'::text
     FROM {{ source('half_life', 'post') }} r
@@ -1642,6 +1653,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM carnival_ht_claims
     UNION ALL SELECT * FROM moonshot_ht_claims
     UNION ALL SELECT * FROM high_seas_ht_claims
+    UNION ALL SELECT * FROM phantom_ht_claims
     UNION ALL SELECT * FROM half_life_ht_claims
     UNION ALL SELECT * FROM crescent_ht_claims
 ),

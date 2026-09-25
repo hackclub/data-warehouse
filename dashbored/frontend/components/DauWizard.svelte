@@ -38,6 +38,7 @@
   let cap24h = $state(dauConfig.cap_24h || false)
   let startDate = $state(dauConfig.start_date || '')
   let endDate = $state(dauConfig.end_date || '')
+  let timezone = $state(dauConfig.timezone || '')
 
   let selectedKeys = $derived(new Set(selectedTables.map(canon)))
   let tables = $derived(schema.filter(t => selectedKeys.has(qname(t))))
@@ -382,6 +383,7 @@ If the user identifier column is an integer FK (like user_id), JOIN to the users
       cap_24h: cap24h,
       start_date: startDate,
       end_date: endDate,
+      timezone: timezone,
     })
   }
 </script>
@@ -400,6 +402,10 @@ If the user identifier column is an integer FK (like user_id), JOIN to the users
         <label>
           End date (leave blank if ongoing)
           <input type="date" bind:value={endDate} class="webtv-input" />
+        </label>
+        <label>
+          Timezone (blank = UTC)
+          <input type="text" bind:value={timezone} class="webtv-input" placeholder="e.g. America/New_York" />
         </label>
       </div>
     </div>

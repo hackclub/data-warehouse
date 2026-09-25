@@ -632,6 +632,66 @@ sources:
       - name: repos
         description: "One row per scraped repo with scrape_status (ok/not_found/empty/error) and commit_count."
         meta: { dagster: { deps: ['highway_github_commits'] } }
+  - name: phantom
+    schema: phantom
+    tables:
+      - name: audit_events
+        description: "Phantom audit_events table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: job_runs
+        description: "Phantom job_runs table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: ledger_accounts
+        description: "Phantom ledger_accounts table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: ledger_entries
+        description: "Phantom ledger_entries table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: oauth_states
+        description: "Phantom oauth_states table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: order_transitions
+        description: "Phantom order_transitions table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: orders
+        description: "Phantom orders table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: outbox_events
+        description: "Phantom outbox_events table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: product_categories
+        description: "Phantom product_categories table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: product_revisions
+        description: "Phantom product_revisions table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: products
+        description: "Phantom products table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: project_showcase
+        description: "Phantom project_showcase table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: projects
+        description: "Phantom projects table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: provider_accounts
+        description: "Phantom provider_accounts table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: sessions
+        description: "Phantom sessions table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: site_settings
+        description: "Phantom site_settings table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: submission_transitions
+        description: "Phantom submission_transitions table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: users
+        description: "Phantom users table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
+      - name: submissions
+        description: "Phantom submissions table."
+        meta: {dagster: {deps: [phantom_warehouse_mirror]}}
   - name: half_life
     schema: half_life
     quoting:
