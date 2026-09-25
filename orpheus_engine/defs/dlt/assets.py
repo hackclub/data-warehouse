@@ -240,7 +240,8 @@ def create_airtable_sync_assets(
     description: str = None,
     source_suffix: str = "",
     warehouse_dataset_name: str = None,
-    source_base_name: str = None
+    source_base_name: str = None,
+    drop_columns: dict[str, list[str]] | None = None,
 ):
     """
     Creates DLT assets for syncing multiple Airtable tables to the warehouse.
@@ -353,7 +354,13 @@ def create_airtable_sync_assets(
                 
                 # Assert no duplicates
                 assert len(renamed_df.columns) == len(set(renamed_df.columns)), "Duplicate column names still present!"
-                
+
+                if drop_columns and specific_table_name in drop_columns:
+                    cols_to_drop = [c for c in drop_columns[specific_table_name] if c in renamed_df.columns]
+                    if cols_to_drop:
+                        context.log.info(f"Dropping columns from '{specific_table_name}': {cols_to_drop}")
+                        renamed_df = renamed_df.drop(cols_to_drop)
+
                 # Convert date/datetime strings to proper date or datetime types using Polars' parser
                 context.log.info("Attempting to convert string columns to date/datetime types")
                 
@@ -701,7 +708,8 @@ daydream_ops_assets = create_airtable_sync_assets(
 snowglobe_assets = create_airtable_sync_assets(
     base_name="snowglobe",
     tables=["projects", "activity", "orders", "posts", "users"],
-    description="Loads snowglobe data into the warehouse.airtable_snowglobe schema."
+    description="Loads snowglobe data into the warehouse.airtable_snowglobe schema.",
+    drop_columns={"users": ["hackatime_access_token"]},
 )
 
 # --- DLT Asset: Loads Data into Warehouse using DLT ---

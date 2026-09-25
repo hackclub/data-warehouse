@@ -3209,7 +3209,7 @@ class AirtableIDs:
             onboarded = "fldBSWRXQqFI2IOOI"  # Name: onboarded
             projects = "flduVp6PDD8On6KAA"  # Name: projects
             entered_email = "fldb77l5x0Dk8JS7l"  # Name: entered_email
-            hackatime_access_token = "fld4RIgJ3Yk5tEdBZ"  # Name: hackatime_access_token
+            hackatime_access_token = "fld4RIgJ3Yk5tEdBZ"  # Name: hackatime_access_token (dropped before warehouse load)
             hackatime_user_id = "fldvJ3677A0IYZOau"  # Name: hackatime_user_id
             percentage_qualified = "fldLPe7M2hFCzsN5c"  # Name: percentage_qualified
             super_admin = "fldKDdPtASsLSa4G7"  # Name: super_admin

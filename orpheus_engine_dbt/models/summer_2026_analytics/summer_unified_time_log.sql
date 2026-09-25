@@ -1620,7 +1620,7 @@ snowglobe_ht_claims AS (
         NULL::text AS code_url,
         hp."loops_snowglobe_project_creation_time" AT TIME ZONE 'UTC' AS claim_start_ts
     FROM {{ source('airtable_snowglobe', 'projects') }} hp
-    JOIN {{ source('airtable_snowglobe', 'users') }} u ON u."id" = hp."slack_id"
+    JOIN {{ source('airtable_snowglobe', 'users') }} u ON u."slack_id" = hp."slack_id"
     WHERE hp."hackatime_proj_name" IS NOT NULL AND hp."hackatime_proj_name" <> ''
 ),
 
