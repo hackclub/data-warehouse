@@ -70,6 +70,7 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "FALLOUT_COOLIFY_URL",
     "HORIZONS_K8S_URL",
     "MIDNIGHT_K8S_URL",
+    "THIRDSPACE_K8S_URL",
     "REVIEW_COOLIFY_URL",
     "JOE_COOLIFY_URL",
     "STACK_COOLIFY_URL",
@@ -214,6 +215,12 @@ midnight_db_connection = SlingConnectionResource(
     name="MIDNIGHT_DB",
     type="postgres",
     connection_string=_sling_connection_url("MIDNIGHT_K8S_URL"),
+)
+
+thirdspace_db_connection = SlingConnectionResource(
+    name="THIRDSPACE_DB",
+    type="postgres",
+    connection_string=_sling_connection_url("THIRDSPACE_K8S_URL"),
 )
 
 stack_db_connection = SlingConnectionResource(
@@ -364,6 +371,7 @@ sling_replication_resource = SlingResource(
         fallout_db_connection,
         horizons_db_connection,
         midnight_db_connection,
+        thirdspace_db_connection,
         stack_db_connection,
         offtrack_db_connection,
         macondo_db_connection,
@@ -2135,6 +2143,129 @@ midnight_replication_config = {
     },
 }
 
+# --- thirdspace Database Replication Configuration ---
+# Only the analytics-relevant tables/columns are mirrored.
+# Identity (Slack, OAuth), Hackatime tokens, the IDV
+# identity_token/refresh_token, and participant PII (home address, birthday)
+# are excluded.
+thirdspace_replication_config = {
+    "source": "THIRDSPACE_DB",
+    "target": "WAREHOUSE_DB",
+
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "thirdspace.{stream_table}",
+    },
+
+    "streams": {
+        "public.addresses": {
+            "select": [
+                "id", "user_id", "city", "state", "postcode", "country",
+                "is_default", "created_at", "updated_at",
+            ],  # Excludes recipient, line_1, line_2
+        },
+        "public.claim_confirmations": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "confirmed_at",
+        },
+        "public.claims": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.group_members": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.groups": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.hackatime_tokens": {
+            "select": [
+                "id", "user_id", "hackatime_user_id", "scope", "expires_at",
+                "created_at", "updated_at",
+            ],  # Excludes access_token, refresh_token
+        },
+        "public.hours_logs": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "synced_at",
+        },
+        "public.invites": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.prize_tiers": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.project_contributor_hours": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "reviewed_at",
+        },
+        "public.project_hackatime": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.project_repos": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+        "public.project_weeks": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.projects": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "updated_at",
+        },
+        "public.rate_limit_events": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+        "public.referrals": {
+            "select": ["id", "source", "created_at", "consumed_at"],
+            # excludes: ["invitee_email", "referrer_email"]
+        },
+        "public.shop_items": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+        "public.shop_redemptions": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+        "public.users": {
+            "select": [
+                "id", "hackatime_id", "slack_id", "airtable_record_id",
+                "stamps", "created_at", "updated_at", "eliminated_at",
+                "eliminated_week", "eliminated_reason", "trust_level",
+                "trust_level_checked_at", "airtable_bonus_stamps", "hc_sub",
+                "hour_debt_hours", "hour_debt_due_week",
+            ],  # Excludes name, email, display_name
+        },
+        "public.week_saves": {
+            "mode": "incremental",
+            "primary_key": ["id"],
+            "update_key": "created_at",
+        },
+    },
+}
+
 # --- Stack Database Replication Configuration ---
 # Small app DB; full-refresh. users allow-list excludes OAuth/Hackatime tokens.
 stack_replication_config = {
@@ -3327,6 +3458,29 @@ def midnight_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=midnight_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+@dg.asset(
+    name="thirdspace_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def thirdspace_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates analytics-safe thirdspace DB columns into the warehouse."""
+    context.log.info("Starting thirdspace → warehouse Sling replication")
+    _ensure_incremental_target_indexes(context, thirdspace_replication_config)
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=thirdspace_replication_config,
     ):
         pass
 

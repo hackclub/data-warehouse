@@ -352,6 +352,70 @@ sources:
         description: "Midnight app user sessions, used as a freshness signal."
         meta: { dagster: { deps: ['midnight_warehouse_mirror'] } }
 
+  - name: thirdspace
+    schema: thirdspace
+    tables:
+      - name: addresses
+        description: "Thirdspace addresses (city/state/country only, no street)."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: claim_confirmations
+        description: "Thirdspace claim confirmations."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: claims
+        description: "Thirdspace claims."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: group_members
+        description: "Thirdspace group members."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: groups
+        description: "Thirdspace groups."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: hackatime_tokens
+        description: "Thirdspace hackatime tokens (no secrets)."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: hours_logs
+        description: "Thirdspace hours logs."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: invites
+        description: "Thirdspace invites."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: prize_tiers
+        description: "Thirdspace prize tiers."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: project_contributor_hours
+        description: "Thirdspace project contributor hours."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: project_hackatime
+        description: "Thirdspace project hackatime links."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: project_repos
+        description: "Thirdspace project repos."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: project_weeks
+        description: "Thirdspace project weeks."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: projects
+        description: "Thirdspace projects."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: rate_limit_events
+        description: "Thirdspace rate limit events."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: referrals
+        description: "Thirdspace referrals (no emails)."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: shop_items
+        description: "Thirdspace shop items."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: shop_redemptions
+        description: "Thirdspace shop redemptions."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: users
+        description: "Thirdspace users (no name/email/display_name)."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+      - name: week_saves
+        description: "Thirdspace week saves."
+        meta: {dagster: {deps: [thirdspace_warehouse_mirror]}}
+
   - name: blueprint
     schema: blueprint
     tables:
