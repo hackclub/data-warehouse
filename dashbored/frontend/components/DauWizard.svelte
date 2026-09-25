@@ -136,12 +136,14 @@
   // too and the email-table picker actually appears.
   function looksLikeId(colName, tableName) {
     if (!colName) return false
-    for (const spelling of [colName, warehouseName(colName)]) {
-      if (spelling === 'id' || spelling.endsWith('_id')) return true
-    }
     const col = columnsForTable(tableName).find(c => c.name === colName)
-    if (!col) return false
-    return ['int4', 'int8', 'integer', 'bigint', 'serial'].includes((col.udt || col.type || '').toLowerCase())
+    const colType = (col?.udt || col?.type || '').toLowerCase()
+    const isIdType = ['int4', 'int8', 'integer', 'bigint', 'serial', 'uuid'].includes(colType)
+    for (const spelling of [colName, warehouseName(colName)]) {
+      if (spelling === 'id') return true
+      if (spelling.endsWith('_id')) return !col || isIdType
+    }
+    return isIdType
   }
 
   function emailColumns(tableName) {

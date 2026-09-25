@@ -134,16 +134,22 @@ class DauSource:
         "User ID" only looks like an id after sanitize_name. The type check reads
         the introspected column under its source spelling and lowercases
         udt-or-type before comparing it to ID_COLUMN_TYPES.
+
+        Text-typed columns ending in _id (slack_id, hackatime_id, …) are natural
+        identifiers, not foreign keys — they only count as IDs when their database
+        type is integer/bigint/serial/uuid.
         """
         if not column:
             return False
-        for spelling in (column, self.column_name(column)):
-            if spelling == "id" or spelling.endswith("_id"):
-                return True
         col = next((c for c in self.columns_for(table) if c["name"] == column), None)
-        if not col:
-            return False
-        return (col.get("udt") or col.get("type") or "").lower() in ID_COLUMN_TYPES
+        col_type = (col.get("udt") or col.get("type") or "").lower() if col else ""
+        is_id_type = col_type in ID_COLUMN_TYPES or col_type in ("uuid",)
+        for spelling in (column, self.column_name(column)):
+            if spelling == "id":
+                return True
+            if spelling.endswith("_id"):
+                return not col or is_id_type
+        return is_id_type
 
     def id_column(self, table: str) -> str:
         """The column an id-typed user column points at; Airtable always lands `id`."""
