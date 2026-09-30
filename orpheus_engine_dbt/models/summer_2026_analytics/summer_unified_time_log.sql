@@ -248,7 +248,12 @@ WITH program_windows AS (
         ('crescent', TIMESTAMP WITH TIME ZONE '2026-09-22 00:00:00+00',
                    NULL::timestamptz),
         ('snowglobe', TIMESTAMP WITH TIME ZONE '2026-08-30 00:00:00+00',
-                   NULL::timestamptz)
+                   NULL::timestamptz),
+        -- SHRINK: two-week YSWS, 2026-09-29 .. 2026-10-13 inclusive. Closed
+        -- window from day one (ground rule 4): ships keep their aliases
+        -- forever, and the program has a hard end date.
+        ('shrink', TIMESTAMP WITH TIME ZONE '2026-09-29 00:00:00+00',
+                   TIMESTAMP WITH TIME ZONE '2026-10-14 00:00:00+00')
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -1653,6 +1658,34 @@ snowglobe_ht_claims AS (
     WHERE hp."hackatime_proj_name" IS NOT NULL AND hp."hackatime_proj_name" <> ''
 ),
 
+-- SHRINK links Hackatime per ship: ships.hackatime_projects is a text[] of the
+-- author's Hackatime project names, claimed at ship time. Identity goes through
+-- the author's Hackatime user id (users.hackatime_account_id) -> Hackatime first
+-- email via the shared beest_htid_email map, falling back to the Hack Club Auth
+-- email when the id has never produced a heartbeat. Rejected ships are kept: a
+-- sent-back ship is still time spent building for SHRINK, and re-ships reuse
+-- the same aliases (the alias set is deduped by the shared claims path).
+shrink_ht_claims AS (
+    SELECT 'shrink'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(COALESCE(m.hackatime_first_email, u.email)))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(COALESCE(m.hackatime_first_email, u.email))), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(COALESCE(m.hackatime_first_email, u.email))), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(COALESCE(m.hackatime_first_email, u.email))), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias_val)) AS hackatime_alias,
+        s.title AS project_name,
+        NULLIF(BTRIM(s.source_url), '') AS code_url,
+        s.created_at AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('shrink', 'ships') }} s
+    JOIN {{ source('shrink', 'users') }} u ON u.id = s.user_id
+    LEFT JOIN beest_htid_email m ON m.hackatime_user_id::text = u.hackatime_account_id
+    -- ::text[] is a no-op on a real array and also parses the '{a,b}' literal
+    -- Sling may land the column as.
+    CROSS JOIN LATERAL unnest(s.hackatime_projects::text[]) AS alias_val
+    WHERE alias_val IS NOT NULL AND BTRIM(alias_val) <> ''
+      AND COALESCE(m.hackatime_first_email, u.email) <> ''
+),
+
 all_claims_raw AS (
     SELECT * FROM stardance_ht_claims
     UNION ALL SELECT * FROM flavortown_ht_claims
@@ -1675,6 +1708,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM half_life_ht_claims
     UNION ALL SELECT * FROM crescent_ht_claims
     UNION ALL SELECT * FROM snowglobe_ht_claims
+    UNION ALL SELECT * FROM shrink_ht_claims
 ),
 
 all_claims AS (

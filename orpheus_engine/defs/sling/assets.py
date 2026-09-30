@@ -85,6 +85,7 @@ _SLING_CONNECTION_URL_ENV_VARS = [
     "PHANTOM_DATABASE_URL",
     "HALF_LIFE_DATABASE_URL",
     "CRESCENT_DATABASE_URL",
+    "SHRINK_DATABASE_URL",
     "WAREHOUSE_COOLIFY_URL",
 ]
 
@@ -344,6 +345,11 @@ crescent_db_connection = SlingConnectionResource(
     type="postgres",
     connection_string=EnvVar("CRESCENT_DATABASE_URL"),
 )
+shrink_db_connection = SlingConnectionResource(
+    name="SHRINK_DB",
+    type="postgres",
+    connection_string=EnvVar("SHRINK_DATABASE_URL"),
+)
 
 # 2. Target Connection (Warehouse Database)
 warehouse_db_connection = SlingConnectionResource(
@@ -388,6 +394,7 @@ sling_replication_resource = SlingResource(
         phantom_db_connection,
         half_life_db_connection,
         crescent_db_connection,
+        shrink_db_connection,
         warehouse_db_connection,
     ]
 )
@@ -4235,6 +4242,84 @@ def crescent_warehouse_mirror(
     for _ in sling.replicate(
         context=context,
         replication_config=crescent_replication_config,
+    ):
+        pass
+
+    context.log.info("Replication finished")
+    context.add_output_metadata({"replicated": True})
+    return None
+
+
+# SHRINK (shrink.hackclub.com, github.com/hackclub/shrink): a two-week YSWS
+# (2026-09-29 .. 2026-10-13) where you build a web app that fits in a data: URI
+# under 3 KB. Next.js + Drizzle on Postgres. Hackatime linkage is per ship:
+# ships.hackatime_projects is a text[] of the author's Hackatime project names,
+# and users.hackatime_account_id is their Hackatime user id.
+#
+# The app also keeps its own per-person-per-day Hackatime snapshot
+# (hackatime_days / hackatime_projects / hackatime_project_history), built from
+# raw heartbeats with a "does this project look like a SHRINK project" verdict.
+# Mirrored for reference; the DAU model uses the explicit ship linkage.
+#
+# Excluded: sessions, oauth_states, rate_hits, scan_cache (infra), and every
+# token / ciphertext / birthdate column. The warehouse role on the SHRINK side
+# only has SELECT on the columns listed here, so the allow-list is enforced twice.
+shrink_replication_config = {
+    "source": "SHRINK_DB",
+    "target": "WAREHOUSE_DB",
+
+    "defaults": {
+        "mode": "full-refresh",
+        "object": "shrink.{stream_table}",
+    },
+
+    "streams": {
+        "public.users": {
+            "select": [
+                "id", "email", "display_name", "avatar_url", "slack_id",
+                "verification_status", "eligibility", "eligibility_at", "role",
+                "hackatime_account_id", "hackatime_linked_at", "onboarded_at",
+                "created_at", "last_seen_at",
+            ],
+        },
+        "public.ships": {
+            "select": [
+                "id", "number", "user_id", "title", "description", "bytes",
+                "source_url", "hackatime_projects", "claimed_seconds",
+                "claimed_badges", "reship_of", "scan", "state", "reviewer_id",
+                "reviewed_at", "awarded_seconds", "awarded_badges",
+                "awarded_bites", "public_message", "created_at",
+            ],
+        },
+        "public.orders": {
+            "select": [
+                "id", "number", "user_id", "reward_slug", "reward_name", "cost",
+                "state", "handled_by", "handled_at", "created_at",
+            ],
+        },
+        "public.ledger_entries": None,
+        "public.audit_events": None,
+        "public.hackatime_days": None,
+        "public.hackatime_projects": None,
+        "public.hackatime_project_history": None,
+    },
+}
+
+@dg.asset(
+    name="shrink_warehouse_mirror",
+    group_name="sling",
+    compute_kind="sling",
+)
+def shrink_warehouse_mirror(
+    context: dg.AssetExecutionContext,
+    sling: SlingResource,
+) -> Nothing:
+    """Replicates the SHRINK DB → warehouse in a single shot."""
+    context.log.info("Starting SHRINK → warehouse Sling replication")
+
+    for _ in sling.replicate(
+        context=context,
+        replication_config=shrink_replication_config,
     ):
         pass
 
