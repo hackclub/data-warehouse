@@ -248,6 +248,8 @@ WITH program_windows AS (
         ('crescent', TIMESTAMP WITH TIME ZONE '2026-09-22 00:00:00+00',
                    NULL::timestamptz),
         ('snowglobe', TIMESTAMP WITH TIME ZONE '2026-08-30 00:00:00+00',
+                   NULL::timestamptz),
+        ('thirdspace', TIMESTAMP WITH TIME ZONE '2026-08-22 04:00:00+00',
                    NULL::timestamptz)
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
@@ -1653,6 +1655,37 @@ snowglobe_ht_claims AS (
     WHERE hp."hackatime_proj_name" IS NOT NULL AND hp."hackatime_proj_name" <> ''
 ),
 
+-- third space links Hackatime by hackatime_tokens.hackatime_user_id (NOT email), and stores
+-- project_hackatime.hackatime_projects as a Postgres text[] (e.g. '{my-proj}').
+-- Map the hackatime user id to the Hackatime email so thirdspace joins the shared
+-- (user_email, alias) matching path, and unnest the alias array.
+thirdspace_ht_claims AS (
+    SELECT 'thirdspace'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias.alias_text, ' "')) AS hackatime_alias,
+        proj.name AS project_name,
+        NULL::text AS code_url,
+        proj.created_at AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('thirdspace', 'project_hackatime') }} ph
+    JOIN {{ source('thirdspace', 'projects') }} proj ON proj.id = ph.project_id
+    JOIN {{ source('thirdspace', 'users') }} u ON u.id = ph.user_id
+    LEFT JOIN {{ source('thirdspace', 'hackatime_tokens') }} ht ON ht.user_id = ph.user_id
+    JOIN beest_htid_email m
+        ON m.hackatime_user_id::text = COALESCE(NULLIF(ht.hackatime_user_id, ''), NULLIF(u.hackatime_id, ''))
+    CROSS JOIN LATERAL UNNEST(
+        CASE WHEN ph.hackatime_projects::text ~ '^\s*\['
+             THEN ARRAY(SELECT jsonb_array_elements_text(ph.hackatime_projects::text::jsonb))
+             ELSE ph.hackatime_projects::text::text[]
+        END
+    ) AS alias(alias_text)
+    WHERE alias.alias_text IS NOT NULL AND BTRIM(alias.alias_text) <> ''
+),
+
+
 all_claims_raw AS (
     SELECT * FROM stardance_ht_claims
     UNION ALL SELECT * FROM flavortown_ht_claims
@@ -1675,6 +1708,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM half_life_ht_claims
     UNION ALL SELECT * FROM crescent_ht_claims
     UNION ALL SELECT * FROM snowglobe_ht_claims
+    UNION ALL SELECT * FROM thirdspace_ht_claims
 ),
 
 all_claims AS (
