@@ -1,0 +1,15 @@
+version: 2
+
+sources:
+  - name: terra
+    schema: terra
+    tables:
+      - name: users
+        description: "Terra users table (id, deleted_at only)."
+        meta: {dagster: {deps: [terra_warehouse_mirror]}}
+      - name: hackatime_accounts
+        description: "Terra hackatime_accounts table: player to Hackatime user id."
+        meta: {dagster: {deps: [terra_warehouse_mirror]}}
+      - name: ysws_projects
+        description: "Terra ysws_projects table: weekly projects and their Hackatime aliases."
+        meta: {dagster: {deps: [terra_warehouse_mirror]}}

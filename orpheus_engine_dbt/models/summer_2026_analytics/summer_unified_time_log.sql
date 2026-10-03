@@ -256,7 +256,9 @@ WITH program_windows AS (
         ('wrangler', TIMESTAMP WITH TIME ZONE '2026-08-10 00:00:00+00',
                    TIMESTAMP WITH TIME ZONE '2026-09-30 00:00:00+00'),
         ('playground', TIMESTAMP WITH TIME ZONE '2026-09-25 00:00:00 America/New_York',
-                   TIMESTAMP WITH TIME ZONE '2026-10-12 00:00:00 America/New_York')
+                   TIMESTAMP WITH TIME ZONE '2026-10-12 00:00:00 America/New_York'),
+        ('terra', TIMESTAMP WITH TIME ZONE '2026-09-21 00:00:00 America/New_York',
+                   TIMESTAMP WITH TIME ZONE '2027-01-11 00:00:00 America/New_York')
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -1728,6 +1730,34 @@ wrangler_ht_claims AS (
     CROSS JOIN LATERAL unnest(string_to_array(hp."linked_lapse_lookout_hackatime_links", E'\n')) AS url
     WHERE url LIKE '%/project/%'
 ),
+-- terra links Hackatime by hackatime_accounts.hackatime_user_id (NOT email: the
+-- Hack Club Auth email often differs from the Hackatime one), and stores a project's
+-- aliases comma-separated in ysws_projects.hackatime_project_name. Each project
+-- belongs to one program week, so a claim starts at midnight New York time on
+-- its week's Monday.
+terra_ht_claims AS (
+    SELECT 'terra'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias.alias_text)) AS hackatime_alias,
+        p.title::text AS project_name,
+        NULLIF(BTRIM(p.code_url), '')::text AS code_url,
+        CASE WHEN p.week_number IS NOT NULL
+             THEN (DATE '2026-09-21' + (p.week_number - 5) * 7)::timestamp AT TIME ZONE 'America/New_York'
+             ELSE p.created_at AT TIME ZONE 'UTC'
+        END AS claim_start_ts
+    FROM {{ source('terra', 'ysws_projects') }} p
+    JOIN {{ source('terra', 'users') }} u ON u.id = p.user_id
+    JOIN {{ source('terra', 'hackatime_accounts') }} ha ON ha.user_id = p.user_id
+    JOIN beest_htid_email m ON m.hackatime_user_id::text = ha.hackatime_user_id
+    CROSS JOIN LATERAL UNNEST(STRING_TO_ARRAY(p.hackatime_project_name, ',')) AS alias(alias_text)
+    WHERE p.deleted_at IS NULL
+      AND u.deleted_at IS NULL
+      AND alias.alias_text IS NOT NULL AND BTRIM(alias.alias_text) <> ''
+),
 
 all_claims_raw AS (
     SELECT * FROM stardance_ht_claims
@@ -1754,6 +1784,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM thirdspace_ht_claims
     UNION ALL SELECT * FROM wrangler_ht_claims
     UNION ALL SELECT * FROM playground_ht_claims
+    UNION ALL SELECT * FROM terra_ht_claims
 ),
 
 all_claims AS (
