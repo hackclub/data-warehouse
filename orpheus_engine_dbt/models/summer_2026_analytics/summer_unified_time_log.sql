@@ -261,8 +261,6 @@ WITH program_windows AS (
                    NULL::timestamptz),
         ('fabricate', TIMESTAMP WITH TIME ZONE '2026-09-30 00:00:00+00',
                    NULL::timestamptz)
-    
-    
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -1877,12 +1875,13 @@ fabricate_custom_hourly AS (
         END AS user_email,
         NULL::text AS project_name,
         NULL::text AS code_url,
-        ROUND(SUM((a."seconds_spent" / 3600.0))::numeric, 4) AS raw_hours_logged,
+        ROUND(SUM((COALESCE(a."approved_seconds", a."seconds_spent") / 3600.0))::numeric, 4) AS raw_hours_logged,
         'custom'::text AS logging_method,
         ('fabricate.journal_entries.seconds_spent; entries=' || COUNT(*)::text) AS source_detail
     FROM {{ source('fabricate', 'journal_entries') }} a
     JOIN {{ source('fabricate', 'users') }} u ON u."id" = a."user_id"
-    WHERE a."seconds_spent" > 0
+    WHERE COALESCE(a."approved_seconds", a."seconds_spent") > 0
+      AND a."discarded_at" IS NULL
     GROUP BY 1, 2, 3, 4, 5
 ),
 
