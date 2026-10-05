@@ -911,7 +911,7 @@ stardance_ht_claims AS (
         hp.created_at AT TIME ZONE 'UTC' AS claim_start_ts
     FROM {{ source('stardance', 'user_hackatime_projects') }} hp
     JOIN {{ source('stardance', 'users') }} u ON u.id = hp.user_id
-    LEFT JOIN {{ source('stardance', 'projects') }} proj ON proj.id = hp.project_id
+    JOIN {{ source('stardance', 'projects') }} proj ON proj.id = hp.project_id
     WHERE hp.name IS NOT NULL AND hp.name <> ''
 ),
 
@@ -928,7 +928,7 @@ flavortown_ht_claims AS (
         hp.created_at AT TIME ZONE 'UTC' AS claim_start_ts
     FROM {{ source('flavortown', 'user_hackatime_projects') }} hp
     JOIN {{ source('flavortown', 'users') }} u ON u.id = hp.user_id
-    LEFT JOIN {{ source('flavortown', 'projects') }} proj ON proj.id = hp.project_id
+    JOIN {{ source('flavortown', 'projects') }} proj ON proj.id = hp.project_id
     WHERE hp.name IS NOT NULL AND hp.name <> ''
 ),
 
