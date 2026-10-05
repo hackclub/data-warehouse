@@ -37,6 +37,7 @@ class DbIntrospector:
             columns = self._fetch_columns(conn)
             primary_keys = self._fetch_primary_keys(conn)
             row_counts = self._fetch_row_counts(conn)
+            samples = self._fetch_samples(conn, tables, columns)
 
             return [
                 {
@@ -50,6 +51,7 @@ class DbIntrospector:
                             "nullable": c["is_nullable"] == "YES",
                             "default": c["column_default"],
                             "sensitive": is_sensitive(c["column_name"]),
+                            "samples": samples.get((schema, name), {}).get(c["column_name"], []),
                         }
                         for c in columns.get((schema, name), [])
                     ],
@@ -146,6 +148,41 @@ class DbIntrospector:
                 WHERE nspname NOT IN %s AND relkind IN ('r', 'm')
             """, (tuple(SYSTEM_SCHEMAS),))
             return {(r[0], r[1]): max(r[2], 0) for r in cur.fetchall()}
+
+
+    def _fetch_samples(
+        self, conn, tables: list[tuple[str, str]], columns: dict
+    ) -> dict[tuple[str, str], dict[str, list]]:
+        """Fetch up to 5 sample values per text column for auto-detection."""
+        result: dict[tuple[str, str], dict[str, list]] = {}
+        for schema, name in tables:
+            if _is_excluded(name):
+                continue
+            text_cols = [
+                c["column_name"]
+                for c in columns.get((schema, name), [])
+                if c["udt_name"] in ("text", "varchar", "bpchar", "name", "citext")
+            ]
+            if not text_cols:
+                continue
+            col_list = ", ".join(
+                '"' + c.replace('"', '""') + '"' for c in text_cols
+            )
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f'SELECT {col_list} FROM "{schema}"."{name}" LIMIT 5'
+                    )
+                    rows = cur.fetchall()
+                    table_samples: dict[str, list] = {c: [] for c in text_cols}
+                    for row in rows:
+                        for col_name, val in zip(text_cols, row):
+                            if val is not None:
+                                table_samples[col_name].append(str(val))
+                    result[(schema, name)] = table_samples
+            except Exception:
+                continue
+        return result
 
 
 def _is_excluded(name: str) -> bool:

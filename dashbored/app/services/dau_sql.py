@@ -229,9 +229,38 @@ def _email_source(dau: dict, src: DauSource, keys: dict, table: str) -> tuple[st
     return chosen, column
 
 
+def _hackatime_username_join(src: DauSource, alias: str, user_col: str) -> tuple[str, str]:
+    """Resolves Hackatime username → email via hackatime_raw.users + ht_user_email."""
+    col_ref = src.col(alias, user_col)
+    join = (
+        f"    JOIN {{{{ source('hackatime_raw', 'users') }}}} hu\n"
+        f"        ON LOWER(hu.username) = LOWER(LTRIM(BTRIM({col_ref}), '@'))\n"
+        f"    JOIN ht_user_email m ON m.hackatime_user_id = hu.id\n"
+    )
+    return email_normalize_expr("m.hackatime_first_email"), join
+
+
+def _hackatime_id_join(src: DauSource, alias: str, user_col: str) -> tuple[str, str]:
+    """Resolves numeric Hackatime user ID → email via ht_user_email."""
+    join = (
+        f"    JOIN ht_user_email m "
+        f"ON m.hackatime_user_id = {src.col(alias, user_col)}\n"
+    )
+    return email_normalize_expr("m.hackatime_first_email"), join
+
+
 def _user_email(dau: dict, src: DauSource, table: str, alias: str, keys: dict) -> tuple[str, str]:
-    """(user_email expression, JOIN clause) for a table keyed by email or by id."""
+    """(user_email expression, JOIN clause) for a table keyed by email, id, or username."""
     user_col = opt(dau, keys["user"])
+
+    user_type_key = keys.get("user_type")
+    user_type = opt(dau, user_type_key) if user_type_key else None
+
+    if user_type == "hackatime_username":
+        return _hackatime_username_join(src, alias, user_col)
+    if user_type == "hackatime_id":
+        return _hackatime_id_join(src, alias, user_col)
+
     if not src.is_id_column(table, user_col):
         return email_normalize_expr(src.col(alias, user_col)), ""
 
@@ -286,7 +315,8 @@ def ht_claims(dau: dict, src: DauSource) -> str | None:
 
     user_email_expr, join_clause = _user_email(
         dau, src, mapping_table, "hp",
-        {"user": "ht_user_column", "email_table": "ht_email_table", "email_column": "ht_email_column"},
+        {"user": "ht_user_column", "user_type": "ht_user_column_type",
+         "email_table": "ht_email_table", "email_column": "ht_email_column"},
     )
 
     alias_ref = src.col("hp", alias_col)
@@ -352,7 +382,8 @@ def custom_hourly(dau: dict, src: DauSource) -> str | None:
 
     user_email_expr, join_clause = _user_email(
         dau, src, table, "a",
-        {"user": "user_column", "email_table": "email_table", "email_column": "email_column"},
+        {"user": "user_column", "user_type": "user_column_type",
+         "email_table": "email_table", "email_column": "email_column"},
     )
 
     detail = f"{src.program}.{src.table_name(table)}"

@@ -757,6 +757,93 @@ def test_two_airtable_fields_cannot_share_a_generated_ids_constant():
     assert "'created at'" in str(exc.value)
 
 
+def test_hackatime_username_ht_claims():
+    """A user column containing Hackatime usernames joins through hackatime.users."""
+    state = airtable_state(
+        program="genesis",
+        selected_tables=["Projects in Progress"],
+        schema=[{
+            "name": "Projects in Progress",
+            "table_id": "tblCCCCCCCCCCCCCC",
+            "schema": "airtable",
+            "columns": [
+                {"name": "Author", "type": "text", "udt": "multilineText", "field_id": "fldC1"},
+                {"name": "Project Name", "type": "text", "udt": "singleLineText", "field_id": "fldC2"},
+                {"name": "Created", "type": "text", "udt": "createdTime", "field_id": "fldC3"},
+            ],
+            "primary_key": ["id"],
+        }],
+        dau_config={
+            "uses_hackatime": True,
+            "ht_mapping_table": "Projects in Progress",
+            "ht_user_column": "Author",
+            "ht_user_column_type": "hackatime_username",
+            "ht_alias_column": "Project Name",
+            "ht_alias_format": "single",
+            "claim_start_source": "column",
+            "claim_start_column": "Created",
+            "start_date": "2026-09-23",
+        },
+    )
+    generated = AirtableCodeGenerator(state).generate()
+    claims = generated["dau_ht_claims"]
+
+    assert "genesis_ht_claims AS (" in claims
+    assert "source('hackatime_raw', 'users')" in claims
+    assert "ht_user_email" in claims
+    assert "LOWER(hu.username) = LOWER(LTRIM(BTRIM(" in claims
+    assert "m.hackatime_first_email" in claims
+    assert "hp.\"author\"" not in claims.split("user_email")[0].split("CASE")[1] if "CASE" in claims else True
+
+
+def test_hackatime_id_ht_claims():
+    """A numeric Hackatime user ID joins through ht_user_email directly."""
+    state = {
+        "program_name": "construct",
+        "selected_tables": ["users", "projects"],
+        "schema": [
+            {
+                "name": "users",
+                "columns": [
+                    {"name": "id", "type": "integer", "udt": "int4"},
+                    {"name": "hackatime_id", "type": "integer", "udt": "int8"},
+                    {"name": "created_at", "type": "timestamp", "udt": "timestamptz"},
+                ],
+                "primary_key": ["id"],
+            },
+            {
+                "name": "projects",
+                "columns": [
+                    {"name": "id", "type": "integer", "udt": "int4"},
+                    {"name": "user_id", "type": "integer", "udt": "int4"},
+                    {"name": "hackatime_alias", "type": "text", "udt": "text"},
+                    {"name": "created_at", "type": "timestamp", "udt": "timestamptz"},
+                ],
+                "primary_key": ["id"],
+            },
+        ],
+        "dau_config": {
+            "uses_hackatime": True,
+            "ht_mapping_table": "projects",
+            "ht_user_column": "user_id",
+            "ht_user_column_type": "hackatime_id",
+            "ht_alias_column": "hackatime_alias",
+            "ht_alias_format": "single",
+            "claim_start_source": "column",
+            "claim_start_column": "created_at",
+            "start_date": "2026-06-01",
+        },
+    }
+    generated = CodeGenerator(state).generate()
+    claims = generated["dau_ht_claims"]
+
+    assert "construct_ht_claims AS (" in claims
+    assert "ht_user_email m" in claims
+    assert "m.hackatime_user_id" in claims
+    assert "m.hackatime_first_email" in claims
+    assert "source('hackatime_raw'" not in claims
+
+
 def test_validate_locally_airtable(airtable_generated):
     results = validate_locally(REPO_ROOT, PROGRAM, airtable_generated)
     assert set(results) >= {"airtable/definitions.py", "dlt/assets.py", "airtable_test_program.yml"}

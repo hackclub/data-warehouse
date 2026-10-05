@@ -288,10 +288,9 @@ hackatime_hourly AS (
     GROUP BY 1, 2, 3
 ),
 
--- Shared Hackatime user id -> first email map. Beest, Athena Award, and
--- Construct all use app Slack/Hackatime IDs rather than storing participant
--- email directly in the project-time source.
-beest_htid_email AS (
+-- Shared Hackatime user id -> first email map. Programs that identify users
+-- by Hackatime ID or username (rather than email) join through this.
+ht_user_email AS (
     SELECT DISTINCT hackatime_user_id, hackatime_first_email
     FROM {{ ref('hourly_project_activity') }}
     WHERE hackatime_first_email IS NOT NULL
@@ -568,7 +567,7 @@ construct_slack_email AS (
             END
         ) AS user_email
     FROM {{ source('hackatime_raw', 'users') }} hu
-    JOIN beest_htid_email m ON m.hackatime_user_id = hu.id
+    JOIN ht_user_email m ON m.hackatime_user_id = hu.id
     WHERE hu.slack_uid IS NOT NULL
     GROUP BY 1
 ),
@@ -949,7 +948,7 @@ beest_ht_claims AS (
         proj.created_at AT TIME ZONE 'UTC' AS claim_start_ts
     FROM {{ source('beest', 'projects') }} proj
     JOIN {{ source('beest', 'users') }} u ON u.id = proj.user_id
-    JOIN beest_htid_email m ON m.hackatime_user_id::text = u.hackatime_user_id
+    JOIN ht_user_email m ON m.hackatime_user_id::text = u.hackatime_user_id
     CROSS JOIN LATERAL (
         SELECT jsonb_array_elements_text(proj.hackatime_project_name::jsonb) AS alias_text
         WHERE proj.hackatime_project_name ~ '^\s*\[.*\]\s*$'
@@ -1109,7 +1108,7 @@ hack_club_the_game_ht_claims AS (
     FROM {{ source('hack_club_the_game', 'hackatime_projects') }} hp
     JOIN {{ source('hack_club_the_game', 'projects') }} proj ON proj.id = hp.project_id
     JOIN {{ source('hack_club_the_game', 'users') }} u ON u.id = hp.user_id
-    JOIN beest_htid_email m ON m.hackatime_user_id::text = u.hackatime_id
+    JOIN ht_user_email m ON m.hackatime_user_id::text = u.hackatime_id
     WHERE hp.project_id IS NOT NULL
       AND hp.name IS NOT NULL AND hp.name <> ''
       AND u.hackatime_id IS NOT NULL AND u.hackatime_id <> ''
@@ -1270,7 +1269,7 @@ siege_ht_claims AS (
 -- rationale) — Hackatime is the only time source.
 --
 -- Identity: slack_id -> hackatime.users.slack_uid -> hackatime user id ->
--- first email (reuses beest_htid_email). Measured 2026-06: slack matches
+-- first email (reuses ht_user_email). Measured 2026-06: slack matches
 -- 93.7% of duration-bearing claim pairs vs 90.2% by normalized email, and
 -- email adds zero pairs beyond slack, so slack is the sole join; the residual
 -- unmatched pairs are dominated by the other-YSWS placeholders excluded here.
@@ -1291,7 +1290,7 @@ siege_ht_claims AS (
 athena_award_slack_email AS (
     SELECT DISTINCT hu.slack_uid, m.hackatime_first_email
     FROM {{ source('hackatime_raw', 'users') }} hu
-    JOIN beest_htid_email m ON m.hackatime_user_id = hu.id
+    JOIN ht_user_email m ON m.hackatime_user_id = hu.id
     WHERE hu.slack_uid IS NOT NULL AND hu.slack_uid <> ''
 ),
 
@@ -1697,7 +1696,7 @@ thirdspace_ht_claims AS (
     JOIN {{ source('thirdspace', 'projects') }} proj ON proj.id = ph.project_id
     JOIN {{ source('thirdspace', 'users') }} u ON u.id = ph.user_id
     LEFT JOIN {{ source('thirdspace', 'hackatime_tokens') }} ht ON ht.user_id = ph.user_id
-    JOIN beest_htid_email m
+    JOIN ht_user_email m
         ON m.hackatime_user_id::text = COALESCE(NULLIF(ht.hackatime_user_id, ''), NULLIF(u.hackatime_id, ''))
     CROSS JOIN LATERAL UNNEST(
         CASE WHEN ph.hackatime_projects::text ~ '^\s*\['

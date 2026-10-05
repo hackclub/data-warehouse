@@ -66,6 +66,7 @@ class AirtableIntrospector:
         tables = []
         for t in r.get("tables", []):
             fields = t.get("fields", [])
+            samples = self._fetch_samples(base_id, t["id"], fields)
             columns = [
                 {
                     "name": f["name"],
@@ -75,6 +76,7 @@ class AirtableIntrospector:
                     "default": None,
                     "sensitive": is_sensitive(f["name"]),
                     "field_id": f["id"],
+                    "samples": samples.get(f["name"], []),
                 }
                 for f in fields
             ]
@@ -94,6 +96,25 @@ class AirtableIntrospector:
                 ),
             })
         return tables
+
+    def _fetch_samples(self, base_id: str, table_id: str, fields: list[dict]) -> dict[str, list]:
+        """Fetch up to 5 sample values per field for auto-detection."""
+        field_names = [f["name"] for f in fields if _field_type(f) not in ("child table",)]
+        try:
+            r = self._get(
+                f"https://api.airtable.com/v0/{base_id}/{table_id}",
+                {"maxRecords": "5"},
+            )
+        except AirtableError:
+            return {}
+        result: dict[str, list] = {name: [] for name in field_names}
+        for record in r.get("records", []):
+            row = record.get("fields", {})
+            for name in field_names:
+                val = row.get(name)
+                if val is not None and not isinstance(val, (dict, list)):
+                    result[name].append(val)
+        return result
 
     def _get(self, url: str, params: dict | None = None) -> dict:
         try:

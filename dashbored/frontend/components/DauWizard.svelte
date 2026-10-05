@@ -153,8 +153,36 @@
     })
   }
 
-  let htUserIsId = $derived(looksLikeId(htUserColumn, htMappingTable))
-  let customUserIsId = $derived(looksLikeId(userColumn, customTable))
+  let htUserColumnType = $state(dauConfig.ht_user_column_type || '')
+  let userColumnType = $state(dauConfig.user_column_type || '')
+
+  function guessUserColumnType(colName, tableName) {
+    if (!colName) return 'email'
+    const col = columnsForTable(tableName).find(c => c.name === colName)
+    if (!col) return 'email'
+    const udt = (col.udt || col.type || '').toLowerCase()
+    const name = (warehouseName(colName)).toLowerCase()
+
+    if (['int4', 'int8', 'integer', 'bigint', 'serial', 'number', 'count', 'autonumber'].includes(udt))
+      return 'hackatime_id'
+
+    if (udt === 'email') return 'email'
+    if (name.includes('email') || name.includes('mail')) return 'email'
+
+    const samples = col.samples || []
+    if (samples.length > 0) {
+      const hasAt = samples.some(v => typeof v === 'string' && v.includes('@'))
+      if (hasAt) return 'email'
+      if (samples.every(v => typeof v === 'string')) return 'hackatime_username'
+    }
+
+    return 'email'
+  }
+
+  let htUserIsId = $derived(htUserColumnType === '' ? looksLikeId(htUserColumn, htMappingTable) : false)
+  let htUserIsHackatime = $derived(htUserColumnType === 'hackatime_username' || htUserColumnType === 'hackatime_id')
+  let customUserIsId = $derived(userColumnType === '' ? looksLikeId(userColumn, customTable) : false)
+  let customUserIsHackatime = $derived(userColumnType === 'hackatime_username' || userColumnType === 'hackatime_id')
 
   // Qualified spellings are legal server-side, so never prune one — repointing
   // analytics.users at public.users would silently change the join.
@@ -167,12 +195,14 @@
     if (htMappingTable && !isSelected(htMappingTable)) {
       htMappingTable = ''
       htUserColumn = ''
+      htUserColumnType = ''
       htAliasColumn = ''
       claimStartColumn = ''
     }
     if (customTable && !isSelected(customTable)) {
       customTable = ''
       userColumn = ''
+      userColumnType = ''
       durationColumn = ''
       timestampColumn = ''
     }
@@ -185,12 +215,13 @@
     const ts = timestampColumns(htMappingTable)
     const created = columnsForTable(htMappingTable).find(c => c.name === 'created_at')
     claimStartColumn = claimStartColumn || (created ? 'created_at' : ts.length === 1 ? ts[0].name : '')
+    if (!htUserColumnType) htUserColumnType = guessUserColumnType(htUserColumn, htMappingTable)
   })
 
   // The column has to belong to the table currently picked — clearing or
   // switching the email table must not leave the old column behind.
   $effect(() => {
-    if (!htUserIsId) { htEmailTable = ''; htEmailColumn = ''; return }
+    if (!htUserIsId || htUserIsHackatime) { htEmailTable = ''; htEmailColumn = ''; return }
     if (htEmailTable && !isSelected(htEmailTable)) htEmailTable = ''
     if (!htEmailTable) htEmailTable = defaultEmailTable()
     if (!columnsForTable(htEmailTable).some(c => c.name === htEmailColumn)) {
@@ -199,7 +230,7 @@
   })
 
   $effect(() => {
-    if (!customUserIsId) { emailTable = ''; emailColumn = ''; return }
+    if (!customUserIsId || customUserIsHackatime) { emailTable = ''; emailColumn = ''; return }
     if (emailTable && !isSelected(emailTable)) emailTable = ''
     if (!emailTable) emailTable = defaultEmailTable()
     if (!columnsForTable(emailTable).some(c => c.name === emailColumn)) {
@@ -217,6 +248,7 @@
     const created = columnsForTable(customTable).find(c => c.name === 'created_at')
     const ts = timestampColumns(customTable)
     timestampColumn = timestampColumn || (created ? 'created_at' : ts.length === 1 ? ts[0].name : '')
+    if (!userColumnType) userColumnType = guessUserColumnType(userColumn, customTable)
   })
 
   function missingFields() {
@@ -234,7 +266,7 @@
       if (!htMappingTable) out.push('Pick the table where users claim their Hackatime alias.')
       else {
         if (!htUserColumn) out.push('Pick the user column on the Hackatime mapping table.')
-        if (htUserIsId && (!htEmailTable || !htEmailColumn)) out.push('Pick the table and column holding user emails.')
+        if (htUserIsId && !htUserIsHackatime && (!htEmailTable || !htEmailColumn)) out.push('Pick the table and column holding user emails.')
         if (!htAliasColumn) out.push('Pick the Hackatime alias column.')
         if (claimStartSource === 'column') {
           if (!claimStartColumn) out.push('Pick the column marking when each alias was claimed.')
@@ -247,7 +279,7 @@
       if (!customTable) out.push('Pick the custom activity table.')
       else {
         if (!userColumn) out.push('Pick the user column on the activity table.')
-        if (customUserIsId && (!emailTable || !emailColumn)) out.push('Pick the table and column holding user emails.')
+        if (customUserIsId && !customUserIsHackatime && (!emailTable || !emailColumn)) out.push('Pick the table and column holding user emails.')
         if (!timestampColumn) out.push('Pick the timestamp column on the activity table.')
       }
     }
@@ -368,6 +400,7 @@ If the user identifier column is an integer FK (like user_id), JOIN to the users
       custom_sql: useCustomSql ? customSql : '',
       ht_mapping_table: htMappingTable,
       ht_user_column: htUserColumn,
+      ht_user_column_type: htUserColumnType,
       ht_alias_column: htAliasColumn,
       ht_alias_format: htAliasFormat,
       claim_start_source: claimStartSource,
@@ -380,6 +413,7 @@ If the user identifier column is an integer FK (like user_id), JOIN to the users
       email_column: emailColumn,
       timestamp_column: timestampColumn,
       user_column: userColumn,
+      user_column_type: userColumnType,
       duration_column: durationColumn,
       duration_unit: durationUnit,
       cap_24h: cap24h,
@@ -453,7 +487,17 @@ If the user identifier column is an integer FK (like user_id), JOIN to the users
               </select>
             </label>
 
-            {#if htUserIsId}
+            <label>
+              Is this an email, Hackatime username, or numeric Hackatime ID?
+              <span class="dau-field-hint">Hackatime usernames/IDs are resolved to emails automatically via the shared Hackatime user table.</span>
+              <select bind:value={htUserColumnType} class="webtv-input">
+                <option value="email">Email address</option>
+                <option value="hackatime_username">Hackatime username (e.g. @breynard)</option>
+                <option value="hackatime_id">Numeric Hackatime user ID</option>
+              </select>
+            </label>
+
+            {#if htUserIsId && !htUserIsHackatime}
               <label>
                 Which table has user emails?
                 <span class="dau-field-hint">The user column looks like a foreign key. We need to join against the table that has the email address.</span>
@@ -582,7 +626,17 @@ If the user identifier column is an integer FK (like user_id), JOIN to the users
               </select>
             </label>
 
-            {#if customUserIsId}
+            <label>
+              Is this an email, Hackatime username, or numeric Hackatime ID?
+              <span class="dau-field-hint">Hackatime usernames/IDs are resolved to emails automatically via the shared Hackatime user table.</span>
+              <select bind:value={userColumnType} class="webtv-input">
+                <option value="email">Email address</option>
+                <option value="hackatime_username">Hackatime username (e.g. @breynard)</option>
+                <option value="hackatime_id">Numeric Hackatime user ID</option>
+              </select>
+            </label>
+
+            {#if customUserIsId && !customUserIsHackatime}
               <label>
                 Which table has user emails?
                 <span class="dau-field-hint">The user column looks like a foreign key. We need to join against the table that has the email address.</span>
