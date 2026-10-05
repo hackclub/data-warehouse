@@ -258,7 +258,10 @@ WITH program_windows AS (
         ('playground', TIMESTAMP WITH TIME ZONE '2026-09-25 00:00:00 America/New_York',
                    TIMESTAMP WITH TIME ZONE '2026-10-12 00:00:00 America/New_York'),
         ('genesis', TIMESTAMP WITH TIME ZONE '2026-09-23 00:00:00+00',
+                   NULL::timestamptz),
+        ('fabricate', TIMESTAMP WITH TIME ZONE '2026-09-30 00:00:00+00',
                    NULL::timestamptz)
+    
     
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
@@ -1863,6 +1866,26 @@ club_shop_activity AS (
     GROUP BY 1, 3
 ),
 
+fabricate_custom_hourly AS (
+    SELECT
+        DATE_TRUNC('hour', a."occurred_on" AT TIME ZONE 'UTC') AS activity_hour,
+        'fabricate'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(u."email"))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u."email")), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(u."email")), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(u."email")), '+', 1)
+        END AS user_email,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        ROUND(SUM((a."seconds_spent" / 3600.0))::numeric, 4) AS raw_hours_logged,
+        'custom'::text AS logging_method,
+        ('fabricate.journal_entries.seconds_spent; entries=' || COUNT(*)::text) AS source_detail
+    FROM {{ source('fabricate', 'journal_entries') }} a
+    JOIN {{ source('fabricate', 'users') }} u ON u."id" = a."user_id"
+    WHERE a."seconds_spent" > 0
+    GROUP BY 1, 2, 3, 4, 5
+),
+
 custom_in_window AS (
     SELECT
         activity_hour,
@@ -1896,6 +1919,7 @@ custom_in_window AS (
             UNION ALL SELECT * FROM arcade_custom_hourly
             UNION ALL SELECT * FROM juice_custom_hourly
             UNION ALL SELECT * FROM half_life_custom_hourly
+            UNION ALL SELECT * FROM fabricate_custom_hourly
         ) c
         JOIN program_windows w
             ON w.program_name = c.program_name

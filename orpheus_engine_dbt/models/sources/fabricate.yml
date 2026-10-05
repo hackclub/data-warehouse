@@ -1,0 +1,60 @@
+version: 2
+
+sources:
+  - name: fabricate
+    schema: fabricate
+    tables:
+      - name: active_storage_attachments
+        description: "Fabricate active_storage_attachments table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: active_storage_blobs
+        description: "Fabricate active_storage_blobs table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: active_storage_variant_records
+        description: "Fabricate active_storage_variant_records table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: ahoy_events
+        description: "Fabricate ahoy_events table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: ahoy_visits
+        description: "Fabricate ahoy_visits table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: chip_transactions
+        description: "Fabricate chip_transactions table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: feature_flags
+        description: "Fabricate feature_flags table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: grants
+        description: "Fabricate grants table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: journal_entries
+        description: "Fabricate journal_entries table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: path_redemptions
+        description: "Fabricate path_redemptions table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: project_votes
+        description: "Fabricate project_votes table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: projects
+        description: "Fabricate projects table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: referrals
+        description: "Fabricate referrals table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: review_notes
+        description: "Fabricate review_notes table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: ships
+        description: "Fabricate ships table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: uploads
+        description: "Fabricate uploads table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: users
+        description: "Fabricate users table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
+      - name: versions
+        description: "Fabricate versions table."
+        meta: {dagster: {deps: [fabricate_warehouse_mirror]}}
