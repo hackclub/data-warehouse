@@ -260,7 +260,10 @@ WITH program_windows AS (
         ('genesis', TIMESTAMP WITH TIME ZONE '2026-09-23 00:00:00+00',
                    NULL::timestamptz),
         ('fabricate', TIMESTAMP WITH TIME ZONE '2026-09-30 00:00:00+00',
+                   NULL::timestamptz),
+        ('hacktank', TIMESTAMP WITH TIME ZONE '2026-10-02 00:00:00 UTC',
                    NULL::timestamptz)
+    
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -1745,6 +1748,22 @@ genesis_ht_claims AS (
     WHERE hp."project_name" IS NOT NULL AND hp."project_name" <> ''
 ),
 
+hacktank_ht_claims AS (
+    SELECT 'hacktank'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(hp."hackatime_project_name")) AS hackatime_alias,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        hp."shipped_at" AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('hacktank', 'projects') }} hp
+    JOIN ht_user_email m ON m.hackatime_user_id = hp."user_id"
+    WHERE hp."hackatime_project_name" IS NOT NULL AND hp."hackatime_project_name" <> ''
+),
+
 all_claims_raw AS (
     SELECT * FROM stardance_ht_claims
     UNION ALL SELECT * FROM flavortown_ht_claims
@@ -1771,6 +1790,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM wrangler_ht_claims
     UNION ALL SELECT * FROM playground_ht_claims
     UNION ALL SELECT * FROM genesis_ht_claims
+    UNION ALL SELECT * FROM hacktank_ht_claims
 ),
 
 all_claims AS (
@@ -1884,6 +1904,25 @@ fabricate_custom_hourly AS (
     GROUP BY 1, 2, 3, 4, 5
 ),
 
+hacktank_custom_hourly AS (
+    SELECT
+        DATE_TRUNC('hour', a."last_check" AT TIME ZONE 'UTC') AS activity_hour,
+        'hacktank'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '+', 1)
+        END AS user_email,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        0::numeric AS raw_hours_logged,
+        'custom'::text AS logging_method,
+        ('hacktank.users; entries=' || COUNT(*)::text) AS source_detail
+    FROM {{ source('hacktank', 'users') }} a
+    JOIN ht_user_email m ON m.hackatime_user_id = a."id"
+    GROUP BY 1, 2, 3, 4, 5
+),
+
 custom_in_window AS (
     SELECT
         activity_hour,
@@ -1918,6 +1957,7 @@ custom_in_window AS (
             UNION ALL SELECT * FROM juice_custom_hourly
             UNION ALL SELECT * FROM half_life_custom_hourly
             UNION ALL SELECT * FROM fabricate_custom_hourly
+            UNION ALL SELECT * FROM hacktank_custom_hourly
         ) c
         JOIN program_windows w
             ON w.program_name = c.program_name
