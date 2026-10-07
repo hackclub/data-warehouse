@@ -1665,18 +1665,23 @@ snowglobe_ht_claims AS (
 ),
 
 playground_ht_claims AS (
+    -- Participants are identified by their Hackatime user id, as playground
+    -- counts time per Hackatime account. Any time on a linked project counts
+    -- from the program start (2026-09-25 17:00 Eastern), whenever the pet was
+    -- created.
     SELECT 'playground'::text AS program_name,
-        CASE WHEN POSITION('@' IN LOWER(BTRIM(u."email"))) > 0
-             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u."email")), '@', 1), '+', 1)
-                  || '@' || SPLIT_PART(LOWER(BTRIM(u."email")), '@', 2)
-             ELSE SPLIT_PART(LOWER(BTRIM(u."email")), '+', 1)
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '+', 1)
         END AS user_email,
         LOWER(BTRIM(alias_val)) AS hackatime_alias,
         NULL::text AS project_name,
         NULL::text AS code_url,
-        hp."created_at" AT TIME ZONE 'UTC' AS claim_start_ts
+        TIMESTAMP WITH TIME ZONE '2026-09-25 17:00:00 America/New_York' AS claim_start_ts
     FROM {{ source('playground', 'projects') }} hp
     JOIN {{ source('playground', 'users') }} u ON u."id" = hp."user_id"
+    JOIN ht_user_email m ON m.hackatime_user_id::text = u."hackatime_user_id"
     CROSS JOIN LATERAL unnest(hp."hackatime_projects"::text[]) AS alias_val
     WHERE alias_val IS NOT NULL AND alias_val <> ''
 ),
