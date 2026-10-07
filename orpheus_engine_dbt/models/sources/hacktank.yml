@@ -1,0 +1,42 @@
+version: 2
+
+sources:
+  - name: hacktank
+    schema: hacktank
+    tables:
+      - name: __drizzle_migrations
+        description: "Hacktank __drizzle_migrations table."
+        meta: {dagster: {deps: [hacktank_warehouse_mirror]}}
+      - name: devlog_screenshots
+        description: "Hacktank devlog_screenshots table."
+        meta: {dagster: {deps: [hacktank_warehouse_mirror]}}
+      - name: devlogs
+        description: "Hacktank devlogs table."
+        meta: {dagster: {deps: [hacktank_warehouse_mirror]}}
+      - name: hackatime_snapshots
+        description: "Hacktank hackatime_snapshots table."
+        meta: {dagster: {deps: [hacktank_warehouse_mirror]}}
+      - name: projects
+        description: "Hacktank projects table."
+        meta: {dagster: {deps: [hacktank_warehouse_mirror]}}
+      - name: screenshots
+        description: "Hacktank screenshots table."
+        meta: {dagster: {deps: [hacktank_warehouse_mirror]}}
+      - name: seed_ledger
+        description: "Hacktank seed_ledger table."
+        meta: {dagster: {deps: [hacktank_warehouse_mirror]}}
+      - name: shop_items
+        description: "Hacktank shop_items table."
+        meta: {dagster: {deps: [hacktank_warehouse_mirror]}}
+      - name: shop_orders
+        description: "Hacktank shop_orders table."
+        meta: {dagster: {deps: [hacktank_warehouse_mirror]}}
+      - name: users
+        description: "Hacktank users table."
+        meta: {dagster: {deps: [hacktank_warehouse_mirror]}}
+      - name: video_metric_snapshots
+        description: "Hacktank video_metric_snapshots table."
+        meta: {dagster: {deps: [hacktank_warehouse_mirror]}}
+      - name: videos
+        description: "Hacktank videos table."
+        meta: {dagster: {deps: [hacktank_warehouse_mirror]}}
