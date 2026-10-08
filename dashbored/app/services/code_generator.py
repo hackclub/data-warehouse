@@ -292,7 +292,7 @@ class CodeGenerator:
                     f"{self.program_title} {self._table_name(key)} table."
                 ),
                 "meta": Flow(
-                    dagster=Flow(deps=[f"{self.program}_warehouse_mirror"])
+                    dagster=Flow(asset_key=[f"{self.program}_warehouse_mirror"])
                 ),
             }
             for key in keys

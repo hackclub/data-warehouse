@@ -6,13 +6,13 @@ sources:
     tables:
       - name: users
         description: "The Game user accounts with hackatime_id linkage."
-        meta: { dagster: { deps: ['hack_club_the_game_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['hack_club_the_game_warehouse_mirror'] } }
       - name: projects
         description: "The Game project submissions with repo_link and approval state."
-        meta: { dagster: { deps: ['hack_club_the_game_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['hack_club_the_game_warehouse_mirror'] } }
       - name: hackatime_projects
         description: "The Game hackatime project claims linking aliases to projects."
-        meta: { dagster: { deps: ['hack_club_the_game_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['hack_club_the_game_warehouse_mirror'] } }
       - name: project_reviews
         description: "The Game project approval reviews with approved_seconds."
-        meta: { dagster: { deps: ['hack_club_the_game_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['hack_club_the_game_warehouse_mirror'] } }

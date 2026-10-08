@@ -210,7 +210,7 @@ class AirtableCodeGenerator:
                     "description": Quoted(f"{title} {self._table_name(key)} table."),
                     "meta": Flow(
                         dagster=Flow(
-                            deps=[f"{self.program}_{self._table_name(key)}_warehouse"]
+                            asset_key=[f"{self.program}_{self._table_name(key)}_warehouse"]
                         )
                     ),
                 }

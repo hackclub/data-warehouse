@@ -6,13 +6,13 @@ sources:
     tables:
       - name: user
         description: "Stasis users with hackatimeUserId linkage."
-        meta: { dagster: { deps: ['stasis_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stasis_warehouse_mirror'] } }
       - name: project
         description: "Stasis projects with githubRepo URLs."
-        meta: { dagster: { deps: ['stasis_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stasis_warehouse_mirror'] } }
       - name: hackatime_project
         description: "Stasis hackatime project name claims per project."
-        meta: { dagster: { deps: ['stasis_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stasis_warehouse_mirror'] } }
       - name: work_session
         description: "Stasis manual work sessions with hoursClaimed."
-        meta: { dagster: { deps: ['stasis_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stasis_warehouse_mirror'] } }
