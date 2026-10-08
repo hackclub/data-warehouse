@@ -6,19 +6,19 @@ sources:
     tables:
       - name: users
         description: "Fallout users (hardware program, Shenzhen)."
-        meta: { dagster: { deps: ['fallout_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['fallout_warehouse_mirror'] } }
       - name: projects
         description: "Fallout projects with repo_link and manual_seconds."
-        meta: { dagster: { deps: ['fallout_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['fallout_warehouse_mirror'] } }
       - name: ships
         description: "Fallout ship submissions with approved_seconds (user shipping events)."
-        meta: { dagster: { deps: ['fallout_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['fallout_warehouse_mirror'] } }
       - name: lookout_timelapses
         description: "Fallout Lookout build-time timelapses (duration = tracked build seconds)."
-        meta: { dagster: { deps: ['fallout_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['fallout_warehouse_mirror'] } }
       - name: lapse_timelapses
         description: "Fallout Lapse build-time timelapses (duration = tracked build seconds)."
-        meta: { dagster: { deps: ['fallout_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['fallout_warehouse_mirror'] } }
       - name: journal_entries
         description: "Fallout devlog/journal entries (progress updates)."
-        meta: { dagster: { deps: ['fallout_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['fallout_warehouse_mirror'] } }

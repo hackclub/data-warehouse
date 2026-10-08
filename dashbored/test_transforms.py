@@ -371,7 +371,7 @@ def test_sources_yml_fragment_parses(generated):
     assert entry["name"] == PROGRAM
     assert entry["schema"] == PROGRAM
     assert [t["name"] for t in entry["tables"]] == ["users", "projects", "devlogs"]
-    assert entry["tables"][0]["meta"]["dagster"]["deps"] == ["test_program_warehouse_mirror"]
+    assert entry["tables"][0]["meta"]["dagster"]["asset_key"] == ["test_program_warehouse_mirror"]
 
 
 def test_dau_ctes(generated):
@@ -639,7 +639,7 @@ def test_airtable_hostile_identifiers(airtable_definitions_source, dlt_assets_so
 
     entry = yaml.safe_load("sources:\n" + generated["sources_yml"])["sources"][0]
     assert [t["name"] for t in entry["tables"]] == ["on", "weird_table"]
-    assert entry["tables"][0]["meta"]["dagster"]["deps"] == ["test_program_on_warehouse"]
+    assert entry["tables"][0]["meta"]["dagster"]["asset_key"] == ["test_program_on_warehouse"]
 
     assert 'a."hours_logged"' in generated["dau_custom_hourly"]
     assert "source('airtable_test_program', 'weird_table')" in generated["dau_custom_hourly"]

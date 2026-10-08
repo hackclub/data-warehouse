@@ -6,7 +6,7 @@ sources:
     tables:
       - name: users
         description: "Off-Track users with email and hackatime linkage."
-        meta: { dagster: { deps: ['offtrack_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['offtrack_warehouse_mirror'] } }
       - name: journal_entries
         description: "Off-Track journal entries with hours_worked and time_done."
-        meta: { dagster: { deps: ['offtrack_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['offtrack_warehouse_mirror'] } }

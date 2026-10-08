@@ -6,7 +6,7 @@ sources:
     tables:
       - name: users
         description: "Summer of Making 2025 users with email."
-        meta: { dagster: { deps: ['summer_of_making_2025_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['summer_of_making_2025_warehouse_mirror'] } }
       - name: projects
         description: "Summer of Making 2025 projects with hackatime_project_keys array and repo_link."
-        meta: { dagster: { deps: ['summer_of_making_2025_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['summer_of_making_2025_warehouse_mirror'] } }

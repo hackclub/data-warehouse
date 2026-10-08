@@ -6,16 +6,16 @@ sources:
     tables:
       - name: projects
         description: "Snowglobe projects table."
-        meta: {dagster: {deps: [snowglobe_projects_warehouse]}}
+        meta: {dagster: {asset_key: [snowglobe_projects_warehouse]}}
       - name: activity
         description: "Snowglobe activity table."
-        meta: {dagster: {deps: [snowglobe_activity_warehouse]}}
+        meta: {dagster: {asset_key: [snowglobe_activity_warehouse]}}
       - name: orders
         description: "Snowglobe orders table."
-        meta: {dagster: {deps: [snowglobe_orders_warehouse]}}
+        meta: {dagster: {asset_key: [snowglobe_orders_warehouse]}}
       - name: posts
         description: "Snowglobe posts table."
-        meta: {dagster: {deps: [snowglobe_posts_warehouse]}}
+        meta: {dagster: {asset_key: [snowglobe_posts_warehouse]}}
       - name: users
         description: "Snowglobe users table."
-        meta: {dagster: {deps: [snowglobe_users_warehouse]}}
+        meta: {dagster: {asset_key: [snowglobe_users_warehouse]}}

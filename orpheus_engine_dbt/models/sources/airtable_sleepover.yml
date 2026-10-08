@@ -6,16 +6,16 @@ sources:
     tables:
       - name: projects
         description: "Sleepover projects with hackatime_name (JSON array or plain text)."
-        meta: { dagster: { deps: ['dlt_airtable_sleepover'] } }
+        meta: { dagster: { asset_key: ['dlt_airtable_sleepover'] } }
       - name: registered_users
         description: "Sleepover registered users with email."
-        meta: { dagster: { deps: ['dlt_airtable_sleepover'] } }
+        meta: { dagster: { asset_key: ['dlt_airtable_sleepover'] } }
       - name: projects__registered_users
         description: "Sleepover project-to-registered-user junction table (DLT nested)."
-        meta: { dagster: { deps: ['dlt_airtable_sleepover'] } }
+        meta: { dagster: { asset_key: ['dlt_airtable_sleepover'] } }
       - name: ysws_project_submission
         description: "Sleepover YSWS project submissions with code_url."
-        meta: { dagster: { deps: ['dlt_airtable_sleepover'] } }
+        meta: { dagster: { asset_key: ['dlt_airtable_sleepover'] } }
       - name: _dlt_loads
         description: "DLT load metadata for tracking sleepover sync times."
-        meta: { dagster: { deps: ['dlt_airtable_sleepover'] } }
+        meta: { dagster: { asset_key: ['dlt_airtable_sleepover'] } }

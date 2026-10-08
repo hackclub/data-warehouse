@@ -6,7 +6,7 @@ sources:
     tables:
       - name: records
         description: "Raw Airtable records from all bases (base_id, table_id, record_id, fields JSONB)."
-        meta: { dagster: { deps: ['airtable_raw_all_bases_sync'] } }
+        meta: { dagster: { asset_key: ['airtable_raw_all_bases_sync'] } }
 
   # High Seas, Arcade, and Juice are ended programs whose Airtable backends are
   # replicated by Fivetran (note the _fivetran_synced column), NOT by a Dagster

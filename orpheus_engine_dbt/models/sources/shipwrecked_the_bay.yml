@@ -8,10 +8,10 @@ sources:
     tables:
       - name: User
         description: "Shipwrecked 2025 users with email and fraud-review status."
-        meta: { dagster: { deps: ['shipwrecked_the_bay_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['shipwrecked_the_bay_warehouse_mirror'] } }
       - name: Project
         description: "Shipwrecked 2025 projects with codeUrl."
-        meta: { dagster: { deps: ['shipwrecked_the_bay_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['shipwrecked_the_bay_warehouse_mirror'] } }
       - name: HackatimeProjectLink
         description: "Shipwrecked 2025 hackatime alias claims per project."
-        meta: { dagster: { deps: ['shipwrecked_the_bay_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['shipwrecked_the_bay_warehouse_mirror'] } }

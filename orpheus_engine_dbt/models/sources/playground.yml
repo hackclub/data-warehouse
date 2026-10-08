@@ -6,22 +6,22 @@ sources:
     tables:
       - name: audit_events
         description: "Playground audit_events table."
-        meta: {dagster: {deps: [playground_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [playground_warehouse_mirror]}}
       - name: claims
         description: "Playground claims table."
-        meta: {dagster: {deps: [playground_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [playground_warehouse_mirror]}}
       - name: coding_hours
         description: "Playground coding_hours table."
-        meta: {dagster: {deps: [playground_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [playground_warehouse_mirror]}}
       - name: projects
         description: "Playground projects table."
-        meta: {dagster: {deps: [playground_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [playground_warehouse_mirror]}}
       - name: redemptions
         description: "Playground redemptions table."
-        meta: {dagster: {deps: [playground_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [playground_warehouse_mirror]}}
       - name: ships
         description: "Playground ships table."
-        meta: {dagster: {deps: [playground_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [playground_warehouse_mirror]}}
       - name: users
         description: "Playground users table."
-        meta: {dagster: {deps: [playground_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [playground_warehouse_mirror]}}
