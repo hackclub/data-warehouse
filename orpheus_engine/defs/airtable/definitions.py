@@ -453,6 +453,14 @@ airtable_config = AirtableServiceConfig(
                 ),
             }
         ),
+        "mipmap": AirtableBaseConfig(
+            base_id="appKvESBbLxXh3sEk",
+            tables={
+                "project": AirtableTableConfig(
+                    table_id="tblLwZu1GoLMpfY2y"
+                ),
+            }
+        ),
     }
 )
 

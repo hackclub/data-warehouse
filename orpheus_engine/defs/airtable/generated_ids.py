@@ -3359,4 +3359,29 @@ class AirtableIDs:
             created = "fldK64yfLlbZ8j3Cr"  # Name: Created
 
 
+    class mipmap:
+        """IDs for Base 'mipmap' (ID: appKvESBbLxXh3sEk)"""
+        BASE_ID = "appKvESBbLxXh3sEk"
+
+        class project:
+            """IDs for Table 'project' (ID: tblLwZu1GoLMpfY2y)"""
+            TABLE_ID = "tblLwZu1GoLMpfY2y"
+
+            id = "fldE5ZqT6XGzXFJmT"  # Name: id
+            user_id = "fldBKhaKwI16JzB4G"  # Name: user_id
+            name = "fldJYhsb4VGFKjpxA"  # Name: name
+            description = "fldTO1qs3RKewlTH7"  # Name: description
+            repo_url = "fldLwS9MCbovjs2lK"  # Name: repo_url
+            demo_url = "fldegc2UksLyEEm63"  # Name: demo_url
+            screenshot_url = "fldTo7DrVvZOfnfsj"  # Name: screenshot_url
+            tier = "fldQHLebh8BEx95m3"  # Name: tier
+            hackatime_projects = "fldAvnaVjFBCSzOxl"  # Name: hackatime_projects
+            total_seconds = "fldQIbZe8ytoesX29"  # Name: total_seconds
+            last_logged_at = "fldaRjCYzJKbzg6ft"  # Name: last_logged_at
+            created_at = "fld9p51XMEKoebRpr"  # Name: created_at
+            updated_at = "fldaQAcjwF8xFGOC0"  # Name: updated_at
+            deleted_at = "fld4jv3IkW6rzvKe3"  # Name: deleted_at
+            hackatime_user_id = "fldizxdM02LqrXaUr"  # Name: hackatime_user_id
+
+
 # fmt: on

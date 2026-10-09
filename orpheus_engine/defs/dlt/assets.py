@@ -724,6 +724,12 @@ genesis_assets = create_airtable_sync_assets(
     description="Loads genesis data into the warehouse.airtable_genesis schema."
 )
 
+mipmap_assets = create_airtable_sync_assets(
+    base_name="mipmap",
+    tables=["project"],
+    description="Loads mipmap data into the warehouse.airtable_mipmap schema."
+)
+
 # --- DLT Asset: Loads Data into Warehouse using DLT ---
 @asset(
     compute_kind="dlt", # Tagging the compute type for UI clarity

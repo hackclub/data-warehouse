@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: airtable_mipmap
+    schema: airtable_mipmap
+    tables:
+      - name: project
+        description: "Mipmap project table."
+        meta: {dagster: {deps: [mipmap_project_warehouse]}}
