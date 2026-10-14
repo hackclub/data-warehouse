@@ -6,25 +6,25 @@ sources:
     tables:
       - name: users
         description: "Flavortown users."
-        meta: { dagster: { deps: ['flavortown_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['flavortown_warehouse_mirror'] } }
       - name: projects
         description: "Flavortown projects with repo_url."
-        meta: { dagster: { deps: ['flavortown_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['flavortown_warehouse_mirror'] } }
       - name: user_hackatime_projects
         description: "Flavortown user-to-hackatime-project mappings."
-        meta: { dagster: { deps: ['flavortown_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['flavortown_warehouse_mirror'] } }
       - name: user_identities
         description: "Flavortown user identity providers (hackatime uid linkage)."
-        meta: { dagster: { deps: ['flavortown_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['flavortown_warehouse_mirror'] } }
       - name: project_memberships
         description: "Flavortown project membership (user-to-project)."
-        meta: { dagster: { deps: ['flavortown_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['flavortown_warehouse_mirror'] } }
       - name: post_devlogs
         description: "Flavortown devlog entries with duration_seconds."
-        meta: { dagster: { deps: ['flavortown_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['flavortown_warehouse_mirror'] } }
       - name: posts
         description: "Flavortown posts linking devlogs to projects and users."
-        meta: { dagster: { deps: ['flavortown_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['flavortown_warehouse_mirror'] } }
       - name: fulfillment_payout_runs
         description: "Flavortown approved and pending fulfillment bounty payout runs."
-        meta: { dagster: { deps: ['flavortown_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['flavortown_warehouse_mirror'] } }

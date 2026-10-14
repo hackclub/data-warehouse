@@ -6,7 +6,7 @@ sources:
     tables:
       - name: users
         description: "Stack users with email and hackatime linkage."
-        meta: { dagster: { deps: ['stack_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stack_warehouse_mirror'] } }
       - name: journal_entries
         description: "Stack journal entries with hours_worked and time_done."
-        meta: { dagster: { deps: ['stack_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stack_warehouse_mirror'] } }

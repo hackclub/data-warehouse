@@ -10,7 +10,7 @@ sources:
     tables:
       - name: commits
         description: "One row per (repo_key, sha): authored_at/committed_at, author_login/email, message_head."
-        meta: { dagster: { deps: ['highway_github_commits'] } }
+        meta: { dagster: { asset_key: ['highway_github_commits'] } }
       - name: repos
         description: "One row per scraped repo with scrape_status (ok/not_found/empty/error) and commit_count."
-        meta: { dagster: { deps: ['highway_github_commits'] } }
+        meta: { dagster: { asset_key: ['highway_github_commits'] } }

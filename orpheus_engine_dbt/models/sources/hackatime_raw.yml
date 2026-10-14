@@ -6,7 +6,7 @@ sources:
     tables:
       - name: heartbeats
         description: "Raw heartbeat data replicated from the Hackatime production database by Sling."
-        meta: { dagster: { deps: ['hackatime_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['hackatime_warehouse_mirror'] } }
       - name: users
         description: "Hackatime users; slack_uid -> hackatime user id identity linkage."
-        meta: { dagster: { deps: ['hackatime_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['hackatime_warehouse_mirror'] } }

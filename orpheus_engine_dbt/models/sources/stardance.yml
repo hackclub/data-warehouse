@@ -6,40 +6,40 @@ sources:
     tables:
       - name: users
         description: "Stardance users (summer 2026 program)."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }
       - name: projects
         description: "Stardance projects with repo_url."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }
       - name: user_hackatime_projects
         description: "Stardance user-to-hackatime-project alias mappings."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }
       - name: post_devlogs
         description: "Stardance devlog entries with duration_seconds."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }
       - name: posts
         description: "Stardance posts linking devlogs to projects and users."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }
       - name: user_identities
         description: "Stardance auth/Hackatime identity links (provider, uid)."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }
       - name: project_memberships
         description: "Stardance user-to-project membership rows."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }
       - name: shop_orders
         description: "Stardance shop orders (sticker/free item fulfillment)."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }
       - name: shop_items
         description: "Stardance shop items (catalog, includes FreeStickers)."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }
       - name: post_ship_events
         description: "Stardance ship events with certification_status."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }
       - name: versions
         description: "Stardance PaperTrail audit log (object_changes JSON)."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }
       - name: materialized_all_signups
         description: "Stardance matview: one row per distinct non-fraud signup email, with signup-time IP geocode (country_code/country/is_us)."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }
       - name: fulfillment_payout_runs
         description: "Stardance approved and pending fulfillment bounty payout runs."
-        meta: { dagster: { deps: ['stardance_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['stardance_warehouse_mirror'] } }

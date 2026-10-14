@@ -8,25 +8,25 @@ sources:
     tables:
       - name: user
         description: "Construct users with Slack ID and trust fields; token columns excluded from the Sling mirror."
-        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['construct_warehouse_mirror'] } }
       - name: project
         description: "Construct projects with URLs and review/submission status."
-        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['construct_warehouse_mirror'] } }
       - name: devlog
         description: "Construct devlogs with timeSpent minutes, used for custom daily activity."
-        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['construct_warehouse_mirror'] } }
       - name: ship
         description: "Construct ship events, used for source freshness and validation."
-        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['construct_warehouse_mirror'] } }
       - name: legion_review
         description: "Construct Legion review actions, used for freshness and quality checks."
-        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['construct_warehouse_mirror'] } }
       - name: t1_review
         description: "Construct T1 review actions, used for quality checks."
-        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['construct_warehouse_mirror'] } }
       - name: t2_review
         description: "Construct T2 review actions, used for quality checks."
-        meta: { dagster: { deps: ['construct_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['construct_warehouse_mirror'] } }
 
   # Moonshot ended Dec 2025 and its Coolify DB is normally stopped, so this is a
   # one-time manual backfill (not a scheduled Sling mirror). To refresh: locate

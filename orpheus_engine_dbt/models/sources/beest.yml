@@ -6,7 +6,7 @@ sources:
     tables:
       - name: users
         description: "Beest users with email and hackatime_user_id."
-        meta: { dagster: { deps: ['beest_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['beest_warehouse_mirror'] } }
       - name: projects
         description: "Beest projects with hackatime_project_name and code_url."
-        meta: { dagster: { deps: ['beest_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['beest_warehouse_mirror'] } }

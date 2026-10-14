@@ -6,151 +6,151 @@ sources:
     tables:
       - name: airtable_sync_state
         description: "Club Shop airtable_sync_state table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: ambassadors
         description: "Club Shop ambassadors table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: app_settings
         description: "Club Shop app_settings table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: audit_log
         description: "Club Shop audit_log table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: budget_lines
         description: "Club Shop budget_lines table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: club_settings
         description: "Club Shop club_settings table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: clubs
         description: "Club Shop clubs table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: email_sends
         description: "Club Shop email_sends table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: email_templates
         description: "Club Shop email_templates table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: explore_items
         description: "Club Shop explore_items table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: external_ships
         description: "Club Shop external_ships table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: hcb_card_grants
         description: "Club Shop hcb_card_grants table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: hcb_category_rules
         description: "Club Shop hcb_category_rules table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: hcb_disbursements
         description: "Club Shop hcb_disbursements table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: hcb_org_snapshots
         description: "Club Shop hcb_org_snapshots table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: hcb_orgs
         description: "Club Shop hcb_orgs table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: hcb_sync_runs
         description: "Club Shop hcb_sync_runs table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: hcb_tokens
         description: "Club Shop hcb_tokens table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: hcb_transaction_overrides
         description: "Club Shop hcb_transaction_overrides table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: hcb_transactions
         description: "Club Shop hcb_transactions table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: help_faqs
         description: "Club Shop help_faqs table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: leaders
         description: "Club Shop leaders table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: members
         description: "Club Shop members table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: order_grants
         description: "Club Shop order_grants table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: order_items
         description: "Club Shop order_items table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: orders
         description: "Club Shop orders table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: outbox
         description: "Club Shop outbox table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: review_templates
         description: "Club Shop review_templates table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: role_invites
         description: "Club Shop role_invites table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: ship_drafts
         description: "Club Shop ship_drafts table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: shipments
         description: "Club Shop shipments table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: ships
         description: "Club Shop ships table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: shop_item_favorites
         description: "Club Shop shop_item_favorites table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: shop_item_stars
         description: "Club Shop shop_item_stars table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: shop_item_suggestions
         description: "Club Shop shop_item_suggestions table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: shop_items
         description: "Club Shop shop_items table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: support_messages
         description: "Club Shop support_messages table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: support_threads
         description: "Club Shop support_threads table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: sync_heartbeat
         description: "Club Shop sync_heartbeat table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: token_balances
         description: "Club Shop token_balances table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: token_ledger
         description: "Club Shop token_ledger table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: trust_ratings
         description: "Club Shop trust_ratings table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: unified_records
         description: "Club Shop unified_records table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: user_activity_days
         description: "Club Shop user_activity_days table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: user_roles
         description: "Club Shop user_roles table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: users
         description: "Club Shop users table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: workshop_applications
         description: "Club Shop workshop_applications table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: workshop_club_access
         description: "Club Shop workshop_club_access table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: workshop_projects
         description: "Club Shop workshop_projects table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}
       - name: workshops
         description: "Club Shop workshops table."
-        meta: {dagster: {deps: [club_shop_warehouse_mirror]}}
+        meta: {dagster: {asset_key: [club_shop_warehouse_mirror]}}

@@ -6,10 +6,10 @@ sources:
     tables:
       - name: hackatime_projects
         description: "Neighborhood Airtable Hackatime project alias rows, linked to neighbors."
-        meta: { dagster: { deps: ['neighborhood_hackatime_projects_warehouse'] } }
+        meta: { dagster: { asset_key: ['neighborhood_hackatime_projects_warehouse'] } }
       - name: neighbors
         description: "Neighborhood Airtable participant records."
-        meta: { dagster: { deps: ['neighborhood_neighbors_warehouse'] } }
+        meta: { dagster: { asset_key: ['neighborhood_neighbors_warehouse'] } }
       - name: _dlt_loads
         description: "DLT load metadata for tracking Neighborhood sync times."
-        meta: { dagster: { deps: ['neighborhood_hackatime_projects_warehouse'] } }
+        meta: { dagster: { asset_key: ['neighborhood_hackatime_projects_warehouse'] } }

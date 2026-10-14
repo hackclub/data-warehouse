@@ -6,4 +6,4 @@ sources:
     tables:
       - name: projects_in_progress
         description: "Genesis projects_in_progress table."
-        meta: {dagster: {deps: [genesis_projects_in_progress_warehouse]}}
+        meta: {dagster: {asset_key: [genesis_projects_in_progress_warehouse]}}

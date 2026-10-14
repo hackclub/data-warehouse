@@ -6,13 +6,13 @@ sources:
     tables:
       - name: users
         description: "Midnight users with email, Slack ID, Hackatime linkage, and fraud flags."
-        meta: { dagster: { deps: ['midnight_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['midnight_warehouse_mirror'] } }
       - name: projects
         description: "Midnight projects with now_hackatime_projects array, repo_url, and is_fraud flag."
-        meta: { dagster: { deps: ['midnight_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['midnight_warehouse_mirror'] } }
       - name: submissions
         description: "Midnight review submissions with approval_status and approved_hours banked totals."
-        meta: { dagster: { deps: ['midnight_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['midnight_warehouse_mirror'] } }
       - name: user_sessions
         description: "Midnight app user sessions, used as a freshness signal."
-        meta: { dagster: { deps: ['midnight_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['midnight_warehouse_mirror'] } }

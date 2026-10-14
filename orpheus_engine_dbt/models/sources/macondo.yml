@@ -6,7 +6,7 @@ sources:
     tables:
       - name: users
         description: "Macondo users with email."
-        meta: { dagster: { deps: ['macondo_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['macondo_warehouse_mirror'] } }
       - name: daily_project_activity
         description: "Macondo per-day per-project activity with journal_seconds and hackatime_seconds."
-        meta: { dagster: { deps: ['macondo_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['macondo_warehouse_mirror'] } }

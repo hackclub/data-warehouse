@@ -6,4 +6,4 @@ sources:
     tables:
       - name: heartbeats
         description: "Raw heartbeat data replicated from the Hackatime Legacy database by Sling."
-        meta: { dagster: { deps: ['hackatime_legacy_warehouse_mirror'] } }
+        meta: { dagster: { asset_key: ['hackatime_legacy_warehouse_mirror'] } }

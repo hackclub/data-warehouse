@@ -6,13 +6,13 @@ sources:
     tables:
       - name: projects
         description: "Athena Award projects; project_name is the Hackatime alias picked in-app ('_select#' = untouched placeholder), hackatime_duration/approved_duration are banked snapshot totals."
-        meta: { dagster: { deps: ['athena_award_projects_warehouse'] } }
+        meta: { dagster: { asset_key: ['athena_award_projects_warehouse'] } }
       - name: projects__code_url
         description: "dlt child table: per-project code URL(s) for Athena Award projects."
-        meta: { dagster: { deps: ['athena_award_projects_warehouse'] } }
+        meta: { dagster: { asset_key: ['athena_award_projects_warehouse'] } }
       - name: registered_users
         description: "Athena Award registered users with email, slack_id, registered timestamp, and disregard_submissions fraud flag."
-        meta: { dagster: { deps: ['athena_award_registered_users_warehouse'] } }
+        meta: { dagster: { asset_key: ['athena_award_registered_users_warehouse'] } }
       - name: _dlt_loads
         description: "DLT load metadata for tracking Athena Award sync times."
-        meta: { dagster: { deps: ['athena_award_projects_warehouse'] } }
+        meta: { dagster: { asset_key: ['athena_award_projects_warehouse'] } }
