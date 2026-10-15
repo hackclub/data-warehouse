@@ -1,0 +1,21 @@
+version: 2
+
+sources:
+  - name: canvas
+    schema: canvas
+    tables:
+      - name: daily_active_users
+        description: "Canvas daily_active_users table."
+        meta: {dagster: {deps: [canvas_warehouse_mirror]}}
+      - name: projects
+        description: "Canvas projects table."
+        meta: {dagster: {deps: [canvas_warehouse_mirror]}}
+      - name: ships
+        description: "Canvas ships table."
+        meta: {dagster: {deps: [canvas_warehouse_mirror]}}
+      - name: user_activity
+        description: "Canvas user_activity table."
+        meta: {dagster: {deps: [canvas_warehouse_mirror]}}
+      - name: user_coding_days
+        description: "Canvas user_coding_days table."
+        meta: {dagster: {deps: [canvas_warehouse_mirror]}}

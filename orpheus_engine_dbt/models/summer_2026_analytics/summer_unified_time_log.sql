@@ -264,7 +264,10 @@ WITH program_windows AS (
         ('fabricate', TIMESTAMP WITH TIME ZONE '2026-09-30 00:00:00+00',
                    NULL::timestamptz),
         ('wrong_tool', TIMESTAMP WITH TIME ZONE '2026-10-06 00:00:00+00',
-                   TIMESTAMP WITH TIME ZONE '2026-10-21 00:00:00+00')
+                   TIMESTAMP WITH TIME ZONE '2026-10-21 00:00:00+00'),
+        ('canvas', TIMESTAMP WITH TIME ZONE '2026-10-08 00:00:00+00',
+                   TIMESTAMP WITH TIME ZONE '2026-10-22 00:00:00+00')
+    
     
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
@@ -1812,6 +1815,23 @@ wrong_tool_ht_claims AS (
       AND COALESCE(m.hackatime_first_email, u.email) IS NOT NULL
 ),
 
+canvas_ht_claims AS (
+    SELECT 'canvas'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias_val)) AS hackatime_alias,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        hp."created_at" AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('canvas', 'projects') }} hp
+    JOIN ht_user_email m ON m.hackatime_user_id = hp."user_id"
+    CROSS JOIN LATERAL jsonb_array_elements_text(hp."hackatime_id"::jsonb) AS alias_val
+    WHERE alias_val IS NOT NULL AND alias_val <> ''
+),
+
 all_claims_raw AS (
     SELECT * FROM stardance_ht_claims
     UNION ALL SELECT * FROM flavortown_ht_claims
@@ -1840,6 +1860,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM terra_ht_claims
     UNION ALL SELECT * FROM genesis_ht_claims
     UNION ALL SELECT * FROM wrong_tool_ht_claims
+    UNION ALL SELECT * FROM canvas_ht_claims
 ),
 
 all_claims AS (
