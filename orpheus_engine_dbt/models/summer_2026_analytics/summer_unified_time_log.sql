@@ -264,7 +264,10 @@ WITH program_windows AS (
         ('fabricate', TIMESTAMP WITH TIME ZONE '2026-09-30 00:00:00+00',
                    NULL::timestamptz),
         ('wrong_tool', TIMESTAMP WITH TIME ZONE '2026-10-06 00:00:00+00',
-                   TIMESTAMP WITH TIME ZONE '2026-10-21 00:00:00+00')
+                   TIMESTAMP WITH TIME ZONE '2026-10-21 00:00:00+00'),
+        ('atlantis', TIMESTAMP WITH TIME ZONE '2026-09-21 00:00:00 America/New_York',
+                   TIMESTAMP WITH TIME ZONE '2026-11-16 00:00:00 America/New_York')
+    
     
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
@@ -1953,6 +1956,26 @@ fabricate_custom_hourly AS (
     GROUP BY 1, 2, 3, 4, 5
 ),
 
+atlantis_custom_hourly AS (
+    SELECT
+        DATE_TRUNC('hour', a."created_at" AT TIME ZONE 'UTC') AS activity_hour,
+        'atlantis'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '+', 1)
+        END AS user_email,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        ROUND(SUM((a."tracked_seconds" / 3600.0))::numeric, 4) AS raw_hours_logged,
+        'custom'::text AS logging_method,
+        ('atlantis.atlantis_site_timelapse.tracked_seconds; entries=' || COUNT(*)::text) AS source_detail
+    FROM {{ source('atlantis', 'atlantis_site_timelapse') }} a
+    JOIN ht_user_email m ON m.hackatime_user_id = a."owner_id"
+    WHERE a."tracked_seconds" > 0
+    GROUP BY 1, 2, 3, 4, 5
+),
+
 custom_in_window AS (
     SELECT
         activity_hour,
@@ -1987,6 +2010,7 @@ custom_in_window AS (
             UNION ALL SELECT * FROM juice_custom_hourly
             UNION ALL SELECT * FROM half_life_custom_hourly
             UNION ALL SELECT * FROM fabricate_custom_hourly
+            UNION ALL SELECT * FROM atlantis_custom_hourly
         ) c
         JOIN program_windows w
             ON w.program_name = c.program_name

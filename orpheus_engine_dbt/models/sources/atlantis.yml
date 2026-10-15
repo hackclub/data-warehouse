@@ -1,0 +1,122 @@
+version: 2
+
+sources:
+  - name: atlantis
+    schema: atlantis
+    quoting:
+      identifier: true
+    tables:
+      - name: atlantis_cache
+        description: "Atlantis atlantis_cache table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_activeday
+        description: "Atlantis atlantis_site_activeday table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_airtablesubmission
+        description: "Atlantis atlantis_site_airtablesubmission table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_auditlog
+        description: "Atlantis atlantis_site_auditlog table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_internalcomment
+        description: "Atlantis atlantis_site_internalcomment table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_item
+        description: "Atlantis atlantis_site_item table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_journal
+        description: "Atlantis atlantis_site_journal table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_lapseaccount
+        description: "Atlantis atlantis_site_lapseaccount table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_metricssnapshot
+        description: "Atlantis atlantis_site_metricssnapshot table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_order
+        description: "Atlantis atlantis_site_order table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_pearlbracket
+        description: "Atlantis atlantis_site_pearlbracket table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_permissions
+        description: "Atlantis atlantis_site_permissions table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_printerclaim
+        description: "Atlantis atlantis_site_printerclaim table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_profile
+        description: "Atlantis atlantis_site_profile table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_project
+        description: "Atlantis atlantis_site_project table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_project_followers
+        description: "Atlantis atlantis_site_project_followers table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_savercredit
+        description: "Atlantis atlantis_site_savercredit table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_ship
+        description: "Atlantis atlantis_site_ship table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_shopcategory
+        description: "Atlantis atlantis_site_shopcategory table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_t1
+        description: "Atlantis atlantis_site_t1 table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_t2
+        description: "Atlantis atlantis_site_t2 table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_t3
+        description: "Atlantis atlantis_site_t3 table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_timelapse
+        description: "Atlantis atlantis_site_timelapse table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_timelapseannotation
+        description: "Atlantis atlantis_site_timelapseannotation table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_timelapseremoval
+        description: "Atlantis atlantis_site_timelapseremoval table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_timelapsereview
+        description: "Atlantis atlantis_site_timelapsereview table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_weekoutcome
+        description: "Atlantis atlantis_site_weekoutcome table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: atlantis_site_weekreminder
+        description: "Atlantis atlantis_site_weekreminder table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: auth_group
+        description: "Atlantis auth_group table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: auth_group_permissions
+        description: "Atlantis auth_group_permissions table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: auth_permission
+        description: "Atlantis auth_permission table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: auth_user
+        description: "Atlantis auth_user table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: auth_user_groups
+        description: "Atlantis auth_user_groups table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: auth_user_user_permissions
+        description: "Atlantis auth_user_user_permissions table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: django_admin_log
+        description: "Atlantis django_admin_log table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: django_content_type
+        description: "Atlantis django_content_type table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: django_migrations
+        description: "Atlantis django_migrations table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
+      - name: django_session
+        description: "Atlantis django_session table."
+        meta: {dagster: {deps: [atlantis_warehouse_mirror]}}
