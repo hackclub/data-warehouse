@@ -17,8 +17,8 @@
 -- program-native models left out.
 --
 -- A person counts here once some program that day counts them — for most programs
--- any row, and for a program that keeps its own active-days table (see
--- summer_unified_time_log's program_dau_source) only the days that table names.
+-- any row, and for a program that answers DAU with its own per-day rule (see
+-- summer_unified_time_log's program_dau_source) only the days that rule clears.
 -- That is what a non-NULL dau_deduped weight means, so this stays the union of the
 -- per-program DAU sets and the stacked per-program weights still sum to it.
 
