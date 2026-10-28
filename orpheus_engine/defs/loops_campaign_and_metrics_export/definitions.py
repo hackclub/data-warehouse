@@ -909,6 +909,8 @@ def loops_campaigns_needing_metrics_fetch(
     - Sent >= 1 week and < 8 weeks ago: every 7 days
     - Sent >= 8 weeks and < 1 year ago: every 30 days
     - Sent >= 1 year ago: every 90 days
+    - Fewer recipient rows than Loops' sent_count (a fetch cut short, e.g. by
+      an expired cookie mid-campaign): every 24 hours until complete
     """
     log = context.log
     import psycopg2
@@ -919,8 +921,14 @@ def loops_campaigns_needing_metrics_fetch(
     
     # Build query with time-based metrics enrichment logic
     query = """
-        SELECT id, name, emoji
-        FROM loops.campaigns
+        WITH recipient_counts AS (
+            SELECT campaign_id, COUNT(*) AS recipients
+            FROM loops.campaign_metrics
+            GROUP BY campaign_id
+        )
+        SELECT c.id, c.name, c.emoji
+        FROM loops.campaigns c
+        LEFT JOIN recipient_counts rc ON rc.campaign_id = c.id
         WHERE 
             -- Only process sent campaigns
             sent_at IS NOT NULL AND status = 'Sent'
@@ -945,8 +953,17 @@ def loops_campaigns_needing_metrics_fetch(
                 -- Sent more than 1 year ago: update every 90 days
                 (sent_at < NOW() - INTERVAL '1 year'
                  AND metrics_last_fetched_at < NOW() - INTERVAL '90 days')
+                OR
+                -- Incomplete (fewer than 98% of sent recipients): retry daily
+                (sent_count > 0
+                 AND COALESCE(rc.recipients, 0) < sent_count * 0.98
+                 AND metrics_last_fetched_at < NOW() - INTERVAL '24 hours')
             )
-        ORDER BY metrics_last_fetched_at NULLS FIRST
+        ORDER BY
+            metrics_last_fetched_at IS NULL DESC,
+            -- Then incomplete campaigns, so a cut-short fetch is repaired first
+            (sent_count > 0 AND COALESCE(rc.recipients, 0) < sent_count * 0.98) DESC,
+            metrics_last_fetched_at
     """
     
     if DEBUG_ENRICHMENT_LIMIT > 0:
@@ -2029,6 +2046,10 @@ def loops_campaign_publishable_content_to_warehouse(
 
 # --- Campaign Metrics Assets ---
 
+class LoopsAuthError(RuntimeError):
+    """LOOPS_SESSION_TOKEN was rejected. Every later request will fail too."""
+
+
 def _fetch_campaign_metrics_page(
     session_token: str,
     email_message_id: str,
@@ -2055,6 +2076,11 @@ def _fetch_campaign_metrics_page(
     cookies = {"__Secure-next-auth.session-token": session_token}
     
     resp = requests.get(url, params=params, headers=headers, cookies=cookies, timeout=30)
+    if resp.status_code in (401, 403):
+        raise LoopsAuthError(
+            f"HTTP {resp.status_code} for metrics API; LOOPS_SESSION_TOKEN has likely expired: "
+            f"{resp.text[:500]}"
+        )
     if resp.status_code != 200:
         raise RuntimeError(f"HTTP {resp.status_code} for metrics API: {resp.text[:500]}")
     
@@ -2355,6 +2381,10 @@ def loops_campaign_recipient_metrics(
 
         try:
             records = _fetch_campaign_recipient_records(log, session_token, campaign_id, campaign_name)
+        except LoopsAuthError:
+            # An expired cookie fails every campaign. Fail the run so it is
+            # seen; campaigns already written are kept, the rest stay due.
+            raise
         except Exception as e:
             log.error(f"Failed to fetch metrics for campaign {campaign_name} ({campaign_id}): {e}")
             failed += 1
