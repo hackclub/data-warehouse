@@ -6,7 +6,13 @@ from dagster_sling import SlingResource
 from orpheus_engine.defs.sling.assets import _isolate_missing_program_connection
 
 
-@pytest.mark.parametrize("program", ["macondo", "theseus"])
+@pytest.mark.parametrize(
+    "program",
+    [
+        "macondo", "theseus", "haven", "haven_booking", "atlantis", "pixl",
+        "cubed", "mipmap",
+    ],
+)
 @pytest.mark.parametrize("configured", [False, True])
 def test_orchard_connection(monkeypatch, program, configured):
     env = f"{program.upper()}_K8S_URL"
@@ -33,7 +39,7 @@ def test_orchard_connection(monkeypatch, program, configured):
             )
         else:
             assert resolved.connection_string == (
-                f"postgres://missing-env-{program}-k8s-url.invalid:5432/unset"
+                f"postgres://missing-env-{env.lower().replace('_', '-')}.invalid:5432/unset"
             )
         assert not getattr(resolved, "ssh_tunnel", None)
         assert not getattr(resolved, "ssh_private_key", None)

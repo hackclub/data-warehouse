@@ -270,3 +270,43 @@ No database recovery, credential mutation, Coolify edit, deployment or backfill
 was performed during this follow-up investigation. Until source access and
 freshness are verified, the Theseus cutover remains blocked. All four mirrors,
 the Auth backfill and production acceptance checks remain incomplete.
+
+## 8. Adding an Orchard program mirror
+
+A program mirror is one module, `orpheus_engine/defs/sling/programs/<name>.py`,
+exporting `<name>_db_connection`, `<name>_replication_config` and
+`<name>_warehouse_mirror`; `assets.py` discovers it. Copy `fallen.py`: full
+refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
+
+1. **Streams.** List every table explicitly and exclude columns with `-col`.
+   Leave out session, token, OTP/verification, rate-limit, cache, migration and
+   backup tables. Drop tokens, passwords, encrypted values, join/share codes,
+   IP addresses, street address lines, postcodes, phone numbers and tracking
+   numbers; keep names, email, birthday, city, state and country. Check every
+   stream and `-col` against the live `information_schema.columns` (a
+   misspelled `-col` excludes nothing), then add the module to
+   `test_sling_orchard_connections.py` and `test_sling_program_exclusions.py`.
+2. **Reader login.** Never use the app's own login. In the database's
+   `pg-<cluster>-1` pod (`exec_in_pod`, container `postgres`), in one
+   transaction: `CREATE ROLE hc_warehouse_reader LOGIN CONNECTION LIMIT 4
+   PASSWORD '<SCRAM-SHA-256 verifier>'`, `ALTER ROLE … SET
+   default_transaction_read_only = on`, `GRANT CONNECT` on the database,
+   `USAGE` on `public`, and `SELECT` on exactly the mirrored tables. Generate the
+   password locally and send only its SCRAM verifier, so the plaintext never
+   reaches the pod or Orchard's audit log. For tables with `-col` exclusions,
+   grant `SELECT (<kept columns>)` instead of the whole table, then confirm a
+   Sling run still reads them; if Sling selects `*` and fails, fall back to a
+   table grant and record that the excluded columns stay readable by the login.
+   Verify: `has_table_privilege` is true for mirrored tables and false for an
+   excluded secret table, no write privileges or role memberships, and an
+   `INSERT` over the public endpoint fails.
+3. **The login can disappear.** It is created outside Orchard: restoring or
+   recreating the database cluster drops it, and an app migration that drops
+   and recreates a table drops that table's grant. A mirror that starts failing
+   with `permission denied` or a login error needs step 2 rerun, not a new
+   credential in the app.
+4. **URL.** Build it in Orchard's public-endpoint shape with
+   `sslmode=verify-full&sslrootcert=system` and save it as `<NAME>_K8S_URL` in
+   Coolify's UI env store (host-only `.env` edits are reverted), the parent
+   repo's `.env`, and the Vaultwarden `.env` notes. Then deploy and verify as in
+   §7, including a new materialization and source/warehouse row-count parity.
