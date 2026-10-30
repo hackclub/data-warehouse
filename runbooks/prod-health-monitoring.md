@@ -233,61 +233,40 @@ a dedicated warehouse reader with CONNECT, schema USAGE and SELECT only,
 verify its grants and stream access, then save its URL in Coolify before
 cutover. The Half Life database reports healthy and its app pod reports ready.
 
-### Theseus missing-container recovery gate
+### Theseus Orchard source access gate
 
-The earlier Orchard search did not establish the live database identity. Do not
-interpret a missing project search result as proof that access is the only
-problem. The handoff reports a missing database container while a worker still
-references it. This requires source recovery investigation before a mirror
-cutover, rather than substituting a frozen snapshot.
+A prior investigation on 2026-10-14 confirmed Orchard deployments for the live
+Theseus app but found that the connected account could not access their project.
+Cross-project Orchard searches on 2026-10-30 UTC for `theseus` and
+`mail.hackclub.com` returned no results. That does not overturn the earlier
+Orchard finding or establish the live database identity.
 
-Read-only inspection on 2026-10-30 UTC also found a Theseus-related database
-Compose configuration on the legacy source host, a retained data volume with
-`PG_VERSION` 17, no `postmaster.pid`, and no container (running or stopped)
-attached to that volume. These facts establish a recovery candidate, **not**
-that this volume contains the live or newest Theseus data. Resource identifiers,
-endpoints, and credentials must stay in the private deployment record.
+Read-only inspection on 2026-10-30 UTC found a Theseus-related database Compose
+configuration on the legacy source host, a retained PostgreSQL 17 volume, and no
+container attached to that volume. Treat this as the likely old copy, not the
+authoritative source for the warehouse. Its freshness remains unverified.
 
-Prepare and review the following recovery procedure before executing it:
+Before repointing the warehouse:
 
-1. Resolve the current web app and worker through their deployment records.
-   Privately compare their database host, database name, and deployment history
-   with the missing database resource. Record the intended database version,
-   image digest, extensions, mounts, network aliases, and last successful app
-   connection. Check Orchard as well as legacy deployments. If these disagree,
-   stop the cutover until the authoritative source is established.
-2. Inspect all containers and mounts, including stopped containers, to prove no
-   server is using the candidate data directory. Check available disk space and
-   backup coverage. A missing PID file alone is insufficient. Do not start
-   Postgres on the original volume or use Compose's create-volume behavior to
-   silently initialize an empty database.
-3. With recovery explicitly authorized, preserve a consistent physical backup
-   or storage snapshot of the unmounted volume and its configuration. Verify
-   the backup and retain it outside Git. Restore a separate clone. Use the
-   matching PostgreSQL major version and required extensions, with no app
-   network attachment, public listener, workers, migrations, or outbound jobs.
-   Crash recovery writes to the clone; never test recovery on the sole copy.
-4. Start only the isolated database clone. Inspect recovery logs, database
-   identities, table inventories, migration versions, and aggregate counts and
-   maximum creation/update timestamps for letters and fulfillment tables.
-   Compare against the warehouse, verified app history, and any newer backups
-   or Orchard source. Do not print addresses, message contents, or row data.
-   If the candidate stops at the known September snapshot, it does not satisfy
-   recovery; locate the later source or backup before proceeding.
-5. Review the resulting identity and freshness evidence and an exact cutover
-   and rollback procedure before touching the live app. Recreating an app
-   database service is a separate production action from repointing a warehouse
-   reader. Keep application workers disconnected during validation so recovery
-   cannot resend mail or repeat fulfillment jobs. Never upgrade Postgres or
-   run application migrations as an incidental repair.
-6. Only after the authoritative source is healthy, provision a dedicated
-   read-only warehouse credential and validate every configured stream and
-   allow-list. Store its verified URL in Coolify, then follow the deployment,
-   backfill, acceptance, and rollback steps above. Preserve the old warehouse
-   tables until this identity gate passes; do not full-refresh from an empty or
-   stale recovery candidate.
+1. Obtain access to the live Theseus Orchard project, or obtain a dedicated
+   read-only database URL through a secure channel. Verify the live app's
+   database configuration to establish the authoritative Orchard database.
+2. Validate the reader's grants, configured streams and sensitive-column
+   selections. Compare source counts and maximum creation/update timestamps,
+   especially for letters, against the warehouse's September snapshot. Confirm
+   the source is current before allowing a full refresh; a successful connection
+   alone does not establish freshness.
+3. Save the verified URL as `THESEUS_K8S_URL` in Coolify's UI env store, then
+   follow the configuration, deployment and acceptance steps above. Keep
+   endpoints, credentials and aggregate verification results in the private
+   deployment record.
 
-No database recovery, credential mutation, Coolify edit, deployment, or backfill
-was performed during this follow-up investigation. The missing-container
-recovery procedure requires review before live execution. The four mirrors
-still require production acceptance; passing connection tests is insufficient.
+If evidence indicates the old volume is needed, stop and raise a separate
+question for approval of application database recovery. Recovery of that volume,
+recreation of the app database service and changes to application workers are
+outside this warehouse connection repair.
+
+No database recovery, credential mutation, Coolify edit, deployment or backfill
+was performed during this follow-up investigation. Until source access and
+freshness are verified, the Theseus cutover remains blocked. All four mirrors,
+the Auth backfill and production acceptance checks remain incomplete.
