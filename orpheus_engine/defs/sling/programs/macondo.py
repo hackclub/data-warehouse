@@ -1,12 +1,13 @@
 import dagster as dg
 from dagster_sling import SlingConnectionResource, SlingResource
-from dagster import EnvVar, Nothing
+from dagster import Nothing
+from .._helpers import _sling_connection_url
 
 
 macondo_db_connection = SlingConnectionResource(
     name="MACONDO_DB",
     type="postgres",
-    connection_string=EnvVar("MACONDO_COOLIFY_URL"),
+    connection_string=_sling_connection_url("MACONDO_K8S_URL"),
 )
 
 
