@@ -224,8 +224,21 @@ use a working read credential. Recheck run events and freshness after rollback.
 Build investigation on 2026-10-30 UTC confirmed production failures for all four
 mirrors. Last materializations in the preceding 60 days were Oct 15 for Half
 Life and Theseus, Oct 2 for Macondo, and none for Auth. Orchard lists
-`macondo-prod-pg18`. Its Half Life database owner matches the failing login;
-dedicated-reader ownership has **not** been established, so password rotation
-must wait for the consumer check. The visible Orchard database listing has no
-Theseus/mail name match; its active identity and schema remain deployment
-prerequisites, not verified assumptions.
+`macondo-prod-pg18`.
+
+Follow-up on 2026-10-30 UTC established that Half Life's Orchard app uses the
+same database login as the failing warehouse connection. It is also the
+Orchard database owner. **Do not rotate this shared app password.** Provision
+a dedicated warehouse reader with CONNECT, schema USAGE and SELECT only,
+verify its grants and stream access, then save its URL in Coolify before
+cutover. The Half Life database reports healthy and its app pod reports ready.
+
+Theseus is an access prerequisite, not merely an unresolved database name.
+Current cross-project Orchard searches for both `theseus` and
+`mail.hackclub.com` return no results. A prior investigation on 2026-10-14
+confirmed Orchard deployments for the live app but found that the connected
+account could not access their project. Obtain access to the live Theseus
+project (or a dedicated read-only database URL through a secure channel), then
+verify the app's database configuration and schema. Do not substitute the old
+Coolify snapshot. Until access is restored, the four-mirror cutover, Auth
+backfill and production acceptance checks remain incomplete.
