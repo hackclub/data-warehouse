@@ -266,7 +266,10 @@ WITH program_windows AS (
         ('wrong_tool', TIMESTAMP WITH TIME ZONE '2026-10-06 00:00:00+00',
                    TIMESTAMP WITH TIME ZONE '2026-10-21 00:00:00+00'),
         ('mipmap', TIMESTAMP WITH TIME ZONE '2026-10-01 00:00:00+00',
+                   NULL::timestamptz),
+        ('contd', TIMESTAMP WITH TIME ZONE '2026-10-01 00:00:00+00',
                    NULL::timestamptz)
+    
     
     
     ) AS t(program_name, start_at, end_at_exclusive)
@@ -1894,6 +1897,23 @@ mipmap_ht_claims AS (
     WHERE hp."name" IS NOT NULL AND hp."name" <> ''
 ),
 
+contd_ht_claims AS (
+    SELECT 'contd'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(alias_val)) AS hackatime_alias,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        hp."created_at" AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('contd', 'submissions') }} hp
+    JOIN ht_user_email m ON m.hackatime_user_id = hp."hackatime_id"
+    CROSS JOIN LATERAL unnest(hp."hackatime_projects"::text[]) AS alias_val
+    WHERE alias_val IS NOT NULL AND alias_val <> ''
+),
+
 all_claims_raw AS (
     SELECT * FROM stardance_ht_claims
     UNION ALL SELECT * FROM flavortown_ht_claims
@@ -1923,6 +1943,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM genesis_ht_claims
     UNION ALL SELECT * FROM wrong_tool_ht_claims
     UNION ALL SELECT * FROM mipmap_ht_claims
+    UNION ALL SELECT * FROM contd_ht_claims
 ),
 
 all_claims AS (

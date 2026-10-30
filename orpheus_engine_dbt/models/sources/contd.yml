@@ -1,0 +1,66 @@
+version: 2
+
+sources:
+  - name: contd
+    schema: contd
+    tables:
+      - name: __drizzle_migrations
+        description: "Contd __drizzle_migrations table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: airtable_exports
+        description: "Contd airtable_exports table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: audit_log
+        description: "Contd audit_log table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: beta_invite_links
+        description: "Contd beta_invite_links table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: cdn_uploads
+        description: "Contd cdn_uploads table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: coin_ledger
+        description: "Contd coin_ledger table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: devlogs
+        description: "Contd devlogs table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: orders
+        description: "Contd orders table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: pool_projects
+        description: "Contd pool_projects table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: review_events
+        description: "Contd review_events table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: sessions
+        description: "Contd sessions table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: settings
+        description: "Contd settings table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: shop_items
+        description: "Contd shop_items table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: shop_requests
+        description: "Contd shop_requests table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: shop_wishlist
+        description: "Contd shop_wishlist table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: signups
+        description: "Contd signups table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: staff_invites
+        description: "Contd staff_invites table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: submission_activity
+        description: "Contd submission_activity table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: submissions
+        description: "Contd submissions table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: users
+        description: "Contd users table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
