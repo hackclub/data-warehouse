@@ -6,6 +6,8 @@ import pytest
 PROGRAMS = [
     "haven", "haven_booking", "atlantis", "pixl", "cubed", "mipmap", "contd",
     "coral", "grandma", "stern", "out_to_c", "scraps", "trmnt", "three_am",
+    "canvas", "club_starter_grant", "dyad", "embassy", "jame_gam",
+    "save_point", "scare",
 ]
 
 # Tables that hold login state, bearer secrets, caches or one-off backups.
@@ -18,6 +20,62 @@ UNMIRRORED_TABLE = re.compile(
 # stored as a row value (a key/value settings table) is invisible to the
 # column checks below, so the whole table stays out.
 UNMIRRORED_TABLES = {
+    "canvas": ["drizzle.__drizzle_migrations"],
+    "club_starter_grant": ["public.sessions", "public.knex_migrations", "public.knex_migrations_lock"],
+    "dyad": ["public._sqlx_migrations", "public.wrong_friend_code"],
+    "embassy": [
+        "public.Account",
+        "public.Session",
+        "public.VerificationToken",
+        "public.McpOAuthCode",
+        "public.McpOAuthRefreshToken",
+        "public.McpToken",
+        "public._prisma_migrations",
+    ],
+    "jame_gam": [
+        "public.Account",
+        "public.McpAuthCode",
+        "public.McpToken",
+        "public.Session",
+        "public.ReviewerReauth",
+        "public.WebhookSecret",
+        "public._prisma_migrations",
+        "public.ariwmigrations",
+        "public.VmTombstone",
+        "ariw.job",
+        "ariw.outboundSchedule",
+    ],
+    "save_point": [
+        "public.admin_tokens",
+        "public.ar_internal_metadata",
+        "public.schema_migrations",
+        "public.solid_cable_messages",
+        "public.solid_cache_entries",
+        "public.solid_queue_batch_executions",
+        "public.solid_queue_batches",
+        "public.solid_queue_blocked_executions",
+        "public.solid_queue_claimed_executions",
+        "public.solid_queue_failed_executions",
+        "public.solid_queue_jobs",
+        "public.solid_queue_pauses",
+        "public.solid_queue_processes",
+        "public.solid_queue_ready_executions",
+        "public.solid_queue_recurring_executions",
+        "public.solid_queue_recurring_tasks",
+        "public.solid_queue_scheduled_executions",
+        "public.solid_queue_semaphores",
+        "insights.faq_reads",
+        "insights.nps_responses",
+        "insights.nudges",
+        "insights.orders",
+        "insights.projects",
+        "insights.ships",
+        "insights.site_days",
+        "insights.streak_activities",
+        "insights.users",
+        "insights.visits",
+    ],
+    "scare": ["public.Session", "public.VerificationToken"],
     "contd": ["public.api_keys"],
     "coral": ["public.app_settings"],  # anthropic_auth_token row
     "stern": [
@@ -31,6 +89,95 @@ UNMIRRORED_TABLES = {
 # Secret or contact columns that must stay excluded wherever their table is
 # mirrored, checked against each program's live schema when it was added.
 EXCLUDED_COLUMNS = {
+    "canvas": {
+        "public.users": ["hca", "hackatime", "referral_code"],
+        "public.shop_orders": ["address"],
+        "public.bot_log": ["details"],
+    },
+    "club_starter_grant": {
+        "public.users": [
+            "access_token",
+            "refresh_token",
+            "address_line_1",
+            "address_line_2",
+            "postal_code",
+        ],
+    },
+    "dyad": {
+        "public.hacker": ["hackatime_token", "friend_code", "invite_token"],
+    },
+    "embassy": {
+        "public.AuditLog": ["beforeValue", "afterValue", "ipAddress"],
+        "public.OrderEvent": ["metadata"],
+        "public.PassportOrder": ["recipientToken", "recipientTokenHash"],
+        "public.PassportRecipient": [
+            "addressLine1",
+            "addressLine2",
+            "postalCode",
+            "emergencyContact",
+            "city",
+            "stateProvince",
+            "country",
+            "photoUrl",
+        ],
+        "public.PassportVersion": ["data"],
+        "public.Project": ["inviteCode"],
+        "public.Shipment": ["trackingNumber"],
+        "public.User": [
+            "hackatimeTokenEncrypted",
+            "addressLine1",
+            "addressLine2",
+            "addressPostal",
+            "firstName",
+            "lastName",
+            "addressCity",
+            "addressState",
+            "addressCountry",
+        ],
+        "public.YSWS": ["apiKeyDisplay", "apiKeyHash", "apiKeyPrefix"],
+    },
+    "jame_gam": {
+        "public.ActivityEvent": ["meta"],
+        "public.Draft": [
+            "fieldValues",
+            "checks",
+            "adjustments",
+            "fixChecks",
+            "collaboratorDeflates",
+            "collaboratorNotes",
+        ],
+        "public.Flag": ["matched"],
+        "public.FlagRule": ["config"],
+        "public.OutboundDelivery": ["url", "errorDetail", "payload"],
+        "public.OutboundEndpoint": ["url", "secretEnc"],
+        "public.Program": ["fraudApiKeyEnc", "fraudWebhookToken", "priorityReviewToken"],
+        "public.Review": [
+            "fieldValues",
+            "checklist",
+            "adjustments",
+            "fixChecks",
+            "collaboratorDeflates",
+            "collaboratorNotes",
+        ],
+        "public.ReviewerVm": ["guacUrl", "rdpUri", "rdpPasswordEnc"],
+        "public.Submission": ["programMeta", "aiCheckResult", "preReview"],
+        "public.WebhookDelivery": ["errorDetail"],
+    },
+    "save_point": {
+        "public.active_storage_blobs": ["key", "metadata"],
+        "public.nudges": ["token"],
+        "public.orders": ["address"],
+        "public.projects": ["buddy_code"],
+        "public.users": ["hackatime_access_token", "address", "phone_number", "slack_dm_error"],
+    },
+    "scare": {
+        "public.Account": ["refresh_token", "access_token", "id_token", "session_state"],
+        "public.HackatimeLink": ["accessToken"],
+        "public.AdminAudit": ["detail"],
+        "public.Order": ["details"],
+        "public.Game": ["airtableError", "ariError", "reviewDetail"],
+        "public.Screenshot": ["data"],
+    },
     "haven": {
         "public.users": ["token", "hcaToken", "phoneNumber", "address"],
         "public.events": ["venueAddress", "latitude", "longitude"],
@@ -149,8 +296,13 @@ def _config(program):
 @pytest.mark.parametrize("program", PROGRAMS)
 def test_streams_are_listed_explicitly(program):
     config = _config(program)
+    assert config["source"] == f"{program.upper()}_DB"
+    assert config["target"] == "WAREHOUSE_DB"
+    assert config["defaults"]["mode"] == "full-refresh"
+    assert config["streams"]
     assert config["defaults"]["object"] == f"{program}.{{stream_table}}"
     for stream, options in config["streams"].items():
+        assert (options or {}).get("mode", "full-refresh") == "full-refresh"
         assert "*" not in stream
         table = stream.split(".", 1)[1]
         assert not UNMIRRORED_TABLE.search(table), stream
