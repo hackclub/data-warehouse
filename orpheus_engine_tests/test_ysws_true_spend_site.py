@@ -740,16 +740,23 @@ def test_duckdb_file_holds_the_same_rows_as_the_documents():
         con.close()
 
 
-def test_llms_txt_points_at_the_json_without_restating_it():
-    """Barebones: the JSON is self-describing, a field list here would drift."""
+def test_llms_txt_steers_agents_to_duckdb_before_the_json():
+    """DuckDB first, with a runnable recipe; the JSON is self-describing so its
+    fields are not restated (a field list here would drift)."""
     files = _render()
     llms = files["llms.txt"]
     assert llms.startswith("# YSWS true spend")
-    assert "/index.json" in llms
-    assert "/programs/{program_name}.json" in llms
-    assert "/programs/fallout.json" in llms          # a real example path
-    assert "ysws-true-spend.duckdb" in llms          # and the database
-    assert "spend_transactions" not in llms.split("## Data")[0]  # no field dump
+    how, data = llms.split("## Data")
+    assert "## How to query this" in how
+    assert "ATTACH 'https://ysws-true-spend.hackclub.com/ysws-true-spend.duckdb'" in how
+    assert "INSTALL httpfs; LOAD httpfs;" in how
+    assert "curl -sLO https://ysws-true-spend.hackclub.com/ysws-true-spend.duckdb" in how
+    assert "counted_as_spend" in how                    # the filter that matters
+    assert "Never add budgets.personal_spend_dollars" in how
+    assert "/index.json" in data
+    assert "/programs/{program_name}.json" in data
+    assert "/programs/fallout.json" in data            # a real example path
+    assert "ysws_programs_with_linked_hcbs" not in how # no JSON field dump up top
 
 
 def test_machine_readable_line_appears_top_and_bottom():
@@ -763,7 +770,7 @@ def test_machine_readable_line_appears_top_and_bottom():
     for href in ('href="index.json"', 'href="llms.txt"',
                  'href="ysws-true-spend.duckdb"'):
         assert href in index, href
-    assert "(use duckdb if you can get access in your environment)" in index
+    assert "(prefer the DuckDB file if you can run duckdb; llms.txt shows how)" in index
     assert "<pre>" not in index
 
     # program pages point at their own document
