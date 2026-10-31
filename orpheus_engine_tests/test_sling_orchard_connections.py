@@ -10,7 +10,8 @@ from orpheus_engine.defs.sling.assets import _isolate_missing_program_connection
     "program",
     [
         "macondo", "theseus", "haven", "haven_booking", "atlantis", "pixl",
-        "cubed", "mipmap",
+        "cubed", "mipmap", "contd", "coral", "grandma", "stern", "out_to_c",
+        "scraps", "trmnt", "three_am",
     ],
 )
 @pytest.mark.parametrize("configured", [False, True])

@@ -286,10 +286,16 @@ refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
    stream and `-col` against the live `information_schema.columns` (a
    misspelled `-col` excludes nothing), then add the module to
    `test_sling_orchard_connections.py` and `test_sling_program_exclusions.py`.
-2. **Reader login.** Never use the app's own login. In the database's
-   `pg-<cluster>-1` pod (`exec_in_pod`, container `postgres`), in one
-   transaction: `CREATE ROLE hc_warehouse_reader LOGIN CONNECTION LIMIT 4
-   PASSWORD '<SCRAM-SHA-256 verifier>'`, `ALTER ROLE … SET
+   Column names do not show secrets stored as row values: for every mirrored
+   key/value settings table, list its key names (never the values) and leave
+   the table out if any is a credential, adding it to `UNMIRRORED_TABLES`
+   (Coral's `app_settings` holds an Anthropic auth token).
+2. **Reader login.** Never use the app's own login. In the database's primary
+   pod, named by `get_database` `clusterStatus.currentPrimary` (not always
+   `pg-<cluster>-1`: contd's is `pg-production-database-2`), through
+   `exec_in_pod` with container `postgres`, in one transaction:
+   `CREATE ROLE hc_warehouse_reader LOGIN CONNECTION LIMIT 4 PASSWORD
+   '<SCRAM-SHA-256 verifier>'`, `ALTER ROLE … SET
    default_transaction_read_only = on`, `GRANT CONNECT` on the database,
    `USAGE` on `public`, and `SELECT` on exactly the mirrored tables. Generate the
    password locally and send only its SCRAM verifier, so the plaintext never
@@ -305,8 +311,11 @@ refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
    and recreates a table drops that table's grant. A mirror that starts failing
    with `permission denied` or a login error needs step 2 rerun, not a new
    credential in the app.
-4. **URL.** Build it in Orchard's public-endpoint shape with
-   `sslmode=verify-full&sslrootcert=system` and save it as `<NAME>_K8S_URL` in
-   Coolify's UI env store (host-only `.env` edits are reverted), the parent
-   repo's `.env`, and the Vaultwarden `.env` notes. Then deploy and verify as in
+4. **URL.** The database's public endpoint may be off: turn it on with
+   `enable_database_public`, then check the listed port answers (`nc -z`). A
+   listed port that does not answer comes back after disabling and re-enabling
+   public access (Haven booking's did). Build the URL in Orchard's
+   public-endpoint shape with `sslmode=verify-full&sslrootcert=system` and
+   save it as `<NAME>_K8S_URL` in Coolify's UI env store (host-only `.env`
+   edits are reverted), the parent repo's `.env`, and the Vaultwarden `.env` notes. Then deploy and verify as in
    §7, including a new materialization and source/warehouse row-count parity.
