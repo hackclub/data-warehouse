@@ -14,6 +14,7 @@ save_point_db_connection = SlingConnectionResource(
 
 # Admin tokens, Rails metadata/migrations, cable/cache and job queues stay out.
 # Address and Hackatime credentials are encrypted at rest; buddy/nudge links are bearer codes.
+# Visit paths and users' last seen paths can also contain buddy/nudge bearer codes.
 # Blob keys/metadata and Slack errors can carry private access or contact details.
 # insights views duplicate the public tables and would collide at {stream_table}.
 # No application key/value settings tables exist (catalog checked 2026-10-31).
@@ -67,10 +68,15 @@ save_point_replication_config = {
                 "-hackatime_access_token",
                 "-address",
                 "-phone_number",
-                "-slack_dm_error"
+                "-slack_dm_error",
+                "-last_seen_path"
             ]
         },
-        "public.visits": None
+        "public.visits": {
+            "select": [
+                "-path"
+            ]
+        }
     }
 }
 

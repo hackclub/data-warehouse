@@ -168,7 +168,11 @@ EXCLUDED_COLUMNS = {
         "public.nudges": ["token"],
         "public.orders": ["address"],
         "public.projects": ["buddy_code"],
-        "public.users": ["hackatime_access_token", "address", "phone_number", "slack_dm_error"],
+        "public.users": [
+            "hackatime_access_token", "address", "phone_number", "slack_dm_error",
+            "last_seen_path",
+        ],
+        "public.visits": ["path"],
     },
     "scare": {
         "public.Account": ["refresh_token", "access_token", "id_token", "session_state"],
