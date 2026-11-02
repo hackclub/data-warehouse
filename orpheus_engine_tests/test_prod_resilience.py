@@ -231,6 +231,14 @@ class TestJobGuardrails:
         assert streams["public.active_insights_requests"] == {"disabled": True}
         assert streams["public.active_insights_jobs"] == {"disabled": True}
 
+    def test_stardance_privacy_token_uses_is_not_mirrored(self):
+        # JWT replay ledger: sensitive, and it has no id/updated_at, so the
+        # incremental defaults broke the whole mirror from 2026-10-14.
+        from orpheus_engine.defs.sling.programs.stardance import stardance_replication_config
+
+        streams = stardance_replication_config["streams"]
+        assert streams["public.privacy_token_uses"] == {"disabled": True}
+
 
 # ---------------------------------------------------------------------------
 # Storage janitor

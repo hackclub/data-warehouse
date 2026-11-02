@@ -906,9 +906,11 @@ def loops_campaigns_needing_metrics_fetch(
     Only refresh metrics for sent campaigns (metrics are heavy):
     - Not sent yet: skip (no metrics to fetch)
     - Sent < 1 week ago: every 24 hours
-    - Sent >= 2 weeks and < 8 weeks ago: every 7 days
+    - Sent >= 1 week and < 8 weeks ago: every 7 days
     - Sent >= 8 weeks and < 1 year ago: every 30 days
     - Sent >= 1 year ago: every 90 days
+    - Fewer recipient rows than Loops' sent_count (a fetch cut short, e.g. by
+      an expired cookie mid-campaign): every 24 hours until complete
     """
     log = context.log
     import psycopg2
@@ -919,8 +921,14 @@ def loops_campaigns_needing_metrics_fetch(
     
     # Build query with time-based metrics enrichment logic
     query = """
-        SELECT id, name, emoji
-        FROM loops.campaigns
+        WITH recipient_counts AS (
+            SELECT campaign_id, COUNT(*) AS recipients
+            FROM loops.campaign_metrics
+            GROUP BY campaign_id
+        )
+        SELECT c.id, c.name, c.emoji
+        FROM loops.campaigns c
+        LEFT JOIN recipient_counts rc ON rc.campaign_id = c.id
         WHERE 
             -- Only process sent campaigns
             sent_at IS NOT NULL AND status = 'Sent'
@@ -932,8 +940,8 @@ def loops_campaigns_needing_metrics_fetch(
                 (sent_at >= NOW() - INTERVAL '1 week' 
                  AND metrics_last_fetched_at < NOW() - INTERVAL '24 hours')
                 OR
-                -- Sent between 2 and 8 weeks ago: update every 7 days
-                (sent_at < NOW() - INTERVAL '2 weeks' 
+                -- Sent between 1 and 8 weeks ago: update every 7 days
+                (sent_at < NOW() - INTERVAL '1 week' 
                  AND sent_at >= NOW() - INTERVAL '8 weeks'
                  AND metrics_last_fetched_at < NOW() - INTERVAL '7 days')
                 OR
@@ -945,8 +953,17 @@ def loops_campaigns_needing_metrics_fetch(
                 -- Sent more than 1 year ago: update every 90 days
                 (sent_at < NOW() - INTERVAL '1 year'
                  AND metrics_last_fetched_at < NOW() - INTERVAL '90 days')
+                OR
+                -- Incomplete (fewer than 98% of sent recipients): retry daily
+                (sent_count > 0
+                 AND COALESCE(rc.recipients, 0) < sent_count * 0.98
+                 AND metrics_last_fetched_at < NOW() - INTERVAL '24 hours')
             )
-        ORDER BY metrics_last_fetched_at NULLS FIRST
+        ORDER BY
+            metrics_last_fetched_at IS NULL DESC,
+            -- Then incomplete campaigns, so a cut-short fetch is repaired first
+            (sent_count > 0 AND COALESCE(rc.recipients, 0) < sent_count * 0.98) DESC,
+            metrics_last_fetched_at
     """
     
     if DEBUG_ENRICHMENT_LIMIT > 0:
@@ -2029,6 +2046,10 @@ def loops_campaign_publishable_content_to_warehouse(
 
 # --- Campaign Metrics Assets ---
 
+class LoopsAuthError(RuntimeError):
+    """LOOPS_SESSION_TOKEN was rejected. Every later request will fail too."""
+
+
 def _fetch_campaign_metrics_page(
     session_token: str,
     email_message_id: str,
@@ -2055,6 +2076,11 @@ def _fetch_campaign_metrics_page(
     cookies = {"__Secure-next-auth.session-token": session_token}
     
     resp = requests.get(url, params=params, headers=headers, cookies=cookies, timeout=30)
+    if resp.status_code in (401, 403):
+        raise LoopsAuthError(
+            f"HTTP {resp.status_code} for metrics API; LOOPS_SESSION_TOKEN has likely expired: "
+            f"{resp.text[:500]}"
+        )
     if resp.status_code != 200:
         raise RuntimeError(f"HTTP {resp.status_code} for metrics API: {resp.text[:500]}")
     
@@ -2064,315 +2090,63 @@ def _fetch_campaign_metrics_page(
         raise RuntimeError(f"Failed to parse JSON from metrics API: {e}")
 
 
-@asset(
-    group_name="loops_campaign_and_metrics_export",
-    required_resource_keys={"loops_session_token"},
-    compute_kind="loops_trpc",
-    description="Fetches detailed recipient-level metrics for campaigns needing enrichment."
-)
-def loops_campaign_recipient_metrics(
-    context: AssetExecutionContext,
-    loops_campaigns_needing_metrics_fetch: pl.DataFrame
-) -> pl.DataFrame:
-    """
-    Fetches recipient-level metrics for each campaign.
-    Returns DataFrame with one row per campaign per recipient.
-    """
-    log = context.log
-    session_token = context.resources.loops_session_token.get_value()
-    
-    if loops_campaigns_needing_metrics_fetch.height == 0:
-        log.info("No campaigns to fetch metrics for, returning empty DataFrame")
-        return pl.DataFrame({
-            "campaign_id": [],
-            "email": [],
-            "delivered_at": [],
-            "unsubscribed_date": [],
-            "opens": [],
-            "clicks": [],
-            "complaint": [],
-            "soft_bounce": [],
-            "hard_bounce": [],
-            "created_at": []
-        }, schema={
-            "campaign_id": pl.Utf8,
-            "email": pl.Utf8,
-            "delivered_at": pl.Datetime,
-            "unsubscribed_date": pl.Datetime,
-            "opens": pl.Int64,
-            "clicks": pl.Int64,
-            "complaint": pl.Boolean,
-            "soft_bounce": pl.Boolean,
-            "hard_bounce": pl.Boolean,
-            "created_at": pl.Datetime
-        })
-    
-    all_records = []
-    total_recipients = 0
-    campaigns_processed = 0
-    
-    for row in loops_campaigns_needing_metrics_fetch.iter_rows(named=True):
-        campaign_id = row["id"]
-        campaign_name = row["name"]
-        
-        try:
-            # First, resolve the email_message_id for this campaign
-            log.info(f"Resolving email message ID for campaign {campaign_name} ({campaign_id})")
-            campaign_info = _resolve_email_message_id_from_campaign(session_token, campaign_id)
-            
-            if not campaign_info or not campaign_info.get("email_message_id"):
-                log.warning(f"Could not resolve email message ID for campaign {campaign_name} ({campaign_id})")
-                continue
-            
-            email_message_id = campaign_info["email_message_id"]
-            log.info(f"Fetching metrics for campaign {campaign_name} ({campaign_id})")
-            
-            # Rate limiting after resolving email_message_id
-            time.sleep(0.5)
-            
-            page = 0
-            campaign_recipients = 0
-            seen_emails = set()  # Track which emails we've seen for this campaign
-            
-            while True:
-                # Fetch one page of metrics
-                response = _fetch_campaign_metrics_page(session_token, email_message_id, page=page)
-                
-                # Extract emails from response
-                emails = (
-                    response.get("result", {})
-                    .get("data", {})
-                    .get("json", {})
-                    .get("emailMetrics", {})
-                    .get("emails", [])
-                )
-                
-                if not emails:
-                    # No more recipients
-                    break
-                
-                # Check if we're getting duplicates (same emails as before)
-                current_emails = {email.get("email") for email in emails if email.get("email")}
-                new_emails = current_emails - seen_emails
-                duplicate_count = len(current_emails) - len(new_emails)
-                
-                if duplicate_count > 0:
-                    log.warning(
-                        f"Page {page} has {duplicate_count}/{len(current_emails)} duplicates "
-                        f"({duplicate_count/len(current_emails)*100:.1f}% duplicate)"
-                    )
-                
-                if current_emails and not new_emails:
-                    log.warning(f"Page {page} returned ONLY duplicate emails, stopping pagination")
-                    break
-                
-                # Process each recipient
-                for email_data in emails:
-                    # Parse timestamps
-                    delivered_at = None
-                    if email_data.get("vendorDeliveredAt"):
-                        try:
-                            delivered_at = datetime.fromisoformat(
-                                email_data["vendorDeliveredAt"].replace('Z', '+00:00')
-                            )
-                        except:
-                            pass
-                    
-                    unsubscribed_date = None
-                    if email_data.get("unsubscribedDate"):
-                        try:
-                            unsubscribed_date = datetime.fromisoformat(
-                                email_data["unsubscribedDate"].replace('Z', '+00:00')
-                            )
-                        except:
-                            pass
-                    
-                    created_at = None
-                    if email_data.get("createdAt"):
-                        try:
-                            created_at = datetime.fromisoformat(
-                                email_data["createdAt"].replace('Z', '+00:00')
-                            )
-                        except:
-                            pass
-                    
-                    record = {
-                        "campaign_id": campaign_id,
-                        "email": email_data.get("email", ""),
-                        "delivered_at": delivered_at,
-                        "unsubscribed_date": unsubscribed_date,
-                        "opens": email_data.get("vendorOpen", 0),
-                        "clicks": email_data.get("vendorClick", 0),
-                        "complaint": email_data.get("vendorComplaint", False),
-                        "soft_bounce": email_data.get("vendorSoftBounce", False),
-                        "hard_bounce": email_data.get("vendorHardBounce", False),
-                        "created_at": created_at
-                    }
-                    
-                    # Only add if we haven't seen this email before
-                    email_addr = email_data.get("email")
-                    if email_addr:
-                        if email_addr in seen_emails:
-                            # Already processed this email on a previous page
-                            log.debug(f"Skipping duplicate email {email_addr}")
-                            continue
-                        seen_emails.add(email_addr)
-                    
-                    all_records.append(record)
-                    campaign_recipients += 1
-                
-                # If we got fewer than 100 emails, we've reached the end
-                if len(emails) < 100:
-                    log.info(f"Received {len(emails)} emails (< 100), pagination complete")
-                    break
-                
-                # Move to next page
-                page += 1
-                log.info(f"Moving to page {page} (fetched {len(emails)} emails, {campaign_recipients} total for this campaign)")
-                
-                # Rate limiting
-                time.sleep(0.5)
-            
-            total_recipients += campaign_recipients
-            campaigns_processed += 1
-            log.info(f"Fetched {campaign_recipients} recipients for campaign {campaign_name}")
-            
-        except Exception as e:
-            log.error(f"Failed to fetch metrics for campaign {campaign_name} ({campaign_id}): {e}")
-            continue
-    
-    log.info(f"Metrics fetching completed. Campaigns: {campaigns_processed}, Total recipients: {total_recipients}")
-    
-    if not all_records:
-        log.warning("No metrics were successfully fetched")
-        return pl.DataFrame({
-            "campaign_id": [],
-            "email": [],
-            "delivered_at": [],
-            "unsubscribed_date": [],
-            "opens": [],
-            "clicks": [],
-            "complaint": [],
-            "soft_bounce": [],
-            "hard_bounce": [],
-            "created_at": []
-        }, schema={
-            "campaign_id": pl.Utf8,
-            "email": pl.Utf8,
-            "delivered_at": pl.Datetime,
-            "unsubscribed_date": pl.Datetime,
-            "opens": pl.Int64,
-            "clicks": pl.Int64,
-            "complaint": pl.Boolean,
-            "soft_bounce": pl.Boolean,
-            "hard_bounce": pl.Boolean,
-            "created_at": pl.Datetime
-        })
-    
-    # Create DataFrame with explicit schema to handle None values
-    df = pl.DataFrame(all_records, schema={
-        "campaign_id": pl.Utf8,
-        "email": pl.Utf8,
-        "delivered_at": pl.Datetime,
-        "unsubscribed_date": pl.Datetime,
-        "opens": pl.Int64,
-        "clicks": pl.Int64,
-        "complaint": pl.Boolean,
-        "soft_bounce": pl.Boolean,
-        "hard_bounce": pl.Boolean,
-        "created_at": pl.Datetime
-    })
-    
-    context.add_output_metadata(
-        metadata={
-            "num_campaigns": campaigns_processed,
-            "num_recipients": total_recipients,
-            "avg_recipients_per_campaign": total_recipients / campaigns_processed if campaigns_processed > 0 else 0
-        }
-    )
-    
-    return df
+# Default per-run budget for loops_campaign_recipient_metrics. Campaigns are
+# written as they finish, so stopping early is safe: the next run picks up the
+# campaigns still due. Override with LOOPS_METRICS_TIME_BUDGET_SECONDS.
+LOOPS_METRICS_DEFAULT_TIME_BUDGET_SECONDS = 4 * 60 * 60
+# The asset runs inside materialize_all_assets_job (dagster/max_runtime 6 h).
+# Stop picking new campaigns this long before that limit kills the run.
+LOOPS_METRICS_RUN_MAX_RUNTIME_SECONDS = 6 * 60 * 60
+LOOPS_METRICS_RUN_SAFETY_MARGIN_SECONDS = 30 * 60
+
+CAMPAIGN_METRICS_SUMMARY_SCHEMA = {
+    "campaign_id": pl.Utf8,
+    "recipients": pl.Int64,
+}
 
 
-@asset(
-    compute_kind="sql",
-    group_name="loops_campaign_and_metrics_export",
-    description="Writes campaign recipient metrics to warehouse.loops.campaign_metrics table."
-)
-def loops_campaign_metrics_to_warehouse(
-    context: AssetExecutionContext,
-    loops_campaign_recipient_metrics: pl.DataFrame
-) -> Output[None]:
-    """
-    Upserts campaign recipient metrics to warehouse.
-    Uses composite primary key (campaign_id, contact_id) to prevent duplicates.
-    """
-    log = context.log
-    import psycopg2
-    from psycopg2.extras import execute_values
-    
-    if loops_campaign_recipient_metrics.height == 0:
-        log.info("No metrics to write to warehouse")
-        return Output(
-            value=None,
-            metadata={
-                "num_records": 0,
-                "note": "No metrics were fetched"
-            }
+def _ensure_campaign_metrics_table(cursor) -> None:
+    """Create loops.campaign_metrics if it doesn't exist."""
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS loops.campaign_metrics (
+            campaign_id TEXT NOT NULL,
+            email TEXT NOT NULL,
+            delivered_at TIMESTAMP WITH TIME ZONE,
+            unsubscribed_date TIMESTAMP WITH TIME ZONE,
+            opens INTEGER,
+            clicks INTEGER,
+            complaint BOOLEAN,
+            soft_bounce BOOLEAN,
+            hard_bounce BOOLEAN,
+            created_at TIMESTAMP WITH TIME ZONE,
+            PRIMARY KEY (campaign_id, email)
         )
-    
-    conn_string = os.getenv("WAREHOUSE_COOLIFY_URL")
-    if not conn_string:
-        raise ValueError("Environment variable WAREHOUSE_COOLIFY_URL is not set")
-    
-    log.info(f"Upserting {loops_campaign_recipient_metrics.height} metrics to loops.campaign_metrics table")
-    
-    try:
-        with psycopg2.connect(conn_string) as conn:
-            with conn.cursor() as cursor:
-                # Create table if it doesn't exist
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS loops.campaign_metrics (
-                        campaign_id TEXT NOT NULL,
-                        email TEXT NOT NULL,
-                        delivered_at TIMESTAMP WITH TIME ZONE,
-                        unsubscribed_date TIMESTAMP WITH TIME ZONE,
-                        opens INTEGER,
-                        clicks INTEGER,
-                        complaint BOOLEAN,
-                        soft_bounce BOOLEAN,
-                        hard_bounce BOOLEAN,
-                        created_at TIMESTAMP WITH TIME ZONE,
-                        PRIMARY KEY (campaign_id, email)
-                    )
-                """)
-                
-                conn.commit()
-                
-                # Prepare data for upsert
-                records = [
-                    (
-                        row["campaign_id"],
-                        row["email"],
-                        row["delivered_at"],
-                        row["unsubscribed_date"],
-                        row["opens"],
-                        row["clicks"],
-                        row["complaint"],
-                        row["soft_bounce"],
-                        row["hard_bounce"],
-                        row["created_at"]
-                    )
-                    for row in loops_campaign_recipient_metrics.iter_rows(named=True)
-                ]
-                
-                # Upsert metrics
+    """)
+
+
+def _persist_campaign_metrics(
+    conn_string: str,
+    campaign_id: str,
+    records: List[Dict[str, Any]],
+) -> None:
+    """
+    Upserts one campaign's recipient metrics and stamps its
+    metrics_last_fetched_at, in a single transaction. Called right after each
+    campaign's fetch completes, so a killed run keeps every finished campaign.
+    """
+    import psycopg2
+    from contextlib import closing
+    from psycopg2.extras import execute_values
+
+    with closing(psycopg2.connect(conn_string)) as conn:
+        with conn.cursor() as cursor:
+            if records:
                 execute_values(
                     cursor,
                     """
                     INSERT INTO loops.campaign_metrics (
                         campaign_id, email, delivered_at, unsubscribed_date,
-                        opens, clicks, complaint, 
+                        opens, clicks, complaint,
                         soft_bounce, hard_bounce, created_at
                     )
                     VALUES %s
@@ -2386,34 +2160,300 @@ def loops_campaign_metrics_to_warehouse(
                         hard_bounce = EXCLUDED.hard_bounce,
                         created_at = EXCLUDED.created_at
                     """,
-                    records,
-                    page_size=1000
+                    [
+                        (
+                            r["campaign_id"],
+                            r["email"],
+                            r["delivered_at"],
+                            r["unsubscribed_date"],
+                            r["opens"],
+                            r["clicks"],
+                            r["complaint"],
+                            r["soft_bounce"],
+                            r["hard_bounce"],
+                            r["created_at"],
+                        )
+                        for r in records
+                    ],
+                    page_size=1000,
                 )
-                
-                conn.commit()
-                log.info(f"Successfully upserted {len(records)} metrics")
-                
-                # Update metrics_last_fetched_at timestamp for all campaigns that had metrics written
-                campaign_ids = list(set(row["campaign_id"] for row in loops_campaign_recipient_metrics.iter_rows(named=True)))
-                if campaign_ids:
-                    cursor.execute("""
-                        UPDATE loops.campaigns 
-                        SET metrics_last_fetched_at = NOW()
-                        WHERE id = ANY(%s)
-                    """, (campaign_ids,))
-                    conn.commit()
-                    log.info(f"Updated metrics_last_fetched_at for {len(campaign_ids)} campaigns")
-        
-        return Output(
-            value=None,
-            metadata={
-                "num_records": loops_campaign_recipient_metrics.height,
-                "operation": "upsert with composite key (campaign_id, email)"
-            }
+            cursor.execute("""
+                UPDATE loops.campaigns
+                SET metrics_last_fetched_at = NOW()
+                WHERE id = %s
+            """, (campaign_id,))
+        conn.commit()
+
+
+def _parse_loops_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except Exception:
+        return None
+
+
+def _fetch_campaign_recipient_records(
+    log,
+    session_token: str,
+    campaign_id: str,
+    campaign_name: str,
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Fetches every recipient row for one campaign.
+    Returns None if the campaign's email message ID can't be resolved.
+    """
+    log.info(f"Resolving email message ID for campaign {campaign_name} ({campaign_id})")
+    campaign_info = _resolve_email_message_id_from_campaign(session_token, campaign_id)
+
+    if not campaign_info or not campaign_info.get("email_message_id"):
+        return None
+
+    email_message_id = campaign_info["email_message_id"]
+    log.info(f"Fetching metrics for campaign {campaign_name} ({campaign_id})")
+
+    # Rate limiting after resolving email_message_id
+    time.sleep(0.5)
+
+    records = []
+    page = 0
+    seen_emails = set()  # Track which emails we've seen for this campaign
+
+    while True:
+        # Fetch one page of metrics
+        response = _fetch_campaign_metrics_page(session_token, email_message_id, page=page)
+
+        # Extract emails from response
+        emails = (
+            response.get("result", {})
+            .get("data", {})
+            .get("json", {})
+            .get("emailMetrics", {})
+            .get("emails", [])
         )
+
+        if not emails:
+            # No more recipients
+            break
+
+        # Check if we're getting duplicates (same emails as before)
+        current_emails = {email.get("email") for email in emails if email.get("email")}
+        new_emails = current_emails - seen_emails
+        duplicate_count = len(current_emails) - len(new_emails)
+
+        if duplicate_count > 0:
+            log.warning(
+                f"Page {page} has {duplicate_count}/{len(current_emails)} duplicates "
+                f"({duplicate_count/len(current_emails)*100:.1f}% duplicate)"
+            )
+
+        if current_emails and not new_emails:
+            log.warning(f"Page {page} returned ONLY duplicate emails, stopping pagination")
+            break
+
+        # Process each recipient
+        for email_data in emails:
+            # Only add if we haven't seen this email before
+            email_addr = email_data.get("email")
+            if email_addr:
+                if email_addr in seen_emails:
+                    # Already processed this email on a previous page
+                    log.debug(f"Skipping duplicate email {email_addr}")
+                    continue
+                seen_emails.add(email_addr)
+
+            records.append({
+                "campaign_id": campaign_id,
+                "email": email_data.get("email", ""),
+                "delivered_at": _parse_loops_timestamp(email_data.get("vendorDeliveredAt")),
+                "unsubscribed_date": _parse_loops_timestamp(email_data.get("unsubscribedDate")),
+                "opens": email_data.get("vendorOpen", 0),
+                "clicks": email_data.get("vendorClick", 0),
+                "complaint": email_data.get("vendorComplaint", False),
+                "soft_bounce": email_data.get("vendorSoftBounce", False),
+                "hard_bounce": email_data.get("vendorHardBounce", False),
+                "created_at": _parse_loops_timestamp(email_data.get("createdAt")),
+            })
+
+        # If we got fewer than 100 emails, we've reached the end
+        if len(emails) < 100:
+            log.info(f"Received {len(emails)} emails (< 100), pagination complete")
+            break
+
+        # Move to next page
+        page += 1
+        log.info(f"Moving to page {page} (fetched {len(emails)} emails, {len(records)} total for this campaign)")
+
+        # Rate limiting
+        time.sleep(0.5)
+
+    return records
+
+
+def _metrics_fetch_deadline(context: AssetExecutionContext, asset_start: float) -> float:
+    """
+    Epoch seconds after which no new campaign is started: the earlier of the
+    asset's own time budget and the run's max_runtime minus a safety margin.
+    """
+    budget = float(os.getenv(
+        "LOOPS_METRICS_TIME_BUDGET_SECONDS",
+        LOOPS_METRICS_DEFAULT_TIME_BUDGET_SECONDS,
+    ))
+    deadline = asset_start + budget
+    try:
+        run_record = context.instance.get_run_record_by_id(context.run.run_id)
+        run_start = run_record.start_time if run_record else None
     except Exception as e:
-        log.error(f"Failed to upsert metrics: {e}")
-        raise
+        context.log.warning(f"Could not read run start time, using asset budget only: {e}")
+        run_start = None
+    if run_start:
+        deadline = min(
+            deadline,
+            run_start + LOOPS_METRICS_RUN_MAX_RUNTIME_SECONDS - LOOPS_METRICS_RUN_SAFETY_MARGIN_SECONDS,
+        )
+    return deadline
+
+
+@asset(
+    group_name="loops_campaign_and_metrics_export",
+    required_resource_keys={"loops_session_token"},
+    compute_kind="loops_trpc",
+    description=(
+        "Fetches recipient-level metrics for campaigns needing enrichment and writes each "
+        "campaign to warehouse.loops.campaign_metrics as soon as it is fetched. Returns a "
+        "small per-campaign summary."
+    )
+)
+def loops_campaign_recipient_metrics(
+    context: AssetExecutionContext,
+    loops_campaigns_needing_metrics_fetch: pl.DataFrame
+) -> pl.DataFrame:
+    """
+    Fetches recipient-level metrics for each due campaign. After each campaign's
+    fetch completes, its rows are upserted into loops.campaign_metrics and its
+    metrics_last_fetched_at is stamped, in one commit. A run that is stopped
+    partway keeps every campaign it finished.
+
+    Stops picking new campaigns once the time budget is spent and returns
+    normally; the next run continues with the campaigns still due.
+
+    Returns one row per campaign written: campaign_id, recipients.
+    """
+    log = context.log
+    asset_start = time.time()
+
+    if loops_campaigns_needing_metrics_fetch.height == 0:
+        log.info("No campaigns to fetch metrics for")
+        return pl.DataFrame(schema=CAMPAIGN_METRICS_SUMMARY_SCHEMA)
+
+    session_token = context.resources.loops_session_token.get_value()
+
+    conn_string = os.getenv("WAREHOUSE_COOLIFY_URL")
+    if not conn_string:
+        raise ValueError("Environment variable WAREHOUSE_COOLIFY_URL is not set")
+
+    import psycopg2
+    from contextlib import closing
+    with closing(psycopg2.connect(conn_string)) as conn:
+        with conn.cursor() as cursor:
+            _ensure_campaign_metrics_table(cursor)
+        conn.commit()
+
+    deadline = _metrics_fetch_deadline(context, asset_start)
+    total_campaigns = loops_campaigns_needing_metrics_fetch.height
+
+    written = []
+    failed = 0
+    unresolved = 0
+    skipped_for_budget = 0
+
+    for index, row in enumerate(loops_campaigns_needing_metrics_fetch.iter_rows(named=True)):
+        if time.time() >= deadline:
+            skipped_for_budget = total_campaigns - index
+            log.info(
+                f"Time budget reached; leaving {skipped_for_budget} campaigns for the next run"
+            )
+            break
+
+        campaign_id = row["id"]
+        campaign_name = row["name"]
+
+        try:
+            records = _fetch_campaign_recipient_records(log, session_token, campaign_id, campaign_name)
+        except LoopsAuthError:
+            # An expired cookie fails every campaign. Fail the run so it is
+            # seen; campaigns already written are kept, the rest stay due.
+            raise
+        except Exception as e:
+            log.error(f"Failed to fetch metrics for campaign {campaign_name} ({campaign_id}): {e}")
+            failed += 1
+            continue
+
+        if records is None:
+            log.warning(f"Could not resolve email message ID for campaign {campaign_name} ({campaign_id})")
+            unresolved += 1
+            continue
+
+        # Outside the try above: a warehouse write error should fail the run,
+        # not be skipped like a per-campaign fetch error.
+        _persist_campaign_metrics(conn_string, campaign_id, records)
+        written.append({"campaign_id": campaign_id, "recipients": len(records)})
+        log.info(
+            f"Wrote {len(records)} recipients for campaign {campaign_name} "
+            f"({len(written)}/{total_campaigns})"
+        )
+
+    total_recipients = sum(w["recipients"] for w in written)
+    log.info(
+        f"Metrics fetching completed. Campaigns written: {len(written)}, failed: {failed}, "
+        f"unresolved: {unresolved}, left for next run: {skipped_for_budget}, "
+        f"total recipients: {total_recipients}"
+    )
+
+    context.add_output_metadata(
+        metadata={
+            "num_campaigns_due": total_campaigns,
+            "num_campaigns": len(written),
+            "num_campaigns_failed": failed,
+            "num_campaigns_unresolved": unresolved,
+            "num_campaigns_left_for_next_run": skipped_for_budget,
+            "num_recipients": total_recipients,
+        }
+    )
+
+    return pl.DataFrame(written, schema=CAMPAIGN_METRICS_SUMMARY_SCHEMA)
+
+
+@asset(
+    compute_kind="sql",
+    group_name="loops_campaign_and_metrics_export",
+    description=(
+        "Summary of campaign recipient metrics written to warehouse.loops.campaign_metrics. "
+        "The writes happen per campaign in loops_campaign_recipient_metrics."
+    )
+)
+def loops_campaign_metrics_to_warehouse(
+    context: AssetExecutionContext,
+    loops_campaign_recipient_metrics: pl.DataFrame
+) -> Output[None]:
+    """
+    Reports what loops_campaign_recipient_metrics wrote. Does no database work:
+    each campaign is upserted and stamped as soon as it is fetched.
+    """
+    num_campaigns = loops_campaign_recipient_metrics.height
+    num_records = (
+        int(loops_campaign_recipient_metrics["recipients"].sum()) if num_campaigns else 0
+    )
+    context.log.info(f"{num_campaigns} campaigns ({num_records} recipients) written upstream")
+    return Output(
+        value=None,
+        metadata={
+            "num_campaigns": num_campaigns,
+            "num_records": num_records,
+            "operation": "summary only; upserted per campaign upstream",
+        }
+    )
 
 
 @asset(

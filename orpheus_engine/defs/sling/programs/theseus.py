@@ -1,51 +1,14 @@
-import base64
-import os
-from urllib.parse import unquote, urlparse
-
 import dagster as dg
 from dagster_sling import SlingConnectionResource, SlingResource
-from dagster import EnvVar, Nothing
+from dagster import Nothing
+from .._helpers import _sling_connection_url
 
 
-def _theseus_db_connection() -> SlingConnectionResource:
-    """
-    Theseus Postgres has no SSL and is not on the warehouse tailnet, so connect
-    through an SSH tunnel to the DB host (forwarding-only `warehouse_sync` user,
-    PermitOpen 127.0.0.1:<db port>), then to the DB on that host's loopback.
-
-    Credentials and host come from THESEUS_COOLIFY_URL. The tunnel defaults to
-    warehouse_sync@<db host> and the key to the shared AUTH tunnel key; override
-    with THESEUS_SSH_TUNNEL / THESEUS_SSH_PRIVATE_KEY_B64. Read with os.getenv
-    (not EnvVar) so an unset optional var can't fail run-config validation for
-    every Sling job.
-    """
-    url = urlparse(os.getenv("THESEUS_COOLIFY_URL", ""))
-    if not url.hostname:
-        # Unset: let the shared missing-env isolation turn this into a
-        # placeholder that only fails theseus_warehouse_mirror.
-        return SlingConnectionResource(
-            name="THESEUS_DB",
-            type="postgres",
-            connection_string=EnvVar("THESEUS_COOLIFY_URL"),
-        )
-
-    key_b64 = os.getenv("THESEUS_SSH_PRIVATE_KEY_B64") or os.getenv("AUTH_SSH_PRIVATE_KEY_B64", "")
-    return SlingConnectionResource(
-        name="THESEUS_DB",
-        type="postgres",
-        host="127.0.0.1",
-        port=str(url.port or 5432),
-        database=url.path.lstrip("/") or "postgres",
-        user=unquote(url.username or ""),
-        password=unquote(url.password or ""),
-        sslmode="disable",  # SSL not needed through SSH tunnel
-        ssh_tunnel=os.getenv("THESEUS_SSH_TUNNEL") or f"ssh://warehouse_sync@{url.hostname}:22",
-        ssh_private_key=base64.b64decode(key_b64).decode("utf-8") if key_b64 else "",
-    )
-
-
-theseus_db_connection = _theseus_db_connection()
-
+theseus_db_connection = SlingConnectionResource(
+    name="THESEUS_DB",
+    type="postgres",
+    connection_string=_sling_connection_url("THESEUS_K8S_URL"),
+)
 
 theseus_replication_config = {
     "source": "THESEUS_DB",

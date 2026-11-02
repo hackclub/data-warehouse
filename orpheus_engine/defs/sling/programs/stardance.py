@@ -23,7 +23,13 @@ stardance_replication_config = {
     },
 
     "streams": {
-        # All tables: incremental on id + updated_at (inherits defaults)
+        # All tables: incremental on id + updated_at (inherits defaults).
+        # Any new upstream table without id/updated_at fails this whole mirror
+        # (2026-10: privacy_token_uses stalled it ~11 days, 2,068 step failures).
+        # Fix: add an explicit override below -- {"update_key": "created_at"}
+        # if it has created_at, {"mode": "full-refresh"} if small with no
+        # timestamp, {"disabled": True} if sensitive/unused; set "primary_key"
+        # too if it has no id.
         "public.*": None,
 
         # --- Incremental: id + created_at (no updated_at column) ---
@@ -58,6 +64,12 @@ stardance_replication_config = {
         # data, but do not refresh either high-volume telemetry table.
         "public.active_insights_requests": {"disabled": True},
         "public.active_insights_jobs": {"disabled": True},
+
+        # --- Disabled / Sensitive: JWT replay ledger ---
+        # privacy_token_uses (jti, used_at) records used token ids. It is
+        # security data, not analytics, and has no id/updated_at, so the
+        # defaults fail on it. Nothing in this repo reads it.
+        "public.privacy_token_uses": {"disabled": True},
 
         # --- Sensitive: explicit column allow-list (excludes ciphertext/bidx/token) ---
         "public.users": {

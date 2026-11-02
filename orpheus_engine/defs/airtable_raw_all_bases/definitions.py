@@ -31,7 +31,7 @@ import psycopg2
 import requests.exceptions
 from psycopg2 import sql
 from psycopg2.extras import execute_values
-from pyairtable import Api as AirtableApi
+from pyairtable import Api as AirtableApi, Base
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dagster import (
@@ -145,8 +145,8 @@ def fetch_with_retry(fn, *, max_attempts=30, log=None):
             raise
 
 
-def fetch_all_bases(api: AirtableApi, *, page_delay: float = 1.5, log=None) -> List:
-    """Paginate /v0/meta/bases one page at a time with per-page retry.
+def fetch_all_bases(api: AirtableApi, *, page_delay: float = 1.5, log=None) -> List[Tuple[Base, str]]:
+    """Return bases paired with names from /v0/meta/bases, retrying per page.
 
     api.bases() paginates internally, so a retry restarts from page 1 and
     re-hammers every page we already fetched. Doing it ourselves means a 429
@@ -179,7 +179,7 @@ def fetch_all_bases(api: AirtableApi, *, page_delay: float = 1.5, log=None) -> L
         params["offset"] = offset
         time.sleep(page_delay)
 
-    return [api.base(info["id"]) for info in base_infos]
+    return [(api.base(info["id"]), info["name"]) for info in base_infos]
 
 
 def _build_schema_json(schema) -> List[Dict]:
@@ -314,10 +314,9 @@ def _stream_table_records(table, base_id: str, table_id: str, queue: WriteQueue)
     return count
 
 
-def process_base(base, queue: WriteQueue, log) -> Dict[str, int]:
+def process_base(base, base_name: str, queue: WriteQueue, log) -> Dict[str, int]:
     """Process a single Airtable base: fetch schema + records, push to queue."""
     base_id = base.id
-    base_name = base.name
     stats = {"tables": 0, "fields": 0, "records": 0, "table_errors": 0}
 
     log.info(f"[{base_name}] fetching schema...")
@@ -419,12 +418,12 @@ def airtable_raw_all_bases_sync(
 
     with ThreadPoolExecutor(max_workers=CONCURRENT_BASES) as executor:
         future_to_base = {
-            executor.submit(process_base, base, queue, log): base
-            for base in bases
+            executor.submit(process_base, base, base_name, queue, log): (base, base_name)
+            for base, base_name in bases
         }
 
         for future in as_completed(future_to_base):
-            base = future_to_base[future]
+            base, base_name = future_to_base[future]
             bases_done += 1
 
             try:
@@ -434,7 +433,7 @@ def airtable_raw_all_bases_sync(
                 total_records += stats["records"]
                 table_errors += stats["table_errors"]
             except Exception as e:
-                log.warning(f"Base {base.name} ({base.id}) failed: {e}")
+                log.warning(f"Base {base_name} ({base.id}) failed: {e}")
                 base_errors += 1
 
             if bases_done % 50 == 0:

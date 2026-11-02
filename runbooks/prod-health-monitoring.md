@@ -150,3 +150,172 @@ SELECT count(*), min(create_timestamp) FROM runs;  -- oldest should approach the
   run monitoring kill it (both configured in `orpheus_engine/schedules.py`).
 - Coolify rebuilds ALL repo services on any push to main (no path filtering),
   and a redeploy during a backup window kills in-flight `docker exec` backups.
+
+## 7. Cut over Half Life, Macondo, Auth and Theseus
+
+Code changes alone do not restore these mirrors. Perform this procedure only
+in the authorized deployment step, after code review. Never record URLs,
+passwords, key material, or row data in this public repository.
+
+### Prerequisites and credential repair
+
+1. Inspect the queue (§1), active mirror writers, and backup activity (§3).
+   Save the current deployment configuration securely outside Git for rollback.
+   Read the latest `STEP_FAILURE` cause chain (§2) before acting.
+2. Confirm the app's current database identity and the endpoint reachable from
+   the warehouse for each source. Macondo must use Orchard `macondo-prod-pg18`.
+   Establish Theseus's active database from its app configuration, then compare
+   distinctive tables and source timestamps; a name match is insufficient.
+3. Determine all consumers of Half Life's failing login before changing it.
+   If dedicated to warehouse reads, rotate its password and preserve read-only
+   grants. If shared with the app, leave its password unchanged: create a
+   dedicated read-only warehouse login, or use the verified current password
+   in the warehouse configuration. If ownership is unresolved, stop that change.
+   Verify CONNECT, schema USAGE and SELECT for every configured stream, with
+   no write grants or privileged role memberships.
+4. Restore Auth's dedicated `warehouse_sync` credential and verify its read-only
+   grants on the four configured tables. Preserve Auth's SSH tunnel and key.
+5. Compare all configured streams and selected columns with the live source
+   schemas, including exclusions and disabled sensitive tables. Do not widen
+   a sensitive-column allow-list to make a query pass.
+
+### Configuration and deployment
+
+- Save `HALF_LIFE_DATABASE_URL`, `AUTH_DB_PASSWORD` (and any changed `AUTH_DB_*`
+  fields), `MACONDO_K8S_URL` and `THESEUS_K8S_URL` in **Coolify's UI env store**,
+  then reconcile the host application `.env`. Host-only edits are overwritten
+  by Coolify. Reconcile the previously repaired Attend/Fallen values into the
+  UI store too, so deployment cannot undo those repairs.
+- Use the public Orchard endpoints with verified TLS. The shared
+  `_sling_connection_url` helper removes `sslrootcert=system` for Sling while
+  retaining `sslmode=verify-full`; store the original URL in Coolify.
+- Deploy the reviewed revision using the existing `docker_deploy/` setup in a
+  quiet window. A restart can cancel runs and backups. Verify the deployed
+  revision and privately compare fingerprints of stored and running values.
+  Check for orphaned containers; do not leave two schedulers running.
+- Materialize only the four repaired mirrors, with no concurrent writers.
+  Half Life, Macondo and Theseus already use full refresh. Auth is incremental:
+  perform a one-off full refresh of its four configured streams with the same
+  selections, including `oauth_access_tokens` whose cursor is `created_at`.
+  This recovers outage gaps and edits/deletes that an incremental retry misses.
+  Keep this override out of the normal scheduled configuration.
+- After successful cutover, delete `MACONDO_COOLIFY_URL`,
+  `THESEUS_COOLIFY_URL`, `THESEUS_SSH_TUNNEL` and
+  `THESEUS_SSH_PRIVATE_KEY_B64` from **both** Coolify's env store and the host
+  `.env`. Reconcile containers through the existing deployment process. Verify
+  these variables are absent from running containers and that
+  `AUTH_SSH_PRIVATE_KEY_B64` remains available to Auth alone.
+
+### Acceptance and rollback
+
+For each mirror, require a new `ASSET_MATERIALIZATION` event (§2) after deployment,
+then compare source and warehouse counts for every configured stream and maximum
+creation/update timestamps (notably Auth activities and Theseus letters). Check
+source identity and timestamps even for green runs: a frozen pre-migration copy
+can sync successfully. Require a subsequent scheduled success, and repeat all
+checks after any cleanup deployment. Record aggregate results privately; a build
+test is not production verification.
+
+If a deployment fails, restore the prior reviewed image and required connection
+settings from the secure configuration record. Deleted old settings must be
+explicitly restored when needed by old code. Never restore a revoked password;
+use a working read credential. Recheck run events and freshness after rollback.
+
+Build investigation on 2026-10-30 UTC confirmed production failures for all four
+mirrors. Last materializations in the preceding 60 days were Oct 15 for Half
+Life and Theseus, Oct 2 for Macondo, and none for Auth. Orchard lists
+`macondo-prod-pg18`.
+
+Follow-up on 2026-10-30 UTC established that Half Life's Orchard app uses the
+same database login as the failing warehouse connection. It is also the
+Orchard database owner. **Do not rotate this shared app password.** Provision
+a dedicated warehouse reader with CONNECT, schema USAGE and SELECT only,
+verify its grants and stream access, then save its URL in Coolify before
+cutover. The Half Life database reports healthy and its app pod reports ready.
+
+### Theseus Orchard source access gate
+
+A prior investigation on 2026-10-14 confirmed Orchard deployments for the live
+Theseus app but found that the connected account could not access their project.
+Cross-project Orchard searches on 2026-10-30 UTC for `theseus` and
+`mail.hackclub.com` returned no results. That does not overturn the earlier
+Orchard finding or establish the live database identity.
+
+Read-only inspection on 2026-10-30 UTC found a Theseus-related database Compose
+configuration on the legacy source host, a retained PostgreSQL 17 volume, and no
+container attached to that volume. Treat this as the likely old copy, not the
+authoritative source for the warehouse. Its freshness remains unverified.
+
+Before repointing the warehouse:
+
+1. Obtain access to the live Theseus Orchard project, or obtain a dedicated
+   read-only database URL through a secure channel. Verify the live app's
+   database configuration to establish the authoritative Orchard database.
+2. Validate the reader's grants, configured streams and sensitive-column
+   selections. Compare source counts and maximum creation/update timestamps,
+   especially for letters, against the warehouse's September snapshot. Confirm
+   the source is current before allowing a full refresh; a successful connection
+   alone does not establish freshness.
+3. Save the verified URL as `THESEUS_K8S_URL` in Coolify's UI env store, then
+   follow the configuration, deployment and acceptance steps above. Keep
+   endpoints, credentials and aggregate verification results in the private
+   deployment record.
+
+If evidence indicates the old volume is needed, stop and raise a separate
+question for approval of application database recovery. Recovery of that volume,
+recreation of the app database service and changes to application workers are
+outside this warehouse connection repair.
+
+No database recovery, credential mutation, Coolify edit, deployment or backfill
+was performed during this follow-up investigation. Until source access and
+freshness are verified, the Theseus cutover remains blocked. All four mirrors,
+the Auth backfill and production acceptance checks remain incomplete.
+
+## 8. Adding an Orchard program mirror
+
+A program mirror is one module, `orpheus_engine/defs/sling/programs/<name>.py`,
+exporting `<name>_db_connection`, `<name>_replication_config` and
+`<name>_warehouse_mirror`; `assets.py` discovers it. Copy `fallen.py`: full
+refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
+
+1. **Streams.** List every table explicitly and exclude columns with `-col`.
+   Leave out session, token, OTP/verification, rate-limit, cache, migration and
+   backup tables. Drop tokens, passwords, encrypted values, join/share codes,
+   IP addresses, street address lines, postcodes, phone numbers and tracking
+   numbers; keep names, email, birthday, city, state and country. Check every
+   stream and `-col` against the live `information_schema.columns` (a
+   misspelled `-col` excludes nothing), then add the module to
+   `test_sling_orchard_connections.py` and `test_sling_program_exclusions.py`.
+   Column names do not show secrets stored as row values: for every mirrored
+   key/value settings table, list its key names (never the values) and leave
+   the table out if any is a credential, adding it to `UNMIRRORED_TABLES`
+   (Coral's `app_settings` holds an Anthropic auth token).
+2. **Reader login.** Never use the app's own login. In the database's primary
+   pod, named by `get_database` `clusterStatus.currentPrimary` (not always
+   `pg-<cluster>-1`: contd's is `pg-production-database-2`), through
+   `exec_in_pod` with container `postgres`, in one transaction:
+   `CREATE ROLE hc_warehouse_reader LOGIN CONNECTION LIMIT 4 PASSWORD
+   '<SCRAM-SHA-256 verifier>'`, `ALTER ROLE … SET
+   default_transaction_read_only = on`, `GRANT CONNECT` on the database,
+   `USAGE` on `public`, and `SELECT` on exactly the mirrored tables. Generate the
+   password locally and send only its SCRAM verifier, so the plaintext never
+   reaches the pod or Orchard's audit log. For tables with `-col` exclusions,
+   grant `SELECT (<kept columns>)` instead of the whole table, then confirm a
+   Sling run still reads them; if Sling selects `*` and fails, fall back to a
+   table grant and record that the excluded columns stay readable by the login.
+   Verify: `has_table_privilege` is true for mirrored tables and false for an
+   excluded secret table, no write privileges or role memberships, and an
+   `INSERT` over the public endpoint fails.
+3. **The login can disappear.** It is created outside Orchard: restoring or
+   recreating the database cluster drops it, and an app migration that drops
+   and recreates a table drops that table's grant. A mirror that starts failing
+   with `permission denied` or a login error needs step 2 rerun, not a new
+   credential in the app.
+4. **URL.** The database's public endpoint may be off: turn it on with
+   `enable_database_public`, then check the listed port answers (`nc -z`). A
+   listed port that does not answer comes back after disabling and re-enabling
+   public access (Haven booking's did). Build the URL in Orchard's
+   public-endpoint shape with `sslmode=verify-full&sslrootcert=system` and
+   save it as `<NAME>_K8S_URL` in Coolify's UI env store (host-only `.env`
+   edits are reverted), the parent repo's `.env`, and the Vaultwarden `.env` notes. Then deploy and verify as in
+   §7, including a new materialization and source/warehouse row-count parity.
