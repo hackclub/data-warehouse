@@ -346,18 +346,41 @@ def test_real_catalog_query_and_refresh_against_column_grants(loopback_postgres)
     apply_refresh()
     assert findings() == []
 
-    # The check's session settings refuse writes.
-    conn = psycopg2.connect(url)
-    conn.set_session(readonly=True, autocommit=True)
-    with conn.cursor() as cur, pytest.raises(psycopg2.errors.ReadOnlySqlTransaction):
-        cur.execute("CREATE TEMP TABLE should_fail (id int)")
-    conn.close()
-
     with admin.cursor() as cur:
         cur.execute("DROP TABLE public.events")
     assert findings() == [
         DriftFinding("demo", STALE_STREAM, "Stream 'public.events' does not exist in source catalog")
     ]
+    admin.close()
+
+
+def test_check_session_refuses_writes_and_has_timeouts(loopback_postgres, monkeypatch):
+    """Runs on the session _fetch_program_tables opens, not on one the test sets up."""
+    port = loopback_postgres
+    admin = psycopg2.connect(host="127.0.0.1", port=port, user="postgres", dbname="postgres")
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        # The login may create temp tables, so only the read-only session can refuse this.
+        cur.execute("CREATE ROLE hc_warehouse_reader LOGIN")
+    url = f"postgresql://hc_warehouse_reader@127.0.0.1:{port}/postgres?sslmode=disable"
+    probed = {}
+
+    def probe_session(cur):
+        with pytest.raises(psycopg2.errors.ReadOnlySqlTransaction):
+            cur.execute("CREATE TEMP TABLE should_fail (id int)")
+        cur.execute("SHOW statement_timeout")
+        probed["statement_timeout"] = cur.fetchone()[0]
+        probed["connect_timeout"] = cur.connection.info.dsn_parameters["connect_timeout"]
+        probed["autocommit"] = cur.connection.autocommit
+        return {}
+
+    monkeypatch.setattr(drift, "_fetch_catalog_privileges", probe_session)
+    assert drift._fetch_program_tables(url) == {}
+    assert probed == {
+        "statement_timeout": drift.STATEMENT_TIMEOUT,
+        "connect_timeout": str(drift.CONNECT_TIMEOUT_SECONDS),
+        "autocommit": True,
+    }
     admin.close()
 
 
