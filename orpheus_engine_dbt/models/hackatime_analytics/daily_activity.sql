@@ -70,6 +70,8 @@ emails AS (
 SELECT
     d.user_id                                       AS hackatime_user_id,
     d.activity_date,
+    -- Preserve coding-row eligibility; future category-only rows will set this false.
+    TRUE AS legacy_coding_row_present,
     ROUND(d.seconds_day::numeric / 3600, 2)         AS hackatime_hours,
     COALESCE(l.languages, '')                       AS languages_used,
     e.email                                         AS first_email
@@ -80,4 +82,4 @@ LEFT JOIN  lang_daily l
 LEFT JOIN  emails e
     ON  e.user_id       = d.user_id
 ORDER BY   d.activity_date DESC,
-        d.user_id 
+        d.user_id
