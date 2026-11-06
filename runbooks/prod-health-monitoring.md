@@ -10,7 +10,8 @@ worktree): `PROD_DAGSTER_DB_URL` (Dagster instance DB) and
 `WAREHOUSE_COOLIFY_URL` (warehouse Postgres). In that `.env`,
 `WAREHOUSE_COOLIFY_URL` is the agents' login `hc_warehouse_agent`, which cannot
 change existing data; §10 lists what it can do and the elevated route for the
-rest.
+rest. `PROD_DAGSTER_DB_URL` is the read-only login `dagster_reader`; §11 lists
+what it can do and the route for the rest.
 
 ## 1. Is the run queue healthy?
 
@@ -550,3 +551,69 @@ After that, `--verify --login agent` reports the missing membership until the ro
 created again.
 
 The syncs are not affected either way.
+
+## 11. The agents' read-only Dagster login
+
+`PROD_DAGSTER_DB_URL` in the parent `.env` and the Vaultwarden `.env` note logs in as
+`dagster_reader`, which has `pg_read_all_data` and nothing else. The superuser value
+belongs only in Coolify's store, the host `.env` and the app container. The app does
+not use this variable, so nothing here touches it.
+
+| Action | How |
+| --- | --- |
+| §1, §2, §5 queries, freshness checks, `scripts/ysws_true_spend_preview.py` | `PROD_DAGSTER_DB_URL` |
+| Launch, retry or cancel a run, turn a schedule on or off | Dagster GraphQL (`scripts/cancel_orphaned_runs.py`), never SQL |
+| Superuser work on this database | The database's local socket on the host: `docker exec -i -u postgres <container> psql`. Only for a request that asks for it |
+
+Do not copy the superuser URL back into the parent `.env` or the vault note, even to
+restore a backup: `provision` also changes the line in the checkout's `.env*` backups.
+
+### What the login can still do
+
+- **Read everything,** including tokens in event logs. Treat the URL as sensitive.
+- **Read `pg_authid`,** so it can see the superuser's SCRAM hash. `pg_read_all_data`
+  covers system catalogs. A hash cannot log in, but it allows offline password
+  guessing, so the superuser password must stay long and random.
+- **Store data on the server,** after turning off its read-only default: temporary
+  tables and large objects. It cannot change Dagster's tables.
+- **Hold connections,** up to 10 of the server's 50, with `statement_timeout` 5min and
+  `idle_in_transaction_session_timeout` 60s. To adjust these, change `ROLE_SETTINGS` or
+  `CONNECTION_LIMIT` in the script below and run `provision` again.
+
+This limits what a leaked connection string can do. Anyone with root on the host can
+still read the host `.env` or use the socket.
+
+### Create, check, roll back
+
+Use `scripts/dagster_db_reader.py`. It sends secrets only through stdin and prints
+names and booleans. A line whose name is not an uppercase identifier, such as a
+commented-out URL, prints as `<unnamed line>`. Identifiers are arguments; keep them
+in a private `@args` file, not in this repo. `--ssh` is the command that reaches the host (see the skill
+`warehouse-dagster-prod-health`), and `--vault-note` is repeated for each `.env` note.
+
+- **`provision`** generates a password and sends only its SCRAM hash to Postgres over
+  the local socket. It logs in with the new URL at its public address, and changes
+  nothing an agent reads unless that works. It then rereads and changes the one URL line
+  in the parent `.env` and the vault note, and the same line in the checkout's `.env*`
+  backups. Every other name stays as it was. Running it again is safe and gives the
+  login a new password. `--url-host` and `--url-port` move both copies to a new address;
+  never change only one, or a restore brings back the old address.
+- **`verify`** checks the login's attributes, memberships and settings. It confirms no
+  write privilege on any relation in `public`, that a real insert is refused with the
+  read-only default off, and that the §1, §2 and §5 reads work. It confirms both copies
+  log in as the reader, and that the parent `.env`, the checkout's backups, worktree
+  env files and the vault notes do not hold the superuser value. It also lists, without
+  failing, host `.env.bak*` files holding the current value and names that differ
+  between the parent `.env` and the vault notes.
+- **`push-gate --store-names-file <file>`** runs before a push to main, because a push
+  regenerates the host `.env` from Coolify's store (§8 step 4). It compares the running
+  app's variable names with the store's, listed one per line, and stops if the app has
+  any the store lacks. Do not push until those are resolved.
+
+**Rotating the superuser password:** read the current value from the host, not the
+parent `.env`. The parent URL holds the reader's password and only says where the
+database is.
+
+**Roll back:** copy the superuser value from the host `.env` into `PROD_DAGSTER_DB_URL`
+in the parent `.env` and the vault note, in-process, then drop the login over the
+socket with `DROP ROLE dagster_reader;`. Nothing in the app depends on the login.

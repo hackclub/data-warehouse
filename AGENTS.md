@@ -30,5 +30,7 @@ This is deployed on Coolify to the server `ssh root@warehouse.limited.selfhosted
 
 **`WAREHOUSE_COOLIFY_URL` has three different values, on purpose.** In the parent `.env` and Vaultwarden's `.env` note it is the agents' login, `hc_warehouse_agent`, which cannot change existing data. In the `warehouse-mcp` Coolify app only, it is that tool's login, `hc_warehouse_mcp`, with the same grants. In the Dagster app's Coolify settings, the host `.env` and that app's containers it is the superuser login the syncs use. Never copy it from one place to another: that breaks every sync or the query tool's own limits.
 
+**`PROD_DAGSTER_DB_URL` is read-only on purpose.** In the parent `.env` and Vaultwarden it is `dagster_reader`, which cannot change Dagster's tables. Change Dagster state through GraphQL, not SQL. Never copy the superuser value from Coolify or the host into the parent `.env` or Vaultwarden. See "The agents' read-only Dagster login" in `runbooks/prod-health-monitoring.md`.
+
 ## Public Repo
 This repository is public. Always triple check your changes before commiting and pushing them. Never, ever publish secret data publicly - even stuff that may not feel private, like people's names in a test.
