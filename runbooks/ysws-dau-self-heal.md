@@ -20,8 +20,10 @@ holds.
 
 - Secrets: `~/dev/hackclub/data-warehouse/.env` (canonical dev checkout if in a worktree).
   Load with `set -a && source ~/dev/hackclub/data-warehouse/.env && set +a`.
-- Prod warehouse: `psql "$WAREHOUSE_COOLIFY_URL"` (read-only until the fix phase).
-- dbt against prod: `cd orpheus_engine_dbt && DBT_PROFILES_DIR=~/.dbt_stardance_tmp uv run dbt <cmd>`.
+- Prod warehouse: `psql "$WAREHOUSE_COOLIFY_URL"`. This login cannot write
+  (`prod-health-monitoring.md` §10).
+- dbt against prod: `bin/warehouse-dbt compile|parse|ls ...` with that login. `run` and
+  `test` need `bin/warehouse-dbt --elevated --reason "<why>" ...` (4b).
 - Serving schema is `public_summer_2026_analytics` (no bare `summer_2026_analytics`).
 - Enumerate what SHOULD be healthy by reading the models, not from memory:
   `program_windows` + daily-grained specials in `daily_active_users.sql` = the program
@@ -124,16 +126,18 @@ Classify each finding and act by class:
 
 ### 4a. Validate fixes
 
-Same protocol as the coverage runbook §4c: compile, run the wrapped compiled SQL
+Same protocol as the coverage runbook §4c: compile with `bin/warehouse-dbt compile`, run the wrapped compiled SQL
 read-only, confirm the fix changes exactly what it should (diff per-program totals
 before/after), sample again around the fixed area.
 
 ### 4b. Rebuild and test
 
 ```bash
-DBT_PROFILES_DIR=~/.dbt_stardance_tmp uv run dbt run  -s "summer_unified_time_log+" "summer_2026_metadata+"
-DBT_PROFILES_DIR=~/.dbt_stardance_tmp uv run dbt test -s "summer_unified_time_log+" "summer_2026_metadata+"
+bin/warehouse-dbt --elevated --reason "<why>" run  -s "summer_unified_time_log+" "summer_2026_metadata+"
+bin/warehouse-dbt --elevated --reason "<why>" test -s "summer_unified_time_log+" "summer_2026_metadata+"
 ```
+Both build this branch's models before any merge. `test` is elevated too, because the
+project's `on-run-end` GRANT hooks run after tests and the agents' login cannot grant.
 All `summer_2026_dashboard_*` tests must pass.
 
 ## Phase 5 — Report

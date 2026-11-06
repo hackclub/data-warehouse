@@ -7,7 +7,10 @@ fixes that came out of it).
 
 Connection strings referenced here live in `.env` (parent repo if you are on a
 worktree): `PROD_DAGSTER_DB_URL` (Dagster instance DB) and
-`WAREHOUSE_COOLIFY_URL` (warehouse Postgres).
+`WAREHOUSE_COOLIFY_URL` (warehouse Postgres). In that `.env`,
+`WAREHOUSE_COOLIFY_URL` is the agents' login `hc_warehouse_agent`, which cannot
+change existing data; §10 lists what it can do and the elevated route for the
+rest.
 
 ## 1. Is the run queue healthy?
 
@@ -109,12 +112,17 @@ Interpretation guide:
   backends stuck for 3+ hours, "sorry, too many clients already" errors, run
   queue 18 deep. Real backups are pgBackRest (physical, lock-free) on the
   host's systemd timers — a logical pg_dump of the whole DB should never run
-  against prod. If one is mid-flight and wedging everything:
-  `SELECT pg_terminate_backend(<pid>);` after confirming pgBackRest is green
-  (`pgbackrest --stanza=warehouse info` inside the postgres container).
+  against prod. If one is mid-flight and wedging everything: confirm pgBackRest
+  is green (`pgbackrest --stanza=warehouse info` inside the postgres container),
+  then
+  `bin/warehouse-admin-psql --reason "stuck pg_dump" -c "SELECT pg_terminate_backend(<pid>);"`.
+  The agents' login is refused here because the session is a superuser's (§10).
 - "sorry, too many clients already" on its own usually means orphaned/blocked
   connections accumulating; see the reaper settings notes in the team memory
-  (idle_in_transaction_session_timeout + tcp keepalives are configured).
+  (idle_in_transaction_session_timeout + tcp keepalives are configured). In this
+  state the agents' login cannot connect, so run the queries above with
+  `bin/warehouse-admin-psql --reason "too many clients triage" -c "<query>"`,
+  which uses a slot reserved for superusers.
 
 ## 4. Known failure signatures (fixed, but watch for regressions)
 
@@ -414,3 +422,90 @@ failed job once more, so each failing day counts two `STEP_FAILURE` events.
 | `config no longer matches the source` | The table is gone, or a `-col` names a column that no longer exists | Update the program config, and refresh grants if the kept columns changed |
 | `could not check` | Connection failed or the catalog query timed out; only the error type is shown | Check the endpoint and the connection limit. A one-off collision with a running mirror clears on the next run |
 | `No program was checked` | No URL logs in as `hc_warehouse_reader`, so the program URLs probably did not load | Check the container's env and the URLs' fingerprints; a Coolify deploy can revert them (§8 step 4) |
+
+## 10. The agents' login and the elevated routes
+
+`WAREHOUSE_COOLIFY_URL` holds **two different values on purpose**:
+
+- **Agents' login, `hc_warehouse_agent`:** the parent repo's `.env` and the
+  Vaultwarden `.env` note.
+- **Superuser login, unchanged:** Coolify's env store, the host `.env` and the
+  containers. The syncs and dbt's scheduled jobs use it.
+
+Never copy the variable from the parent `.env` to Coolify or the host: every sync
+would lose write access.
+
+### What each action uses
+
+| Action | How |
+| --- | --- |
+| Ad-hoc SELECTs, `bin/readonly-psql`, `bin/ysws_true_expense.py`, spend preview without `--dbt`, reader row counts | Agents' login |
+| Lock and wedge queries (§3): `pg_stat_activity`, `pg_blocking_pids`, full query text | Agents' login, through `pg_read_all_stats` |
+| Cancel or end your own stuck session | Agents' login |
+| End or cancel any other superuser session: `pg_dump`, a sync, the query tool | `bin/warehouse-admin-psql` |
+| Any triage during "too many clients" | `bin/warehouse-admin-psql`, because reserved slots are for superusers |
+| Hand fixes: `metrics_last_fetched_at`, `ALTER COLUMN` for a type overflow, a backfill `UPDATE` | `bin/warehouse-admin-psql` |
+| Sling test into a scratch schema | Prefer a `target: LOCAL` dry run. Otherwise run Sling in the app container and drop the schema with `bin/warehouse-admin-psql` |
+| `dbt compile`, `parse`, `ls` | `bin/warehouse-dbt <command> ...` |
+| `dbt run`, `dbt test`, spend preview `--dbt` | `bin/warehouse-dbt --elevated --reason "<why>" ...` |
+| Dagster materialize from a laptop against prod | Refused, on purpose. In-process runs in the app container still work |
+
+### Rules for the elevated routes
+
+Use one only with a written `--reason`, and only for a runbook step that names it
+or a request that asks for the write. The reason shows as `application_name`
+(`elevated:<reason>` or `elevated-dbt:<reason>`) in `pg_stat_activity`.
+
+Both routes need SSH access to the host, so a leaked `.env` cannot reach them, and
+no superuser password reaches the machine you run them on. They read three settings
+from the environment or the parent `.env`, kept out of this public repo:
+`WAREHOUSE_SSH_RELAY` (the ssh command that reaches the host, relay included),
+`WAREHOUSE_POSTGRES_CONTAINER` and `WAREHOUSE_APP_CONTAINER` (each a name, or the
+part before the `-<timestamp>` a deploy adds). Each tool refuses unless exactly one
+running container matches, so wait out a deploy.
+
+`bin/warehouse-dbt --elevated` uploads this checkout's `orpheus_engine_dbt/` tree
+to the app container and runs it there, so a branch is built and tested before any
+merge. It prints the commit, and whether the tree has uncommitted changes. It runs
+as the syncs' login and uses the container's `HACK_CLUBBERS_LOCATION_SALT`. A model
+that needs a new variable fails until the container has it.
+
+If the relay drops during a long run, dbt can keep running and leave a
+`/tmp/warehouse-dbt-*` folder in the app container. The folder holds no password,
+and the next deploy removes it. Check `pg_stat_activity` for the `elevated-dbt:` name
+before starting another run.
+
+### What the agents' login can still do
+
+- **Read everything,** including tokens in mirrored tables and other sessions'
+  query text. Treat the URL as sensitive.
+- **Read `pg_authid`,** so it can see every login's SCRAM verifier, including the
+  superuser's. `pg_read_all_data` covers system catalogs, and Postgres cannot deny this
+  to one login. A verifier cannot log in, but it allows offline password guessing, so
+  every warehouse login needs a long random password.
+- **Store data on the server,** after turning off its read-only default: temporary
+  tables and large objects. It cannot change existing tables, but an exposed URL
+  could use these to fill the disk. `temp_file_limit` caps sort and hash spill files
+  only; Postgres does not count temporary tables against it. Closing this needs
+  `REVOKE TEMP ON DATABASE` and `REVOKE EXECUTE` on the large-object functions
+  `FROM PUBLIC`, which affect every login, so it is not done today.
+- **Hold locks,** up to its timeouts: `lock_timeout` 30s, `statement_timeout` 30min,
+  `idle_in_transaction_session_timeout` 5min. To adjust one, change `ROLE_SETTINGS` in
+  the script below and run it again.
+
+`pg_signal_backend` is left out on purpose. Postgres refuses to let a non-superuser
+signal a superuser session, so it cannot end the stuck `pg_dump`. It would only let
+an exposed URL kill the small non-superuser logins.
+
+### Create, check, roll back
+
+`scripts/provision_warehouse_agent_login.py` renders the role SQL with only a SCRAM
+verifier and writes the new URL to a 0600 file; running it again gives the role a
+new password. `--verify` checks the login's attributes, that it can see other logins'
+query text, and that writes, `COPY ... PROGRAM`, server file reads and ending a
+superuser session are all refused.
+
+To roll back, restore `WAREHOUSE_COOLIFY_URL` in the parent `.env` from the host
+`.env` through the relay, update the Vaultwarden note, then
+`bin/warehouse-admin-psql --reason "remove agent login" -c "DROP ROLE hc_warehouse_agent;"`.
+The syncs are not affected either way.
