@@ -453,7 +453,9 @@ def _find_pg_bin(binary_name: str) -> str | None:
     return str(candidates[0]) if candidates else None
 
 
-def test_live_loopback_postgres_end_to_end_provision_verify_and_counts(tmp_path, capsys):
+def test_live_loopback_postgres_end_to_end_provision_verify_and_counts(
+    tmp_path, capsys, monkeypatch
+):
     initdb_bin = _find_pg_bin("initdb")
     pg_ctl_bin = _find_pg_bin("pg_ctl")
     if not initdb_bin or not pg_ctl_bin:
@@ -507,12 +509,29 @@ def test_live_loopback_postgres_end_to_end_provision_verify_and_counts(tmp_path,
             cur.execute("CREATE DATABASE warehouse_dst OWNER postgres")
         admin_conn.close()
 
+        fallen_mod = importlib.import_module("orpheus_engine.defs.sling.programs.fallen")
+        monkeypatch.setitem(
+            fallen_mod.fallen_replication_config["streams"],
+            "public.Session",
+            {"mode": "full-refresh", "select": ["-secretToken"]},
+        )
+
         catalog = _synthetic_catalog_for_program("fallen")
+        catalog["drizzle.__drizzle_migrations"] = ["id", "hash", "created_at"]
+        catalog["public.AdminAuditLog"] = ["id", "payload", "created_at"]
+        unmirrored_tables = {
+            "public.unmirrored_secret_table",
+            "public.AdminAuditLog",
+            "drizzle.__drizzle_migrations",
+        }
+
         src_admin = psycopg2.connect(
             host="127.0.0.1", port=port, user="postgres", dbname="fallen_src"
         )
         src_admin.autocommit = True
         with src_admin.cursor() as cur:
+            cur.execute('CREATE SCHEMA "drizzle" AUTHORIZATION app_owner')
+            cur.execute('REVOKE ALL ON SCHEMA "drizzle" FROM PUBLIC')
             for table_key, cols in catalog.items():
                 s_name, t_name = table_key.split(".", 1)
                 col_defs = ", ".join(f"{_quote_ident(c)} text" for c in cols)
@@ -531,7 +550,7 @@ def test_live_loopback_postgres_end_to_end_provision_verify_and_counts(tmp_path,
         with wh_admin.cursor() as cur:
             cur.execute('CREATE SCHEMA "fallen"')
             for table_key, cols in catalog.items():
-                if table_key == "public.unmirrored_secret_table":
+                if table_key in unmirrored_tables:
                     continue
                 _, t_name = table_key.split(".", 1)
                 col_defs = ", ".join(f"{_quote_ident(c)} text" for c in cols)
@@ -572,7 +591,10 @@ def test_live_loopback_postgres_end_to_end_provision_verify_and_counts(tmp_path,
         with src_admin.cursor() as cur:
             cur.execute(sql_path.read_text(encoding="utf-8"))
 
-        # 2. Verify live reader when env_path now points to hc_warehouse_reader (Finding 1).
+        # 2. Verify live reader when env_path now points to hc_warehouse_reader (Finding 1),
+        # covering both live catalog and --catalog-json paths (including no-USAGE schema
+        # drizzle.__drizzle_migrations, mirrored mixed-case public.Session, and unmirrored
+        # mixed-case public.AdminAuditLog).
         assert "hc_warehouse_reader:" in env_path.read_text(encoding="utf-8")
         rc = provision_main(
             [
@@ -585,6 +607,50 @@ def test_live_loopback_postgres_end_to_end_provision_verify_and_counts(tmp_path,
             ]
         )
         assert rc == 0
+
+        catalog_json_path = tmp_path / "live_catalog.json"
+        catalog_json_path.write_text(
+            json.dumps({"db_name": "fallen_src", "columns": catalog}),
+            encoding="utf-8",
+        )
+        rc = provision_main(
+            [
+                "--program",
+                "fallen",
+                "--env-file",
+                str(env_path),
+                "--catalog-json",
+                str(catalog_json_path),
+                "--verify-reader",
+            ]
+        )
+        assert rc == 0
+
+        missing_oid_catalog_path = tmp_path / "missing_oid_catalog.json"
+        missing_oid_catalog_path.write_text(
+            json.dumps(
+                {
+                    "db_name": "fallen_src",
+                    "columns": {
+                        **catalog,
+                        "public.GhostTable": ["id"],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(RuntimeError, match="Catalog table public.GhostTable has no OID"):
+            provision_main(
+                [
+                    "--program",
+                    "fallen",
+                    "--env-file",
+                    str(env_path),
+                    "--catalog-json",
+                    str(missing_oid_catalog_path),
+                    "--verify-reader",
+                ]
+            )
 
         # 3. Simulate an app migration adding a column to a -col table while env_path
         # already uses hc_warehouse_reader (Runbook §8.3 + Finding 1).

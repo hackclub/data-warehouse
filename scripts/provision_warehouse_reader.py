@@ -466,10 +466,27 @@ def _verify_live_reader(
                 raise RuntimeError("Unexpected write column grants")
 
             for table_key, all_cols in source_columns.items():
+                if "." not in table_key:
+                    raise RuntimeError(f"Invalid catalog table name: {table_key!r}")
+                schema_name, table_name = table_key.split(".", 1)
                 cur.execute(
-                    "SELECT has_table_privilege(%s, %s, 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') "
-                    "    OR has_any_column_privilege(%s, %s, 'INSERT, UPDATE, REFERENCES')",
-                    (role_name, table_key, role_name, table_key),
+                    "SELECT c.oid "
+                    "FROM pg_catalog.pg_class c "
+                    "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = %s "
+                    "  AND c.relname = %s "
+                    "  AND c.relkind IN ('r', 'p', 'v', 'm', 'f')",
+                    (schema_name, table_name),
+                )
+                oid_row = cur.fetchone()
+                if oid_row is None or oid_row[0] is None:
+                    raise RuntimeError(f"Catalog table {table_key} has no OID in pg_class")
+                table_oid = int(oid_row[0])
+
+                cur.execute(
+                    "SELECT has_table_privilege(%s, %s::oid, 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') "
+                    "    OR has_any_column_privilege(%s, %s::oid, 'INSERT, UPDATE, REFERENCES')",
+                    (role_name, table_oid, role_name, table_oid),
                 )
                 if cur.fetchone()[0]:
                     raise RuntimeError(f"Unexpected write privilege on {table_key}")
@@ -477,8 +494,8 @@ def _verify_live_reader(
                 if not table_key.startswith("public."):
                     continue
                 cur.execute(
-                    "SELECT has_any_column_privilege(%s, %s, 'SELECT')",
-                    (role_name, table_key),
+                    "SELECT has_any_column_privilege(%s, %s::oid, 'SELECT')",
+                    (role_name, table_oid),
                 )
                 has_any = cur.fetchone()[0]
                 if table_key in grants:
@@ -487,8 +504,8 @@ def _verify_live_reader(
                     kept_cols = set(grants[table_key] or all_cols)
                     for col in all_cols:
                         cur.execute(
-                            "SELECT has_column_privilege(%s, %s, %s, 'SELECT')",
-                            (role_name, table_key, col),
+                            "SELECT has_column_privilege(%s, %s::oid, %s, 'SELECT')",
+                            (role_name, table_oid, col),
                         )
                         if cur.fetchone()[0] != (col in kept_cols):
                             raise RuntimeError(
