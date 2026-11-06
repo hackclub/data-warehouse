@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Derive least-privilege hc_warehouse_reader column grants from a Sling program's
-replication_config, render single-transaction SCRAM-SHA-256 role setup SQL,
-verify reader privileges over the public Orchard endpoint, and compare pre/post
-row counts without printing credentials.
+replication_config, render single-transaction SCRAM-SHA-256 role setup SQL or a
+grants-only refresh that leaves the role and password alone, verify reader
+privileges over the public Orchard endpoint, and compare pre/post row counts
+without printing credentials.
 """
 
 from __future__ import annotations
@@ -22,6 +23,15 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
+from orpheus_engine.defs.sling.reader_grants import (
+    READER_ROLE,
+    _column_grant_mismatches,
+    _connect_pg,
+    _fetch_catalog_privileges,
+    _fetch_live_catalog,
+    _replication_reader_grants,
+)
+
 PROGRAM_ENV_VARS: dict[str, str] = {
     "attend": "ATTEND_COOLIFY_URL",
     "fallen": "FALLEN_K8S_URL",
@@ -32,14 +42,6 @@ PROGRAM_ENV_VARS: dict[str, str] = {
 _SCRAM_RE = re.compile(
     r"^SCRAM-SHA-256\$\d+:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$"
 )
-_SQL_STRING_LITERAL_RE = re.compile(r"'[^']*'")
-_SQL_AS_ALIAS_RE = re.compile(r"\bas\s+[A-Za-z_][A-Za-z0-9_]*\b", re.IGNORECASE)
-_SQL_FROM_CLAUSE_RE = re.compile(
-    r"\bfrom\s+[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\b", re.IGNORECASE
-)
-_SQL_FUNC_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
-_SQL_IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
-_SQL_KEYWORDS = {"select", "from", "where", "and", "or", "not", "null", "true", "false"}
 
 
 def _quote_ident(name: str) -> str:
@@ -79,102 +81,34 @@ def _scram_sha256_verifier(
     return f"SCRAM-SHA-256${iterations}:{b64(salt_bytes)}${b64(stored_key)}:{b64(server_key)}"
 
 
-def _extract_sql_stream_columns(
-    stream_name: str, sql_text: str, table_columns: Sequence[str]
-) -> tuple[str, ...]:
-    """Validate and return the source columns referenced by a custom sql: stream."""
-    if "*" in sql_text:
-        raise ValueError(f"{stream_name}: wildcard SELECT * is not allowed in sql stream")
-    cleaned = _SQL_FROM_CLAUSE_RE.sub(
-        " ", _SQL_AS_ALIAS_RE.sub(" ", _SQL_STRING_LITERAL_RE.sub(" ", sql_text))
-    )
-    func_names = {m.group(1).lower() for m in _SQL_FUNC_CALL_RE.finditer(cleaned)}
-    table_col_set = set(table_columns)
-    referenced: list[str] = []
-    for token in _SQL_IDENT_RE.findall(cleaned):
-        if token.lower() in _SQL_KEYWORDS or token.lower() in func_names:
-            continue
-        if token not in table_col_set:
-            raise ValueError(f"{stream_name}: sql stream references unknown column {token!r}")
-        if token not in referenced:
-            referenced.append(token)
-    if not referenced:
-        raise ValueError(f"{stream_name}: sql stream references no source columns")
-    return tuple(referenced)
+def _quote_stream(stream_name: str) -> str:
+    schema_name, table_name = stream_name.split(".", 1)
+    return f"{_quote_ident(schema_name)}.{_quote_ident(table_name)}"
 
 
-def _replication_reader_grants(
-    replication_config: Mapping[str, Any],
-    source_columns: Mapping[str, Sequence[str]],
-) -> dict[str, tuple[str, ...] | None]:
-    """Derive exact table (None) or column tuple SELECT grants for a replication_config."""
-    defaults = replication_config.get("defaults") or {}
-    streams = replication_config.get("streams") or {}
-    if not streams:
-        raise ValueError("replication_config defines no streams")
-
-    grants: dict[str, tuple[str, ...] | None] = {}
-    for stream_name, stream_config in streams.items():
-        if "*" in stream_name:
-            raise ValueError(
-                f"Wildcard stream {stream_name!r} is not compatible with fixed reader grants"
-            )
-        merged = {**defaults, **(stream_config or {})}
-        if merged.get("disabled"):
-            continue
-        if "." not in stream_name or stream_name not in source_columns:
-            raise ValueError(f"Stream {stream_name!r} does not exist in source catalog")
-
-        table_cols = list(source_columns[stream_name])
-        if not table_cols:
-            raise ValueError(f"Stream {stream_name!r} has no columns in source catalog")
-        table_col_set = set(table_cols)
-
-        if merged.get("sql") is not None:
-            grants[stream_name] = _extract_sql_stream_columns(
-                stream_name, str(merged["sql"]), table_cols
-            )
-            continue
-
-        select_list = merged.get("select")
-        if not select_list:
-            grants[stream_name] = None
-            continue
-
-        negatives = [str(col)[1:] for col in select_list if str(col).startswith("-")]
-        positives = [str(col) for col in select_list if not str(col).startswith("-")]
-        if negatives and positives:
-            raise ValueError(f"{stream_name}: cannot mix positive and negative select entries")
-
-        if negatives:
-            for col_name in negatives:
-                if col_name not in table_col_set:
-                    raise ValueError(
-                        f"{stream_name}: excluded column {col_name!r} does not exist in source"
-                    )
-            excluded = set(negatives)
-            kept = tuple(col for col in table_cols if col not in excluded)
-            if not kept:
-                raise ValueError(f"{stream_name}: all columns were excluded")
-            grants[stream_name] = kept
+def _render_select_grants(
+    grants: Mapping[str, Sequence[str] | None], role_name: str
+) -> list[str]:
+    q_role = _quote_ident(role_name)
+    schemas = sorted({stream.split(".", 1)[0] for stream in grants})
+    lines = [f"GRANT USAGE ON SCHEMA {_quote_ident(schema)} TO {q_role};" for schema in schemas]
+    for stream_name, cols in grants.items():
+        q_table = _quote_stream(stream_name)
+        if cols is None:
+            lines.append(f"GRANT SELECT ON TABLE {q_table} TO {q_role};")
         else:
-            for col_name in positives:
-                if col_name not in table_col_set:
-                    raise ValueError(
-                        f"{stream_name}: selected column {col_name!r} does not exist in source"
-                    )
-            grants[stream_name] = tuple(dict.fromkeys(positives))
-
-    if not grants:
-        raise ValueError("No active streams found in replication_config")
-    return grants
+            if not cols:
+                raise ValueError(f"{stream_name}: column grant list cannot be empty")
+            col_list = ", ".join(_quote_ident(col) for col in cols)
+            lines.append(f"GRANT SELECT ({col_list}) ON TABLE {q_table} TO {q_role};")
+    return lines
 
 
 def _render_reader_setup_sql(
     db_name: str,
     scram_verifier: str,
     grants: Mapping[str, Sequence[str] | None],
-    role_name: str = "hc_warehouse_reader",
+    role_name: str = READER_ROLE,
     conn_limit: int = 4,
 ) -> str:
     """Render a single-transaction SQL script provisioning hc_warehouse_reader."""
@@ -233,20 +167,25 @@ def _render_reader_setup_sql(
         "$$;",
         f"GRANT CONNECT ON DATABASE {q_db} TO {q_role};",
     ])
-    for schema_name in schemas:
-        lines.append(f"GRANT USAGE ON SCHEMA {_quote_ident(schema_name)} TO {q_role};")
+    lines.extend(_render_select_grants(grants, role_name))
 
-    for stream_name, cols in grants.items():
-        schema_name, table_name = stream_name.split(".", 1)
-        q_table = f"{_quote_ident(schema_name)}.{_quote_ident(table_name)}"
-        if cols is None:
-            lines.append(f"GRANT SELECT ON TABLE {q_table} TO {q_role};")
-        else:
-            if not cols:
-                raise ValueError(f"{stream_name}: column grant list cannot be empty")
-            col_list = ", ".join(_quote_ident(col) for col in cols)
-            lines.append(f"GRANT SELECT ({col_list}) ON TABLE {q_table} TO {q_role};")
+    lines.append("COMMIT;")
+    return "\n".join(lines) + "\n"
 
+
+def _render_reader_grant_refresh_sql(
+    grants: Mapping[str, Sequence[str] | None],
+    role_name: str = READER_ROLE,
+) -> str:
+    """Render a single-transaction refresh of an existing role's grants on the
+    mirrored tables. It fails if the role is gone, and never touches its password.
+    REVOKE on a table also revokes that table's column privileges."""
+    if not grants:
+        raise ValueError("grants must not be empty")
+    lines = ["BEGIN;"]
+    for stream_name in grants:
+        lines.append(f"REVOKE ALL PRIVILEGES ON TABLE {_quote_stream(stream_name)} FROM {_quote_ident(role_name)};")
+    lines.extend(_render_select_grants(grants, role_name))
     lines.append("COMMIT;")
     return "\n".join(lines) + "\n"
 
@@ -302,7 +241,7 @@ def _check_row_count_parity(
 
 
 def _build_reader_url(
-    source_url: str, password: str, role_name: str = "hc_warehouse_reader"
+    source_url: str, password: str, role_name: str = READER_ROLE
 ) -> str:
     parsed = urlparse(source_url)
     if not parsed.hostname or not parsed.path or parsed.path == "/":
@@ -349,75 +288,11 @@ def _update_env_file_content(content: str, updates: Mapping[str, str]) -> str:
     return "\n".join(out_lines) + ("\n" if content.endswith("\n") or not content else "")
 
 
-def _ensure_system_ssl_certs() -> None:
-    """Populate SSL_CERT_FILE and SSL_CERT_DIR from system CA paths when unset
-    so psycopg2-binary's bundled OpenSSL resolves sslrootcert=system."""
-    import ssl
-
-    verify_paths = ssl.get_default_verify_paths()
-    if not os.environ.get("SSL_CERT_FILE"):
-        for candidate in (
-            verify_paths.cafile,
-            "/etc/ssl/certs/ca-certificates.crt",
-            "/etc/ssl/cert.pem",
-            "/etc/pki/tls/certs/ca-bundle.crt",
-        ):
-            if candidate and os.path.isfile(candidate):
-                os.environ["SSL_CERT_FILE"] = candidate
-                break
-    if not os.environ.get("SSL_CERT_DIR"):
-        for candidate in (
-            verify_paths.capath,
-            "/etc/ssl/certs",
-            "/etc/pki/tls/certs",
-        ):
-            if candidate and os.path.isdir(candidate):
-                os.environ["SSL_CERT_DIR"] = candidate
-                break
-
-
-def _connect_pg(conn_url: str):
-    import psycopg2
-
-    _ensure_system_ssl_certs()
-    return psycopg2.connect(conn_url)
-
-
-def _fetch_live_catalog(conn_url: str) -> tuple[str, dict[str, list[str]]]:
-    """Read table and column names from pg_catalog (pg_class / pg_attribute)
-    rather than information_schema.columns so ungranted tables and excluded
-    columns remain visible even when connected as hc_warehouse_reader."""
-    conn = _connect_pg(conn_url)
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT current_database()")
-            db_name = cur.fetchone()[0]
-            cur.execute(
-                "SELECT n.nspname || '.' || c.relname, a.attname "
-                "FROM pg_catalog.pg_class c "
-                "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
-                "JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid "
-                "WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') "
-                "  AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
-                "  AND n.nspname NOT LIKE 'pg_toast%' "
-                "  AND n.nspname NOT LIKE 'pg_temp%' "
-                "  AND a.attnum > 0 "
-                "  AND NOT a.attisdropped "
-                "ORDER BY n.nspname, c.relname, a.attnum"
-            )
-            catalog: dict[str, list[str]] = {}
-            for table_key, col_name in cur.fetchall():
-                catalog.setdefault(table_key, []).append(col_name)
-            return db_name, catalog
-    finally:
-        conn.close()
-
-
 def _verify_live_reader(
     reader_url: str,
     replication_config: Mapping[str, Any],
     source_columns: Mapping[str, Sequence[str]],
-    role_name: str = "hc_warehouse_reader",
+    role_name: str = READER_ROLE,
 ) -> None:
     import psycopg2
 
@@ -465,52 +340,40 @@ def _verify_live_reader(
             if cur.fetchone()[0] != 0:
                 raise RuntimeError("Unexpected write column grants")
 
-            for table_key, all_cols in source_columns.items():
+            cur.execute("SELECT current_user")
+            if cur.fetchone()[0] != role_name:
+                raise RuntimeError(f"--verify-reader must connect as {role_name}")
+            live_tables = _fetch_catalog_privileges(cur)
+
+            for table_key in source_columns:
                 if "." not in table_key:
                     raise RuntimeError(f"Invalid catalog table name: {table_key!r}")
-                schema_name, table_name = table_key.split(".", 1)
-                cur.execute(
-                    "SELECT c.oid "
-                    "FROM pg_catalog.pg_class c "
-                    "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
-                    "WHERE n.nspname = %s "
-                    "  AND c.relname = %s "
-                    "  AND c.relkind IN ('r', 'p', 'v', 'm', 'f')",
-                    (schema_name, table_name),
-                )
-                oid_row = cur.fetchone()
-                if oid_row is None or oid_row[0] is None:
+                live_table = live_tables.get(table_key)
+                if live_table is None:
                     raise RuntimeError(f"Catalog table {table_key} has no OID in pg_class")
-                table_oid = int(oid_row[0])
 
                 cur.execute(
                     "SELECT has_table_privilege(%s, %s::oid, 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') "
                     "    OR has_any_column_privilege(%s, %s::oid, 'INSERT, UPDATE, REFERENCES')",
-                    (role_name, table_oid, role_name, table_oid),
+                    (role_name, live_table.oid, role_name, live_table.oid),
                 )
                 if cur.fetchone()[0]:
                     raise RuntimeError(f"Unexpected write privilege on {table_key}")
 
                 if not table_key.startswith("public."):
                     continue
-                cur.execute(
-                    "SELECT has_any_column_privilege(%s, %s::oid, 'SELECT')",
-                    (role_name, table_oid),
-                )
-                has_any = cur.fetchone()[0]
+                has_any = any(live_table.columns.values())
                 if table_key in grants:
                     if not has_any:
                         raise RuntimeError(f"Missing SELECT privilege on mirrored {table_key}")
-                    kept_cols = set(grants[table_key] or all_cols)
-                    for col in all_cols:
-                        cur.execute(
-                            "SELECT has_column_privilege(%s, %s::oid, %s, 'SELECT')",
-                            (role_name, table_oid, col),
+                    not_granted, unexpected = _column_grant_mismatches(
+                        live_table.columns, grants[table_key]
+                    )
+                    mismatched = (*not_granted, *unexpected)
+                    if mismatched:
+                        raise RuntimeError(
+                            f"Column privilege mismatch on {table_key}.{mismatched[0]}"
                         )
-                        if cur.fetchone()[0] != (col in kept_cols):
-                            raise RuntimeError(
-                                f"Column privilege mismatch on {table_key}.{col}"
-                            )
                 elif has_any:
                     raise RuntimeError(
                         f"Unexpected SELECT privilege on unmirrored {table_key}"
@@ -673,6 +536,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--render-sql-file", type=Path)
     parser.add_argument("--write-env-file", type=Path)
+    parser.add_argument(
+        "--refresh-grants-sql-file",
+        type=Path,
+        help="Render grants only for an existing reader; the role, password and URL stay as they are",
+    )
     parser.add_argument("--verify-reader", action="store_true")
     parser.add_argument("--record-counts-json", type=Path)
     parser.add_argument("--compare-counts-json", type=Path)
@@ -684,20 +552,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--render-sql-file and --write-env-file must be provided together "
             "so a generated password is never discarded"
         )
+    if args.refresh_grants_sql_file and args.render_sql_file:
+        parser.error("--refresh-grants-sql-file and --render-sql-file are alternatives")
     if args.post_counts_json and not args.compare_counts_json:
         parser.error("--post-counts-json requires --compare-counts-json")
     if not any(
         (
             args.check,
             args.render_sql_file,
+            args.refresh_grants_sql_file,
             args.verify_reader,
             args.record_counts_json,
             args.compare_counts_json,
         )
     ):
         parser.error(
-            "At least one action flag (--check, --render-sql-file, --verify-reader, "
-            "--record-counts-json, --compare-counts-json) is required"
+            "At least one action flag (--check, --render-sql-file, "
+            "--refresh-grants-sql-file, --verify-reader, --record-counts-json, "
+            "--compare-counts-json) is required"
         )
 
     mod = importlib.import_module(f"orpheus_engine.defs.sling.programs.{args.program}")
@@ -705,7 +577,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     env_var = args.env_var or PROGRAM_ENV_VARS.get(args.program, f"{args.program.upper()}_K8S_URL")
     env_map = _parse_env_text(args.env_file.read_text(encoding="utf-8")) if args.env_file else {}
 
-    if args.check or args.render_sql_file or args.verify_reader:
+    if args.check or args.render_sql_file or args.refresh_grants_sql_file or args.verify_reader:
         if args.catalog_json:
             payload = json.loads(args.catalog_json.read_text(encoding="utf-8"))
             db_name, source_columns = payload["db_name"], payload["columns"]
@@ -759,6 +631,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 os.umask(old_umask)
             print(
                 f"{args.program}: wrote SQL to {args.render_sql_file} and updated {args.write_env_file} "
+                f"({table_grants} table grants, {col_grants} column grants)"
+            )
+        if args.refresh_grants_sql_file:
+            if not args.refresh_grants_sql_file.parent.is_dir():
+                raise SystemExit(
+                    f"Parent directory for --refresh-grants-sql-file does not exist: {args.refresh_grants_sql_file.parent}"
+                )
+            args.refresh_grants_sql_file.write_text(
+                _render_reader_grant_refresh_sql(grants), encoding="utf-8"
+            )
+            print(
+                f"{args.program}: wrote grants-only refresh SQL to {args.refresh_grants_sql_file} "
                 f"({table_grants} table grants, {col_grants} column grants)"
             )
         if args.verify_reader:

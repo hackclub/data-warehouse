@@ -69,6 +69,9 @@ FROM event_logs
 WHERE step_key='<asset name>' AND timestamp > now() - interval '30 days';
 ```
 
+A `check_warehouse_reader_grants` failure means a program's reader login has
+drifted from its config: see §9.
+
 ## 3. Is the warehouse Postgres wedged?
 
 ```sql
@@ -306,7 +309,9 @@ refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
    `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <staged.env> --check --render-sql-file <scratch.sql> --write-env-file <staged.env>`
    which connects with the starting login in `<staged.env>` (`get_database`'s
    login on initial setup, or the existing login / `hc_warehouse_reader` on a
-   later switch or refresh) to inspect the live `pg_catalog` schema
+   later switch or after losing the password; this always creates a new
+   password, so use the grants-only refresh in step 3 for column changes) to
+   inspect the live `pg_catalog` schema
    (automatically resolving system CA certificates for `psycopg2-binary` and
    seeing all tables and columns regardless of caller table/column privileges),
    derives the exact table and column grants from `<name>_replication_config`,
@@ -334,23 +339,33 @@ refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
    `id` because Postgres computes the SHA-256 digest on the source server).
    Verify over the public endpoint as `hc_warehouse_reader` with
    `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <staged.env> --verify-reader`:
-   `has_any_column_privilege` is true for mirrored tables and false for
-   unmirrored tables, `has_column_privilege` is true on kept columns and false
-   on excluded columns, no write privileges or `pg_auth_members` role
+   `has_column_privilege` is true on kept columns and false on excluded columns
+   and on every column of unmirrored tables, no write privileges or `pg_auth_members` role
    memberships exist, and a real `INSERT` over the public endpoint fails (both
    in the default read-only session and after `SET TRANSACTION READ WRITE`).
 3. **The login or its column grants can go stale.** The role is created outside
    Orchard: restoring or recreating the database cluster drops it, an app
    migration that drops and recreates a table drops that table's grant, and an
    app migration that adds a new column to a table with `-col` exclusions leaves
-   `hc_warehouse_reader` without `SELECT` on the new column until its column
-   grants are rerun. A mirror that starts failing with `permission denied` or a
-   login error needs step 2 rerun via
-   `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <staged.env> --check --render-sql-file <scratch.sql> --write-env-file <staged.env>`
-   (seeded from `.env`, where `hc_warehouse_reader` can still read the full
-   `pg_catalog` schema), followed by applying `<scratch.sql>` on the primary
-   pod, verifying with `--verify-reader --env-file <staged.env>`, and saving the
-   updated URL from `<staged.env>` (not a new credential in the app).
+   `hc_warehouse_reader` without `SELECT` on the new column. The mirror stays
+   green and the warehouse lacks the column; §9's daily check reports it.
+   - **Lost login** (a login error after the role was dropped): rerun step 2,
+     apply `<scratch.sql>`, verify, then save the new URL as in step 4.
+   - **Stale grants** (`permission denied` or a §9 finding): first decide
+     whether a new column is sensitive, using the rules in step 1. If it is, add
+     a `-col` for it to the config and land that; the column stays ungranted, so
+     no grant change is needed. If it is not, or the reader can read a column it
+     should not, run
+     `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <staged.env> --refresh-grants-sql-file <scratch.sql>`
+     (the existing `hc_warehouse_reader` URL can read the full `pg_catalog`
+     schema). It renders one transaction of `REVOKE` and `GRANT` on the mirrored
+     tables and leaves the role, password and URL alone, so there is no URL to
+     save. Apply `<scratch.sql>` on the primary pod as in step 2, verify with
+     `--verify-reader --env-file <staged.env>`, then materialize the mirror and
+     confirm the warehouse has the column, comparing names case-insensitively
+     because the warehouse column's case can differ from the source's.
+     Incremental streams only fill the new column on rows updated after the
+     grant; older rows need a full refresh of that stream.
 4. **Save the URL, deploy, verify row-count parity, and roll back on failure.**
    Save the verified `<NAME>_K8S_URL` (or `ATTEND_COOLIFY_URL` for Attend)
    written by `--write-env-file` in `<staged.env>` in Coolify's UI env store
@@ -376,3 +391,26 @@ refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
    `.env` notes. If a cutover fails verification, roll back by restoring the
    backed-up host `.env` and `docker-compose.yaml` (and parent `.env`),
    restarting the container, and confirming no orphaned container remains.
+
+## 9. Reader grant drift
+
+`warehouse_reader_grant_drift_job` runs daily at 06:20 ET
+(`warehouse_reader_grant_drift_schedule`, on by default). It finds enabled
+program modules whose URL logs in as `hc_warehouse_reader` and compares each
+`-col` stream's grants, derived from the config, with `has_column_privilege`. It
+reads catalog metadata only, in a read-only session with timeouts, using one of
+the login's 4 connections, and it never grants anything. Allow-list, `sql:` and
+whole-table streams are not checked: a new column cannot change what an
+allow-list copies. Programs on any other login are skipped and logged.
+
+A failure appears in the §2 queries as step `check_warehouse_reader_grants`,
+naming programs, tables and columns (no URLs or row values). `run_retries` runs a
+failed job once more, so each failing day counts two `STEP_FAILURE` events.
+
+| Message | Meaning | Fix |
+| --- | --- | --- |
+| `kept column not granted` | A column the mirror should copy is missing from the warehouse, usually after an app migration | §8 step 3, stale grants |
+| `excluded column is readable` | The reader can read a column the config excludes | §8 step 3 refresh, then find out who granted it |
+| `config no longer matches the source` | The table is gone, or a `-col` names a column that no longer exists | Update the program config, and refresh grants if the kept columns changed |
+| `could not check` | Connection failed or the catalog query timed out; only the error type is shown | Check the endpoint and the connection limit. A one-off collision with a running mirror clears on the next run |
+| `No program was checked` | No URL logs in as `hc_warehouse_reader`, so the program URLs probably did not load | Check the container's env and the URLs' fingerprints; a Coolify deploy can revert them (§8 step 4) |

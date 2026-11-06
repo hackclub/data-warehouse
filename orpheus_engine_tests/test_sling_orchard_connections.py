@@ -14,14 +14,15 @@ from orpheus_engine_tests.test_sling_program_exclusions import (
     CUSTOM_EXCLUDED_COLUMNS,
     EXCLUDED_COLUMNS,
 )
+from orpheus_engine.defs.sling.reader_grants import _replication_reader_grants
 from scripts.provision_warehouse_reader import (
     PROGRAM_ENV_VARS,
     _build_reader_url,
     _check_row_count_parity,
     _quote_ident,
     _quote_literal,
+    _render_reader_grant_refresh_sql,
     _render_reader_setup_sql,
-    _replication_reader_grants,
     _scram_sha256_verifier,
     _update_env_file_content,
     main as provision_main,
@@ -443,6 +444,85 @@ def test_provision_cli_flag_guards_and_offline_count_comparison(tmp_path, capsys
         )
 
 
+def test_grant_refresh_sql_changes_grants_only():
+    grants = {
+        "public.events": ("id", "googleUsername"),
+        "public.tickets": None,
+        "audit.log": ("id",),
+    }
+    sql_text = _render_reader_grant_refresh_sql(grants)
+    lines = sql_text.splitlines()
+
+    assert lines[0] == "BEGIN;" and lines[-1] == "COMMIT;"
+    assert 'REVOKE ALL PRIVILEGES ON TABLE "public"."events" FROM "hc_warehouse_reader";' in lines
+    assert 'GRANT USAGE ON SCHEMA "audit" TO "hc_warehouse_reader";' in lines
+    assert (
+        'GRANT SELECT ("id", "googleUsername") ON TABLE "public"."events" TO "hc_warehouse_reader";'
+        in lines
+    )
+    assert 'GRANT SELECT ON TABLE "public"."tickets" TO "hc_warehouse_reader";' in lines
+    assert all(line.split()[0] in {"BEGIN;", "COMMIT;", "REVOKE", "GRANT"} for line in lines)
+    for forbidden in ("ROLE", "PASSWORD", "SCRAM", "DATABASE", "ALL TABLES"):
+        assert forbidden not in sql_text
+
+    with pytest.raises(ValueError, match="grants must not be empty"):
+        _render_reader_grant_refresh_sql({})
+
+
+def test_grant_refresh_cli_writes_no_env_and_rejects_full_setup_flag(tmp_path, capsys):
+    catalog = _synthetic_catalog_for_program("midnight")
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(json.dumps({"db_name": "midnight", "columns": catalog}), encoding="utf-8")
+    refresh_path = tmp_path / "refresh.sql"
+
+    assert (
+        provision_main(
+            [
+                "--program",
+                "midnight",
+                "--catalog-json",
+                str(catalog_path),
+                "--refresh-grants-sql-file",
+                str(refresh_path),
+            ]
+        )
+        == 0
+    )
+    assert "grants-only refresh" in capsys.readouterr().out
+    assert "PASSWORD" not in refresh_path.read_text(encoding="utf-8")
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("MIDNIGHT_K8S_URL=postgresql://u:p@h/d\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        provision_main(
+            [
+                "--program",
+                "midnight",
+                "--catalog-json",
+                str(catalog_path),
+                "--refresh-grants-sql-file",
+                str(refresh_path),
+                "--render-sql-file",
+                str(tmp_path / "setup.sql"),
+                "--write-env-file",
+                str(env_path),
+            ]
+        )
+    assert env_path.read_text(encoding="utf-8") == "MIDNIGHT_K8S_URL=postgresql://u:p@h/d\n"
+
+    with pytest.raises(SystemExit, match="does not exist"):
+        provision_main(
+            [
+                "--program",
+                "midnight",
+                "--catalog-json",
+                str(catalog_path),
+                "--refresh-grants-sql-file",
+                str(tmp_path / "missing" / "refresh.sql"),
+            ]
+        )
+
+
 def _find_pg_bin(binary_name: str) -> str | None:
     found = shutil.which(binary_name)
     if found:
@@ -462,8 +542,6 @@ def test_live_loopback_postgres_end_to_end_provision_verify_and_counts(
         pytest.skip("local PostgreSQL binaries (initdb/pg_ctl) not installed")
 
     pgdata = tmp_path / "pgdata"
-    sock_dir = tmp_path / "pgsock"
-    sock_dir.mkdir()
     log_file = tmp_path / "postgres.log"
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -489,7 +567,7 @@ def test_live_loopback_postgres_end_to_end_provision_verify_and_counts(
         hba.write("host all hc_warehouse_reader 127.0.0.1/32 scram-sha-256\n")
 
     pg_opts = (
-        f"-F -p {port} -h 127.0.0.1 -k {sock_dir} "
+        f"-F -p {port} -h 127.0.0.1 -k '' "
         "-c ssl=off -c password_encryption=scram-sha-256"
     )
     subprocess.run(
@@ -666,6 +744,30 @@ def test_live_loopback_postgres_end_to_end_provision_verify_and_counts(
                     "--verify-reader",
                 ]
             )
+
+        # A grants-only refresh picks up the column and leaves the URL and password alone.
+        refresh_path = tmp_path / "fallen_refresh.sql"
+        env_before_refresh = env_path.read_text(encoding="utf-8")
+        rc = provision_main(
+            [
+                "--program",
+                "fallen",
+                "--env-file",
+                str(env_path),
+                "--refresh-grants-sql-file",
+                str(refresh_path),
+            ]
+        )
+        assert rc == 0
+        assert env_path.read_text(encoding="utf-8") == env_before_refresh
+        with src_admin.cursor() as cur:
+            cur.execute(refresh_path.read_text(encoding="utf-8"))
+        assert (
+            provision_main(["--program", "fallen", "--env-file", str(env_path), "--verify-reader"])
+            == 0
+        )
+
+        # A full rerun, for a lost login, rotates the password and rewrites the URL.
         rc = provision_main(
             [
                 "--program",
