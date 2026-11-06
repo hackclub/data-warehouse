@@ -73,7 +73,7 @@ decision made so far, per program.
   canonical dev checkout's `.env` is the source of truth). Load with
   `set -a && source ~/dev/hackclub/data-warehouse/.env && set +a`.
 - Prod warehouse, read-only validation: `psql "$WAREHOUSE_COOLIFY_URL"`. This login
-  cannot write (`prod-health-monitoring.md` §10).
+  cannot change existing data or tables (`prod-health-monitoring.md` §10).
 - dbt against prod: `bin/warehouse-dbt compile|parse|ls ...` with that login. `run` and
   `test` need `bin/warehouse-dbt --elevated --reason "<why>" ...`, which uses this
   checkout's models in the app container (§4d).

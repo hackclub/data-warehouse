@@ -22,6 +22,8 @@ POSTGRES_CONTAINER_VAR = "WAREHOUSE_POSTGRES_CONTAINER"
 APP_CONTAINER_VAR = "WAREHOUSE_APP_CONTAINER"
 
 REASON_MAX_CHARS = 40
+# Optional, so a bare name matches too. Coolify's look like -20261106T042438.
+DEPLOY_TIMESTAMP_SUFFIX = r"(-[0-9][0-9T]*)?"
 
 
 class Refused(Exception):
@@ -99,9 +101,11 @@ def relay_argv(remote_argv: list[str]) -> list[str]:
 
 
 def find_container(setting_name: str) -> str:
-    """The one running container named <value> or <value>-<suffix>.
+    """The one running container named <value> or <value>-<deploy timestamp>.
 
-    Refuses on zero or several, such as in the middle of a deploy.
+    Only a timestamp counts as a suffix: Coolify runs a <value>-proxy beside a
+    database, and that must neither match nor stand in for it when the database is
+    down. Refuses on zero or several, such as in the middle of a deploy.
     """
     base = required_setting(setting_name)
     result = subprocess.run(
@@ -115,16 +119,15 @@ def find_container(setting_name: str) -> str:
             f"could not list containers through {RELAY_VAR} "
             f"(exit {result.returncode}): {result.stderr.strip()[-300:]}"
         )
-    matches = [
-        name
-        for name in result.stdout.split()
-        if name == base or name.startswith(f"{base}-")
-    ]
+    pattern = re.compile(re.escape(base) + DEPLOY_TIMESTAMP_SUFFIX)
+    matches = [name for name in result.stdout.split() if pattern.fullmatch(name)]
     if len(matches) != 1:
         raise Refused(
-            f"expected one running container for {setting_name}, found {len(matches)}"
-            + (": " + ", ".join(matches) if matches else "")
-            + ". If a deploy is running, wait for it to finish."
+            f"expected one running container named {base} or {base}-<timestamp> "
+            f"for {setting_name}, found {len(matches)}"
+            + (": " + ", ".join(matches) + ". If a deploy is running, wait for it to finish."
+               if matches
+               else ". Check that it is running and that the setting is right.")
         )
     return matches[0]
 

@@ -3,8 +3,8 @@
 
     bin/warehouse-dbt compile -s my_model
         Runs here as the everyday WAREHOUSE_COOLIFY_URL login. compile, parse and ls
-        only. That login cannot write, and dbt's on-run-end GRANT hooks make even
-        `dbt test` fail under it. Compiled SQL lands in orpheus_engine_dbt/target/.
+        only. That login cannot change existing data or tables, and dbt's on-run-end
+        GRANT hooks make even `dbt test` fail under it. Compiled SQL lands in orpheus_engine_dbt/target/.
 
     bin/warehouse-dbt --elevated --reason "why" run -s my_model
     bin/warehouse-dbt --elevated --reason "why" test -s my_model
@@ -73,7 +73,7 @@ def _local_dbt() -> list[str]:
 def run_local(command: str, dbt_args: list[str]) -> int:
     if command not in LOCAL_COMMANDS:
         raise Refused(
-            f"`dbt {command}` needs write access, which this login does not have. "
+            f"`dbt {command}` can change existing tables or grants, which this login cannot do. "
             f'Use: bin/warehouse-dbt --elevated --reason "<why>" {command} ...'
         )
     url = required_setting("WAREHOUSE_COOLIFY_URL")

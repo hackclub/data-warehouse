@@ -20,8 +20,8 @@ holds.
 
 - Secrets: `~/dev/hackclub/data-warehouse/.env` (canonical dev checkout if in a worktree).
   Load with `set -a && source ~/dev/hackclub/data-warehouse/.env && set +a`.
-- Prod warehouse: `psql "$WAREHOUSE_COOLIFY_URL"`. This login cannot write
-  (`prod-health-monitoring.md` §10).
+- Prod warehouse: `psql "$WAREHOUSE_COOLIFY_URL"`. This login cannot change
+  existing data or tables (`prod-health-monitoring.md` §10).
 - dbt against prod: `bin/warehouse-dbt compile|parse|ls ...` with that login. `run` and
   `test` need `bin/warehouse-dbt --elevated --reason "<why>" ...` (4b).
 - Serving schema is `public_summer_2026_analytics` (no bare `summer_2026_analytics`).

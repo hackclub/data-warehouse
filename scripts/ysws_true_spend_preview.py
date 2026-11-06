@@ -86,8 +86,8 @@ def _load_env() -> None:
 def run_dbt(models=TRUE_SPEND_MODELS) -> None:
     """Rebuild the true-spend models in the warehouse, from this checkout's code.
 
-    The agents' login cannot write, so this takes the elevated route, which needs
-    SSH access to the warehouse host (runbooks/prod-health-monitoring.md §10).
+    The agents' login cannot change existing tables, so this takes the elevated
+    route, which needs SSH access to the warehouse host (runbooks/prod-health-monitoring.md §10).
     """
     started = time.time()
     result = subprocess.run(

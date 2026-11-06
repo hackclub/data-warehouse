@@ -461,8 +461,14 @@ no superuser password reaches the machine you run them on. They read three setti
 from the environment or the parent `.env`, kept out of this public repo:
 `WAREHOUSE_SSH_RELAY` (the ssh command that reaches the host, relay included),
 `WAREHOUSE_POSTGRES_CONTAINER` and `WAREHOUSE_APP_CONTAINER` (each a name, or the
-part before the `-<timestamp>` a deploy adds). Each tool refuses unless exactly one
-running container matches, so wait out a deploy.
+part before the `-<timestamp>` a deploy adds). Write the relay with SSH host aliases,
+not `user@host`: `bin/readonly-psql` loads `.env` by splitting on spaces, and an `@`
+word makes it abort.
+
+Each tool refuses unless exactly one running container is named that, with or without
+a timestamp; a sibling such as `<name>-proxy` does not count. Finding several means a
+deploy is running, so wait it out. Finding none means the container is down or the
+setting is wrong.
 
 `bin/warehouse-dbt --elevated` uploads this checkout's `orpheus_engine_dbt/` tree
 to the app container and runs it there, so a branch is built and tested before any
@@ -502,8 +508,8 @@ an exposed URL kill the small non-superuser logins.
 `scripts/provision_warehouse_agent_login.py` renders the role SQL with only a SCRAM
 verifier and writes the new URL to a 0600 file; running it again gives the role a
 new password. `--verify` checks the login's attributes, that it can see other logins'
-query text, and that writes, `COPY ... PROGRAM`, server file reads and ending a
-superuser session are all refused.
+query text, and that changing existing tables, `COPY ... PROGRAM`, server file reads
+and ending a superuser session are all refused.
 
 To roll back, restore `WAREHOUSE_COOLIFY_URL` in the parent `.env` from the host
 `.env` through the relay, update the Vaultwarden note, then

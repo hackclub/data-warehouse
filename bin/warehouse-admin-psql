@@ -4,10 +4,10 @@
     bin/warehouse-admin-psql --reason "why this needs elevated access" -c "SQL"
     bin/warehouse-admin-psql --reason "why this needs elevated access" -f file.sql
 
-This is the elevated route for writes and for ending other logins' sessions. The
-everyday WAREHOUSE_COOLIFY_URL login cannot do either. It needs SSH access to the
-warehouse host, so a leaked .env cannot reach it, and it handles no password. Use
-it only with a written reason, and only for a runbook step that names it or a
+This is the elevated route for changing existing data or tables and for ending
+other logins' sessions. The everyday WAREHOUSE_COOLIFY_URL login cannot do either.
+It needs SSH access to the warehouse host, so a leaked .env cannot reach it, and it
+handles no password. Use it only with a written reason, and only for a runbook step that names it or a
 request that asks for the write: runbooks/prod-health-monitoring.md §10.
 
 The SQL goes on stdin, so quoting cannot break it through the SSH hops, and psql

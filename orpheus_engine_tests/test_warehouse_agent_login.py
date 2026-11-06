@@ -15,6 +15,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import socket
 import stat
@@ -540,13 +541,41 @@ def test_admin_psql_reads_a_file_and_stops_at_the_first_error(host, server):
 
 @pytest.mark.parametrize(
     "containers, expected",
-    [("unrelated", "found 0"), (f"{PG_CONTAINER},{PG_CONTAINER}-2", "found 2")],
+    [
+        ("unrelated", "found 0"),
+        # Postgres is down and only its proxy runs: the proxy must not stand in for it.
+        (f"{PG_CONTAINER}-proxy", "found 0"),
+        (f"{PG_CONTAINER}-20261106T042438,{PG_CONTAINER}-20261106T050000", "found 2"),
+        (f"{PG_CONTAINER},{PG_CONTAINER}-20261106T042438", "found 2"),
+    ],
 )
 def test_admin_psql_refuses_unless_one_container_matches(host, containers, expected):
     result = host.run(ADMIN_PSQL, "--reason", "test", "-c", "SELECT 1", STUB_CONTAINERS=containers)
     assert result.returncode == 2
     assert expected in result.stderr
     assert "exec" not in host.logged()
+
+
+def test_admin_psql_picks_postgres_beside_its_proxy(host):
+    # The shape on the real host: Coolify runs <name>-proxy next to the database.
+    result = host.run(
+        ADMIN_PSQL, "--reason", "test", "-c", "SELECT current_user",
+        STUB_CONTAINERS=f"{PG_CONTAINER}-proxy,{PG_CONTAINER},{APP_CONTAINER}-20261106T042438",
+    )
+    assert result.returncode == 0, result.stderr
+    assert f'"{PG_CONTAINER}", "psql"' in host.logged()
+
+
+def test_relay_quotes_the_remote_command_once_per_ssh_hop(monkeypatch):
+    relay = _load_tool("_warehouse_relay", REPO_ROOT / "bin" / "_warehouse_relay.py")
+    remote = ["docker", "exec", "-e", "PGAPPNAME=a b", "$(touch pwned)"]
+    monkeypatch.setenv("WAREHOUSE_SSH_RELAY", "ssh first ssh second")
+    argv = relay.relay_argv(remote)
+    assert argv[:-1] == ["ssh", "first", "ssh", "second"]
+    # Each hop's shell removes one layer and still sees a single word until the host.
+    after_first_hop = shlex.split(argv[-1])
+    assert len(after_first_hop) == 1
+    assert shlex.split(after_first_hop[0]) == remote
 
 
 def test_admin_psql_names_a_missing_relay_setting(host):

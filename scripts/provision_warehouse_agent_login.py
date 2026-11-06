@@ -55,7 +55,7 @@ ROLE_SETTINGS = {
     # One long reader can freeze the warehouse (§3 of the runbook).
     "statement_timeout": "30min",
     "idle_in_transaction_session_timeout": "5min",
-    # Caps sort and hash spill files per session. Postgres does not count temporary
+    # Caps sort and hash spill files per process. Postgres does not count temporary
     # tables against it, and only a superuser can raise it.
     "temp_file_limit": "50GB",
 }
