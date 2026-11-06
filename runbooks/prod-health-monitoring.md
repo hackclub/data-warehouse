@@ -278,26 +278,42 @@ exporting `<name>_db_connection`, `<name>_replication_config` and
 `<name>_warehouse_mirror`; `assets.py` discovers it. Copy `fallen.py`: full
 refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
 
-1. **Streams.** List every table explicitly and exclude columns with `-col`.
-   Leave out session, token, OTP/verification, rate-limit, cache, migration and
-   backup tables. Drop tokens, passwords, encrypted values, join/share codes,
-   IP addresses, street address lines, postcodes, phone numbers and tracking
-   numbers; keep names, email, birthday, city, state and country. Check every
-   stream and `-col` against the live `information_schema.columns` (a
-   misspelled `-col` excludes nothing), then add the module to
+1. **Public endpoint, starting URL, and streams.** The database's public
+   endpoint may be off: check `get_database` in Orchard, turn it on with
+   `enable_database_public` if needed, and verify the listed
+   `<publicHost>:<publicPort>` answers (`nc -z`). A listed port that does not
+   answer comes back after disabling and re-enabling public access (Haven
+   booking's did). Copy `.env` to a scratch file `<staged.env>` (under
+   `umask 077`). For a new copy that has no saved URL in `.env` yet, seed
+   `<NAME>_K8S_URL` in `<staged.env>` with the database's public connection URL
+   from `get_database` (`postgresql://<user>:<password>@<publicHost>:<publicPort>/<dbName>?sslmode=verify-full&sslrootcert=system`)
+   so Step 2 has the endpoint and a login that can read the catalog before
+   `hc_warehouse_reader` exists; for an existing mirror, `<staged.env>` already
+   has `<NAME>_K8S_URL` (or `ATTEND_COOLIFY_URL` for Attend). List every table
+   explicitly and exclude columns with `-col`. Leave out session, token,
+   OTP/verification, rate-limit, cache, migration and backup tables. Drop
+   tokens, passwords, encrypted values, join/share codes, IP addresses, street
+   address lines, postcodes, phone numbers and tracking numbers; keep names,
+   email, birthday, city, state and country. Check every stream and `-col`
+   against the live schema (`--check` in Step 2), then add the module to
    `test_sling_orchard_connections.py` and `test_sling_program_exclusions.py`.
    Column names do not show secrets stored as row values: for every mirrored
    key/value settings table, list its key names (never the values) and leave
    the table out if any is a credential, adding it to `UNMIRRORED_TABLES`
    (Coral's `app_settings` holds an Anthropic auth token).
-2. **Reader login.** Never use the app's own login. Run
-   `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <source.env> --check --render-sql-file <scratch.sql> --write-env-file <staged.env>`
-   to inspect the live `pg_catalog` schema (which automatically resolves system
-   CA certificates for `psycopg2-binary` and sees all tables and columns
-   regardless of caller privileges), derive the exact table and column grants
-   from `<name>_replication_config`, render the single-transaction SCRAM-SHA-256
-   setup SQL, and write the new `hc_warehouse_reader` URL to `<staged.env>`
-   without printing secrets (`--write-env-file` is required with
+2. **Reader login.** Never use the app's own login as the warehouse mirror
+   credential. Run
+   `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <staged.env> --check --render-sql-file <scratch.sql> --write-env-file <staged.env>`
+   which connects with the starting login in `<staged.env>` (`get_database`'s
+   login on initial setup, or the existing login / `hc_warehouse_reader` on a
+   later switch or refresh) to inspect the live `pg_catalog` schema
+   (automatically resolving system CA certificates for `psycopg2-binary` and
+   seeing all tables and columns regardless of caller table/column privileges),
+   derives the exact table and column grants from `<name>_replication_config`,
+   renders the single-transaction SCRAM-SHA-256 setup SQL to `<scratch.sql>`,
+   and overwrites `<NAME>_K8S_URL` in `<staged.env>` with the new
+   `hc_warehouse_reader` URL in Orchard's public-endpoint shape with
+   `sslmode=verify-full&sslrootcert=system` (`--write-env-file` is required with
    `--render-sql-file` so a generated password is never discarded). In the
    database's primary pod, named by `get_database`
    `clusterStatus.currentPrimary` (not always `pg-<cluster>-1`: contd's is
@@ -316,13 +332,13 @@ refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
    grant and record that the excluded columns stay readable by the login (for
    Horizons `public.user_sessions`, `hc_warehouse_reader` retains `SELECT` on
    `id` because Postgres computes the SHA-256 digest on the source server).
-   Verify with
+   Verify over the public endpoint as `hc_warehouse_reader` with
    `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <staged.env> --verify-reader`:
    `has_any_column_privilege` is true for mirrored tables and false for
    unmirrored tables, `has_column_privilege` is true on kept columns and false
    on excluded columns, no write privileges or `pg_auth_members` role
    memberships exist, and a real `INSERT` over the public endpoint fails (both
-   in the default read-only session and with `SET LOCAL transaction_read_only = off`).
+   in the default read-only session and after `SET TRANSACTION READ WRITE`).
 3. **The login or its column grants can go stale.** The role is created outside
    Orchard: restoring or recreating the database cluster drops it, an app
    migration that drops and recreates a table drops that table's grant, and an
@@ -330,31 +346,33 @@ refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
    `hc_warehouse_reader` without `SELECT` on the new column until its column
    grants are rerun. A mirror that starts failing with `permission denied` or a
    login error needs step 2 rerun via
-   `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <current.env> --check --render-sql-file <scratch.sql> --write-env-file <staged.env>`
-   followed by applying `<scratch.sql>` on the primary pod, verifying with
-   `--verify-reader --env-file <staged.env>`, and saving the updated URL from
-   `<staged.env>` (not a new credential in the app).
-4. **URL, row-count parity, and rollback.** The database's public endpoint may
-   be off: turn it on with `enable_database_public`, then check the listed port
-   answers (`nc -z`). A listed port that does not answer comes back after
-   disabling and re-enabling public access (Haven booking's did). Build the URL
-   in Orchard's public-endpoint shape with
-   `sslmode=verify-full&sslrootcert=system` and save it as `<NAME>_K8S_URL`
-   (or `ATTEND_COOLIFY_URL` for Attend) in Coolify's UI env store (host-only
-   `.env` edits are reverted: a subsequent Coolify deploy overwrites
-   `/data/coolify/applications/uc00swcw8ckg44w0k0k44swk/.env` and can silently
-   restore the previous write-capable login unless Coolify's UI env store or a
-   persistent host env file outside Coolify's rewrite path is updated), the
-   parent repo's `.env`, and the Vaultwarden `.env` notes. Then deploy and
-   verify as in §7, including a new materialization and source/warehouse
-   row-count parity. When switching an existing mirror to
-   `hc_warehouse_reader`, back up the host `.env` first, record baseline source
-   and warehouse row counts before the switch with
+   `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <staged.env> --check --render-sql-file <scratch.sql> --write-env-file <staged.env>`
+   (seeded from `.env`, where `hc_warehouse_reader` can still read the full
+   `pg_catalog` schema), followed by applying `<scratch.sql>` on the primary
+   pod, verifying with `--verify-reader --env-file <staged.env>`, and saving the
+   updated URL from `<staged.env>` (not a new credential in the app).
+4. **Save the URL, deploy, verify row-count parity, and roll back on failure.**
+   Save the verified `<NAME>_K8S_URL` (or `ATTEND_COOLIFY_URL` for Attend)
+   written by `--write-env-file` in `<staged.env>` in Coolify's UI env store
+   (host-only `.env` edits are reverted: a subsequent Coolify deploy overwrites
+   `/data/coolify/applications/<app-uuid>/.env` and can silently restore the
+   previous write-capable login unless Coolify's UI env store or a persistent
+   host env file outside Coolify's rewrite path is updated) and the parent
+   repo's `.env`. Then deploy the reviewed revision and verify as in §7
+   (build/deploy the reviewed image first, then write the updated URL to the
+   host `.env` before starting the container, verify the running image revision
+   and env fingerprints, and remove any orphaned container), including a new
+   materialization and source/warehouse row-count parity. When switching an
+   existing mirror to
+   `hc_warehouse_reader`, back up the host `.env` and `docker-compose.yaml`
+   first, record baseline source and warehouse row counts before the switch with
    `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <pre.env> --record-counts-json <pre-counts.json>`,
-   materialize the asset after restart, and verify post-switch row counts with
+   materialize the asset after deploying the reviewed revision and restarting,
+   and verify post-switch row counts with
    `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <post.env> --compare-counts-json <pre-counts.json> --record-counts-json <post-counts.json>`
    (full refresh matches within live-write tolerance; incremental streams do
    not regress below baseline warehouse counts or drift in their
-   source-to-warehouse gap). If a cutover fails verification, roll back by
-   restoring the backed-up host `.env` file, restarting the container, and
-   confirming no orphaned container remains.
+   source-to-warehouse gap). After verification passes, update the Vaultwarden
+   `.env` notes. If a cutover fails verification, roll back by restoring the
+   backed-up host `.env` and `docker-compose.yaml` (and parent `.env`),
+   restarting the container, and confirming no orphaned container remains.
