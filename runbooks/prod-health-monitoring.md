@@ -290,32 +290,52 @@ refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
    key/value settings table, list its key names (never the values) and leave
    the table out if any is a credential, adding it to `UNMIRRORED_TABLES`
    (Coral's `app_settings` holds an Anthropic auth token).
-2. **Reader login.** Never use the app's own login. In the database's primary
+2. **Reader login.** Never use the app's own login. Use
+   `scripts/provision_warehouse_reader.py` to derive the exact table and column
+   grants from `<name>_replication_config` and render the single-transaction
+   SCRAM-SHA-256 setup SQL without printing secrets. In the database's primary
    pod, named by `get_database` `clusterStatus.currentPrimary` (not always
    `pg-<cluster>-1`: contd's is `pg-production-database-2`), through
    `exec_in_pod` with container `postgres`, in one transaction:
    `CREATE ROLE hc_warehouse_reader LOGIN CONNECTION LIMIT 4 PASSWORD
    '<SCRAM-SHA-256 verifier>'`, `ALTER ROLE … SET
    default_transaction_read_only = on`, `GRANT CONNECT` on the database,
-   `USAGE` on `public`, and `SELECT` on exactly the mirrored tables. Generate the
-   password locally and send only its SCRAM verifier, so the plaintext never
-   reaches the pod or Orchard's audit log. For tables with `-col` exclusions,
-   grant `SELECT (<kept columns>)` instead of the whole table, then confirm a
-   Sling run still reads them; if Sling selects `*` and fails, fall back to a
-   table grant and record that the excluded columns stay readable by the login.
-   Verify: `has_table_privilege` is true for mirrored tables and false for an
-   excluded secret table, no write privileges or role memberships, and an
-   `INSERT` over the public endpoint fails.
-3. **The login can disappear.** It is created outside Orchard: restoring or
-   recreating the database cluster drops it, and an app migration that drops
-   and recreates a table drops that table's grant. A mirror that starts failing
-   with `permission denied` or a login error needs step 2 rerun, not a new
-   credential in the app.
-4. **URL.** The database's public endpoint may be off: turn it on with
-   `enable_database_public`, then check the listed port answers (`nc -z`). A
-   listed port that does not answer comes back after disabling and re-enabling
-   public access (Haven booking's did). Build the URL in Orchard's
-   public-endpoint shape with `sslmode=verify-full&sslrootcert=system` and
-   save it as `<NAME>_K8S_URL` in Coolify's UI env store (host-only `.env`
-   edits are reverted), the parent repo's `.env`, and the Vaultwarden `.env` notes. Then deploy and verify as in
-   §7, including a new materialization and source/warehouse row-count parity.
+   `USAGE` on `public`, and `SELECT` on exactly the mirrored tables (`attend`,
+   `fallen`, `horizons` and `midnight` use this same `hc_warehouse_reader`
+   setup). Generate the password locally and send only its SCRAM verifier, so
+   the plaintext never reaches the pod or Orchard's audit log. For tables with
+   `-col` exclusions or positive `select` allow-lists, grant
+   `SELECT (<kept columns>)` instead of the whole table, then confirm a Sling
+   run still reads them; if Sling selects `*` and fails, fall back to a table
+   grant and record that the excluded columns stay readable by the login (for
+   Horizons `public.user_sessions`, `hc_warehouse_reader` retains `SELECT` on
+   `id` because Postgres computes the SHA-256 digest on the source server).
+   Verify with `--verify-reader`: `has_any_column_privilege` is true for
+   mirrored tables and false for unmirrored tables, `has_column_privilege` is
+   true on kept columns and false on excluded columns, no write privileges or
+   role memberships exist, and an `INSERT` over the public endpoint fails.
+3. **The login or its column grants can go stale.** The role is created outside
+   Orchard: restoring or recreating the database cluster drops it, an app
+   migration that drops and recreates a table drops that table's grant, and an
+   app migration that adds a new column to a table with `-col` exclusions leaves
+   `hc_warehouse_reader` without `SELECT` on the new column until its column
+   grants are rerun. A mirror that starts failing with `permission denied` or a
+   login error needs step 2 rerun via `scripts/provision_warehouse_reader.py`,
+   not a new credential in the app.
+4. **URL, row-count parity, and rollback.** The database's public endpoint may
+   be off: turn it on with `enable_database_public`, then check the listed port
+   answers (`nc -z`). A listed port that does not answer comes back after
+   disabling and re-enabling public access (Haven booking's did). Build the URL
+   in Orchard's public-endpoint shape with
+   `sslmode=verify-full&sslrootcert=system` and save it as `<NAME>_K8S_URL`
+   (or `ATTEND_COOLIFY_URL` for Attend) in the active host env store and
+   Coolify's UI env store when accessible (backing up the host `.env` first),
+   the parent repo's `.env`, and the Vaultwarden `.env` notes. When switching
+   an existing mirror to `hc_warehouse_reader`, record baseline source and
+   warehouse row counts before the switch, materialize the asset after restart,
+   and verify post-switch row counts with `_check_row_count_parity` (full
+   refresh matches within live-write tolerance; incremental streams do not
+   regress below baseline warehouse counts or drift in their source-to-warehouse
+   gap). If a cutover fails verification, roll back by restoring the backed-up
+   host `.env` file, restarting the container, and confirming no orphaned
+   container remains.

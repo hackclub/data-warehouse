@@ -7,12 +7,15 @@ PROGRAMS = [
     "haven", "haven_booking", "atlantis", "pixl", "cubed", "mipmap", "contd",
     "coral", "grandma", "stern", "out_to_c", "scraps", "trmnt", "three_am",
     "canvas", "club_starter_grant", "dyad", "embassy", "jame_gam",
-    "save_point", "scare",
+    "save_point", "scare", "fallen",
 ]
 
 # Tables that hold login state, bearer secrets, caches or one-off backups.
+# Fallen's timer_sessions and huddle_sessions are work-timer and coworking
+# activity logs, not auth session tables.
 UNMIRRORED_TABLE = re.compile(
-    r"(^|_)(sessions?|auth_tokens?|rate_limits?|cache|migrations)$"
+    r"(^|(?<!timer)(?<!huddle)_)(sessions?)$"
+    r"|(^|_)(auth_tokens?|rate_limits?|cache|migrations)$"
     r"|_bak_|backup|verifications?$|snapshot_state$"
 )
 
@@ -289,12 +292,137 @@ EXCLUDED_COLUMNS = {
         ],
         "public.slack_order_digest_events": ["payload"],
     },
+    "fallen": {
+        "public.users": ["hca_token", "slack_user_token", "lapse_token"],
+        "public.projects": ["join_token"],
+        "public.writing_checks": ["body"],
+        "public.lapse_timelapses": ["playback_url", "thumbnail_url"],
+    },
+}
+
+# Programs that predate the uniform -col convention: Attend and Midnight use
+# positive select allow-lists (and Midnight uses incremental mode), while
+# Horizons hashes user_sessions.id in a custom sql: stream alongside -col
+# exclusions on four tables.
+CUSTOM_EXCLUDED_COLUMNS = {
+    "attend": {
+        "public.events": [
+            "api_key_digest", "luma_api_key_encrypted", "config", "airtable_api_key",
+            "setup_completed_at", "event_series_id", "airtable_sync_error",
+            "airtable_sync_error_at", "airtable_sync_paused_at",
+            "airtable_config_updated_by_id", "arrival_opens_at", "arrival_closes_at",
+            "waiver_dates_stale_since", "airtable_sync_failures",
+            "airtable_sync_failing_since", "airtable_sync_alerted_at",
+            "apple_place_id", "google_place_id",
+        ],
+        "public.users": [
+            "encrypted_password", "reset_password_token", "reset_password_sent_at",
+            "remember_created_at", "current_sign_in_ip", "last_sign_in_ip",
+            "oidc_claims", "admin_console_beta", "verified_slack_id",
+        ],
+        "public.participant_events": [
+            "nfc_badge_token", "onboarding_payload", "code_of_conduct_signature",
+            "um_status", "um_verified_at", "um_guardian_confirmed_at",
+            "um_review_requested_at", "um_verified_by_id",
+            "hidden_from_public_profile", "onboarding_intro_seen_at",
+        ],
+        "public.guardian_participant_events": [
+            "invite_token_digest", "invite_token_ciphertext", "invite_last_used_at",
+        ],
+        "public.invitations": ["token", "sent_at", "name"],
+        "public.consents": [
+            "raw_metadata", "document_url", "docuseal_participant_slug",
+            "docuseal_guardian_slug", "custom_document_id", "opted_in_at",
+            "withdrawn_at", "documents",
+        ],
+        "public.travels": [
+            "visa_number", "passport_nationality", "arrangement_status", "times_in_event_zone",
+        ],
+        "public.travel_legs": ["confirmation_code", "departure_time_zone", "arrival_time_zone"],
+        "public.accommodations": [
+            "gender_identity", "gender_identity_other", "preferred_roommate_genders",
+            "accessibility_needs", "notes", "roommate_preferences", "roommate_exclusions",
+        ],
+        "public.room_assignments": [
+            "staff_override_notes", "flags", "trans_nb_acknowledged", "rooming_context_id",
+        ],
+        "public.ticket_messages": [
+            "body", "raw_payload", "error_message", "automated", "merged_from_ticket_id",
+        ],
+        "public.email_logs": ["body"],
+        "public.import_batches": ["rows_data", "errors_data"],
+        "public.passkit_passes": ["authentication_token", "data"],
+        "public.passkit_devices": ["push_token"],
+    },
+    "horizons": {
+        "public.users": ["hackatime_access_token"],
+        "public.hackatime_link_otps": ["otp_code"],
+        "public.sticker_tokens": ["token"],
+        "public.gift_codes": ["code"],
+        "public.user_sessions": ["id"],
+    },
+    "midnight": {
+        "public.users": ["is_sus"],
+        "public.user_sessions": ["otp_code", "otp_expires_at"],
+    },
 }
 
 
 def _config(program):
     module = importlib.import_module(f"orpheus_engine.defs.sling.programs.{program}")
     return getattr(module, f"{program}_replication_config")
+
+
+def _copied_output_columns(stream_options, sample_source_columns):
+    """Return the set of column names written to the warehouse for a stream."""
+    opts = stream_options or {}
+    if "sql" in opts:
+        sql_text = " ".join(opts["sql"].strip().split())
+        match = re.match(r"^select\s+(.+?)\s+from\s+[A-Za-z0-9_.]+\s*$", sql_text, re.IGNORECASE)
+        assert match, f"Unparseable sql stream: {sql_text}"
+        projection = match.group(1)
+        assert "*" not in projection, sql_text
+        # Split top-level comma-separated expressions (ignoring commas inside parens).
+        exprs = []
+        depth = 0
+        current = []
+        for ch in projection:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            elif ch == "," and depth == 0:
+                exprs.append("".join(current).strip())
+                current = []
+                continue
+            current.append(ch)
+        if current:
+            exprs.append("".join(current).strip())
+
+        output_cols = set()
+        for expr in exprs:
+            alias_match = re.search(r"\bas\s+([A-Za-z_][A-Za-z0-9_]*)\s*$", expr, re.IGNORECASE)
+            if alias_match:
+                output_cols.add(alias_match.group(1))
+            else:
+                assert re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", expr), (
+                    f"Complex sql expression must be aliased: {expr}"
+                )
+                output_cols.add(expr)
+        return output_cols
+
+    select = opts.get("select")
+    assert select, "Table with excluded columns must specify select or sql"
+    if all(col.startswith("-") for col in select):
+        excluded = {col[1:] for col in select}
+        return {col for col in sample_source_columns if col not in excluded}
+    assert not any(col.startswith("-") for col in select), select
+    return set(select)
+
+
+def test_every_excluded_column_entry_is_checked():
+    assert set(EXCLUDED_COLUMNS) == set(PROGRAMS)
+    assert set(CUSTOM_EXCLUDED_COLUMNS) == {"attend", "horizons", "midnight"}
 
 
 @pytest.mark.parametrize("program", PROGRAMS)
@@ -324,3 +452,30 @@ def test_secret_columns_are_excluded(program):
         select = (streams[stream] or {}).get("select", [])
         for column in columns:
             assert f"-{column}" in select, (stream, column)
+
+
+@pytest.mark.parametrize("program", sorted(CUSTOM_EXCLUDED_COLUMNS))
+def test_custom_program_excluded_columns_never_in_copied_set(program):
+    config = _config(program)
+    streams = config["streams"]
+    assert streams
+    for stream in streams:
+        assert "*" not in stream, (program, stream)
+
+    for stream, excluded_columns in CUSTOM_EXCLUDED_COLUMNS[program].items():
+        assert stream in streams, (program, stream)
+        opts = streams[stream] or {}
+        sample_source_cols = list(
+            dict.fromkeys(
+                [col.lstrip("-") for col in opts.get("select", [])]
+                + ["id", "user_id", "created_at", "updated_at", "expires_at"]
+                + list(excluded_columns)
+            )
+        )
+        copied = _copied_output_columns(opts, sample_source_cols)
+        assert copied, (program, stream)
+        for excluded_col in excluded_columns:
+            assert excluded_col not in copied, (program, stream, excluded_col)
+        if stream == "public.user_sessions" and program == "horizons":
+            assert "id_sha256" in copied
+            assert "sha256" in opts["sql"].lower()
