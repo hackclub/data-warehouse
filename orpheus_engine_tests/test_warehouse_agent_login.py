@@ -1,4 +1,4 @@
-"""The agents' warehouse login and the two elevated routes.
+"""The agents' and query tool's warehouse logins and the two elevated routes.
 
 Everything here is local: a temporary Postgres on loopback with fake data, removed
 afterwards, and stub ssh and docker commands. WAREHOUSE_DOTENV points the tools at a
@@ -39,7 +39,11 @@ ADMIN_PSQL = REPO_ROOT / "bin" / "warehouse-admin-psql"
 WAREHOUSE_DBT = REPO_ROOT / "bin" / "warehouse-dbt"
 REAL_DBT = Path(sys.executable).parent / "dbt"
 
+AGENT = provision.LOGINS["agent"]
+MCP = provision.LOGINS["mcp"]
 AGENT_PASSWORD = "agent-test-password"
+MCP_PASSWORD = "mcp-test-password"
+OTHER_PASSWORD = "other-login-test-password"
 SUPERUSER_PASSWORD = "superuser-test-password"
 SALT = "fake-salt"
 PG_CONTAINER = "fake-postgres"
@@ -64,6 +68,12 @@ class Server:
     def agent_url(self) -> str:
         return f"postgresql://{provision.AGENT_ROLE}:{AGENT_PASSWORD}@127.0.0.1:{self.port}/warehouse"
 
+    def mcp_url(self) -> str:
+        return f"postgresql://{provision.MCP_ROLE}:{MCP_PASSWORD}@127.0.0.1:{self.port}/warehouse"
+
+    def other_login_url(self) -> str:
+        return f"postgresql://fake_dashboard:{OTHER_PASSWORD}@127.0.0.1:{self.port}/warehouse"
+
     def admin_connection(self, autocommit: bool = True):
         conn = psycopg2.connect(self.admin_url())
         conn.autocommit = autocommit
@@ -80,6 +90,16 @@ class Server:
         if not read_only_default:
             with conn.cursor() as cur:
                 cur.execute("SET default_transaction_read_only = off")
+        return closing(conn)
+
+    def mcp(self):
+        conn = psycopg2.connect(self.mcp_url())
+        conn.autocommit = True
+        return closing(conn)
+
+    def other_login(self):
+        conn = psycopg2.connect(self.other_login_url())
+        conn.autocommit = True
         return closing(conn)
 
 
@@ -99,7 +119,8 @@ def server(tmp_path_factory):
     )
     hba = pgdata / "pg_hba.conf"
     hba.write_text(
-        f"host all {provision.AGENT_ROLE} 127.0.0.1/32 scram-sha-256\n" + hba.read_text()
+        f"host all {provision.AGENT_ROLE},{provision.MCP_ROLE} 127.0.0.1/32 scram-sha-256\n"
+        + hba.read_text()
     )
     options = f"-F -p {port} -h 127.0.0.1 -k '' -c ssl=off -c password_encryption=scram-sha-256"
     subprocess.run(
@@ -118,7 +139,9 @@ def server(tmp_path_factory):
             cur.execute("CREATE TABLE synced.before_role (id int, name text)")
             cur.execute("INSERT INTO synced.before_role VALUES (1, 'row')")
             cur.execute("CREATE ROLE fake_reader")
-            cur.execute(provision.render_setup_sql(_scram_sha256_verifier(AGENT_PASSWORD)))
+            cur.execute("CREATE ROLE fake_dashboard LOGIN PASSWORD %s", (OTHER_PASSWORD,))
+            cur.execute(provision.render_setup_sql(AGENT, _scram_sha256_verifier(AGENT_PASSWORD)))
+            cur.execute(provision.render_setup_sql(MCP, _scram_sha256_verifier(MCP_PASSWORD)))
             cur.execute("CREATE SCHEMA synced_later")
             cur.execute("CREATE TABLE synced_later.after_role (id int)")
             cur.execute("INSERT INTO synced_later.after_role VALUES (7)")
@@ -130,22 +153,33 @@ def server(tmp_path_factory):
 # The login
 
 
-def test_setup_sql_has_only_a_verifier_and_the_exact_role_design():
+@pytest.mark.parametrize("login", [AGENT, MCP])
+def test_setup_sql_has_only_a_verifier_and_the_exact_role_design(login):
     password = "plaintext-must-not-appear"
-    sql = provision.render_setup_sql(_scram_sha256_verifier(password))
+    sql = provision.render_setup_sql(login, _scram_sha256_verifier(password))
     assert password not in sql
     assert "SCRAM-SHA-256$" in sql
     assert "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS" in sql
-    assert "GRANT pg_read_all_data, pg_read_all_stats TO" in sql
+    assert f"CONNECTION LIMIT {login.connection_limit} " in sql
+    assert f'GRANT pg_read_all_data, pg_read_all_stats TO "{login.role}";' in sql
     assert "pg_signal_backend" not in sql
     assert sql.startswith("BEGIN;") and sql.endswith("COMMIT;\n")
     with pytest.raises(ValueError):
-        provision.render_setup_sql(password)
+        provision.render_setup_sql(login, password)
 
 
-def test_agent_url_keeps_server_and_options_and_changes_only_the_login():
-    url = provision.build_agent_url("postgres://postgres:old@db.example:8432/postgres?sslmode=require", "n/w")
-    assert url == "postgres://hc_warehouse_agent:n%2Fw@db.example:8432/postgres?sslmode=require"
+def test_only_the_query_tool_sql_grants_the_cancel_membership():
+    verifier = _scram_sha256_verifier("x")
+    grant = 'GRANT "hc_warehouse_mcp" TO "hc_warehouse_agent" WITH INHERIT TRUE, SET FALSE, ADMIN FALSE;'
+    assert grant in provision.render_setup_sql(MCP, verifier)
+    assert "hc_warehouse_mcp" not in provision.render_setup_sql(AGENT, verifier)
+
+
+@pytest.mark.parametrize("login", [AGENT, MCP])
+def test_login_url_keeps_server_and_options_and_changes_only_the_login(login):
+    source = "postgres://postgres:old@db.example:8432/postgres?sslmode=require"
+    url = provision.build_login_url(source, login, "n/w")
+    assert url == f"postgres://{login.role}:n%2Fw@db.example:8432/postgres?sslmode=require"
 
 
 def test_reads_every_schema_including_one_created_after_the_role(server):
@@ -158,7 +192,7 @@ def test_reads_every_schema_including_one_created_after_the_role(server):
 
 def test_predefined_roles_are_exactly_the_two_and_settings_apply_at_login(server):
     with server.agent(read_only_default=True) as conn, conn.cursor() as cur:
-        assert provision._attribute_failures(cur) == []
+        assert provision._attribute_failures(cur, AGENT) == []
         cur.execute("SHOW default_transaction_read_only")
         assert cur.fetchone() == ("on",)
         cur.execute("SHOW lock_timeout")
@@ -169,14 +203,31 @@ def test_predefined_roles_are_exactly_the_two_and_settings_apply_at_login(server
             cur.execute("SET temp_file_limit = -1")
 
 
-def test_setup_sql_runs_again_with_a_new_password(server):
+def test_query_tool_login_has_the_same_grants_and_settings_and_its_own_limit(server):
+    with server.mcp() as conn, conn.cursor() as cur:
+        assert provision._attribute_failures(cur, MCP) == []
+        assert MCP.connection_limit == 12
+        cur.execute("SELECT name FROM synced.before_role")
+        assert cur.fetchone() == ("row",)
+        cur.execute("SELECT id FROM synced_later.after_role")
+        assert cur.fetchone() == (7,)
+        cur.execute("SELECT unnest(rolconfig) FROM pg_roles WHERE rolname = current_user")
+        assert dict(row[0].split("=", 1) for row in cur.fetchall()) == provision.ROLE_SETTINGS
+
+
+@pytest.mark.parametrize(
+    "login, url_of, password",
+    [(AGENT, Server.agent_url, AGENT_PASSWORD), (MCP, Server.mcp_url, MCP_PASSWORD)],
+)
+def test_setup_sql_runs_again_with_a_new_password(server, login, url_of, password):
     new_password = "second-password"
     with server.admin() as conn, conn.cursor() as cur:
-        cur.execute(provision.render_setup_sql(_scram_sha256_verifier(new_password)))
-    url = server.agent_url().replace(AGENT_PASSWORD, new_password)
-    psycopg2.connect(url).close()
+        cur.execute(provision.render_setup_sql(login, _scram_sha256_verifier(new_password)))
+    psycopg2.connect(url_of(server).replace(password, new_password)).close()
     with server.admin() as conn, conn.cursor() as cur:
-        cur.execute(provision.render_setup_sql(_scram_sha256_verifier(AGENT_PASSWORD)))
+        cur.execute(provision.render_setup_sql(login, _scram_sha256_verifier(password)))
+    with server.mcp() as conn, conn.cursor() as cur:
+        assert provision._attribute_failures(cur, MCP) == []
 
 
 @pytest.fixture
@@ -224,6 +275,62 @@ def test_cannot_end_or_cancel_a_superuser_session(server, blocked_superuser_sess
         for function in ("pg_terminate_backend", "pg_cancel_backend"):
             with pytest.raises(errors.InsufficientPrivilege):
                 cur.execute(f"SELECT {function}(%s)", (blocked_superuser_session,))
+
+
+def _pid(connection) -> int:
+    with connection.cursor() as cur:
+        cur.execute("SELECT pg_backend_pid()")
+        return cur.fetchone()[0]
+
+
+def test_agent_login_can_cancel_a_running_query_tool_query(server):
+    with server.agent() as agent, server.mcp() as tool:
+        pid = _pid(tool)
+        thread_error = []
+
+        def run():
+            try:
+                with tool.cursor() as cur:
+                    cur.execute("SELECT pg_sleep(60)")
+            except psycopg2.Error as error:
+                thread_error.append(error)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        with agent.cursor() as cur:
+            for _ in range(100):
+                cur.execute("SELECT state FROM pg_stat_activity WHERE pid = %s", (pid,))
+                if cur.fetchone() == ("active",):
+                    break
+                time.sleep(0.05)
+            cur.execute("SELECT pg_cancel_backend(%s)", (pid,))
+            assert cur.fetchone() == (True,)
+        thread.join(timeout=30)
+        assert not thread.is_alive()
+        assert isinstance(thread_error[0], errors.QueryCanceled)
+
+
+@pytest.mark.parametrize("function", ["pg_cancel_backend", "pg_terminate_backend"])
+def test_agent_login_cannot_signal_another_non_superuser_login(server, function):
+    with server.agent() as agent, server.other_login() as other, agent.cursor() as cur:
+        with pytest.raises(errors.InsufficientPrivilege):
+            cur.execute(f"SELECT {function}(%s)", (_pid(other),))
+
+
+def test_query_tool_login_cannot_signal_the_agent_login_or_others(server):
+    with server.mcp() as tool, server.agent() as agent, server.other_login() as other:
+        with tool.cursor() as cur:
+            for target in (agent, other):
+                with pytest.raises(errors.InsufficientPrivilege):
+                    cur.execute("SELECT pg_cancel_backend(%s)", (_pid(target),))
+
+
+def test_agent_login_cannot_become_the_query_tool_login(server):
+    with server.agent() as conn, conn.cursor() as cur:
+        with pytest.raises(errors.InsufficientPrivilege):
+            cur.execute(f"SET ROLE {provision.MCP_ROLE}")
+        with pytest.raises(errors.InsufficientPrivilege):
+            cur.execute(f"GRANT {provision.MCP_ROLE} TO fake_dashboard")
 
 
 def test_can_end_its_own_other_session(server):
@@ -302,27 +409,144 @@ def test_the_read_only_default_blocks_those_until_it_is_turned_off(server, state
             cur.execute(statement)
 
 
-def test_connection_limit_stops_the_twenty_first_session(server):
+@pytest.mark.parametrize("login, url_of", [(AGENT, Server.agent_url), (MCP, Server.mcp_url)])
+def test_connection_limit_stops_the_next_session_and_leaves_other_logins_alone(server, login, url_of):
     open_connections = []
     try:
-        for _ in range(provision.CONNECTION_LIMIT):
-            open_connections.append(psycopg2.connect(server.agent_url()))
+        for _ in range(login.connection_limit):
+            open_connections.append(psycopg2.connect(url_of(server)))
         with pytest.raises(psycopg2.OperationalError, match="too many connections"):
-            psycopg2.connect(server.agent_url())
+            psycopg2.connect(url_of(server))
+        other_url = server.mcp_url() if login is AGENT else server.agent_url()
+        psycopg2.connect(other_url).close()
     finally:
         for conn in open_connections:
             conn.close()
 
 
-def test_verify_passes_on_the_real_login_with_another_login_active(server):
-    with server.admin() as other, other.cursor() as cur:
+@pytest.mark.parametrize("login, url_of", [(AGENT, Server.agent_url), (MCP, Server.mcp_url)])
+def test_verify_passes_on_the_real_login_with_other_logins_active(server, login, url_of):
+    with server.admin() as admin, admin.cursor() as cur, server.other_login():
         cur.execute("SELECT 1")
-        assert provision.verify_agent_login(server.agent_url()) == []
+        assert provision.verify_login(login, url_of(server)) == []
+
+
+def _wait_for_no_other_login_sessions(cur) -> None:
+    # A closed connection's backend can outlive the close for a moment.
+    for _ in range(100):
+        cur.execute("SELECT count(*) FROM pg_stat_activity WHERE usename = 'fake_dashboard'")
+        if cur.fetchone() == (0,):
+            return
+        time.sleep(0.05)
+    raise AssertionError("fake_dashboard sessions did not end")
+
+
+def test_verify_names_a_missing_session_to_test_cancel_on(server):
+    # No other non-superuser login is connected here, so the probe cannot run.
+    with server.admin() as admin, admin.cursor() as cur:
+        _wait_for_no_other_login_sessions(cur)
+        assert provision.verify_login(AGENT, server.agent_url()) == [
+            "found no idle session of another non-superuser login to test cancel on"
+        ]
+
+
+def test_verify_counts_a_query_tool_session_as_cancellable_for_the_agent_login(server):
+    # The agent login may cancel it, so it must not be picked as the refused target.
+    with server.admin() as admin, admin.cursor() as cur, server.mcp():
+        _wait_for_no_other_login_sessions(cur)
+        assert provision.verify_login(AGENT, server.agent_url()) == [
+            "found no idle session of another non-superuser login to test cancel on"
+        ]
+
+
+def test_verify_flags_wrong_membership_options(server):
+    with server.admin() as admin, admin.cursor() as cur:
+        cur.execute(f"GRANT {provision.MCP_ROLE} TO {provision.AGENT_ROLE} WITH SET TRUE")
+    try:
+        with mock.patch.object(provision, "_probe_refused") as probe:
+            failures = provision.verify_login(AGENT, server.agent_url())
+        probe.assert_not_called()
+        assert len(failures) == 1 and failures[0].startswith("role memberships are")
+    finally:
+        with server.admin() as admin, admin.cursor() as cur:
+            cur.execute(f"GRANT {provision.MCP_ROLE} TO {provision.AGENT_ROLE} WITH SET FALSE")
+
+
+def test_verify_flags_pg_signal_backend(server):
+    with server.admin() as admin, admin.cursor() as cur:
+        cur.execute(f"GRANT pg_signal_backend TO {provision.AGENT_ROLE}")
+    try:
+        with mock.patch.object(provision, "_probe_refused") as probe:
+            failures = provision.verify_login(AGENT, server.agent_url())
+        probe.assert_not_called()
+        assert len(failures) == 1 and "pg_signal_backend" in failures[0]
+    finally:
+        with server.admin() as admin, admin.cursor() as cur:
+            cur.execute(f"REVOKE pg_signal_backend FROM {provision.AGENT_ROLE}")
+
+
+def test_verify_cancel_check_passes_only_with_the_membership(server):
+    assert provision.verify_agent_can_cancel_mcp(server.agent_url(), server.mcp_url()) == []
+    with server.admin() as admin, admin.cursor() as cur:
+        cur.execute(f"REVOKE {provision.MCP_ROLE} FROM {provision.AGENT_ROLE}")
+    try:
+        assert provision.verify_agent_can_cancel_mcp(server.agent_url(), server.mcp_url()) == [
+            "the agent login was refused cancelling a query-tool session"
+        ]
+    finally:
+        with server.admin() as admin, admin.cursor() as cur:
+            cur.execute(
+                f"GRANT {provision.MCP_ROLE} TO {provision.AGENT_ROLE} "
+                f"WITH {provision.CANCEL_GRANT_OPTIONS}"
+            )
+
+
+def _write_env(path: Path, url: str) -> Path:
+    path.write_text(f"WAREHOUSE_COOLIFY_URL={url}\n")
+    return path
+
+
+def test_cli_verify_mcp_checks_both_logins_and_the_cancel(server, tmp_path, capsys):
+    mcp_env = _write_env(tmp_path / "mcp.env", server.mcp_url())
+    agent_env = _write_env(tmp_path / "agent.env", server.agent_url())
+    with server.admin() as admin, admin.cursor() as cur, server.other_login():
+        cur.execute("SELECT 1")
+        assert provision.main(
+            ["--login", "mcp", "--env-file", str(mcp_env), "--agent-env-file", str(agent_env), "--verify"]
+        ) == 0
+    out = capsys.readouterr().out
+    assert provision.MCP_ROLE in out and provision.AGENT_ROLE in out
+    assert MCP_PASSWORD not in out and AGENT_PASSWORD not in out
+
+
+def test_cli_verify_mcp_skips_the_cancel_when_a_login_fails(server, tmp_path, capsys):
+    mcp_env = _write_env(tmp_path / "mcp.env", server.admin_url())
+    agent_env = _write_env(tmp_path / "agent.env", server.agent_url())
+    with server.other_login(), mock.patch.object(provision, "verify_agent_can_cancel_mcp") as cancel:
+        assert provision.main(
+            ["--login", "mcp", "--env-file", str(mcp_env), "--agent-env-file", str(agent_env), "--verify"]
+        ) == 1
+    cancel.assert_not_called()
+    assert f"logged in as another role, not {provision.MCP_ROLE}" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--login", "mcp", "--verify"],
+        ["--login", "agent", "--verify", "--agent-env-file", "x"],
+        ["--verify"],
+    ],
+)
+def test_cli_refuses_a_wrong_mix_of_login_and_agent_url(tmp_path, extra):
+    source = _write_env(tmp_path / "source.env", "postgres://u:p@h/db")
+    with pytest.raises(SystemExit):
+        provision.main(["--env-file", str(source), *extra])
 
 
 def test_verify_stops_before_any_probe_when_the_login_is_a_superuser(server):
     with mock.patch.object(provision, "_probe_refused") as probe:
-        failures = provision.verify_agent_login(server.admin_url())
+        failures = provision.verify_login(AGENT, server.admin_url())
     probe.assert_not_called()
     assert failures == [f"logged in as another role, not {provision.AGENT_ROLE}"]
 
@@ -332,7 +556,7 @@ def test_verify_flags_a_login_given_a_power(server):
         cur.execute(f"ALTER ROLE {provision.AGENT_ROLE} SUPERUSER")
     try:
         with mock.patch.object(provision, "_probe_refused") as probe:
-            failures = provision.verify_agent_login(server.agent_url())
+            failures = provision.verify_login(AGENT, server.agent_url())
         probe.assert_not_called()
         assert failures == ["the login has a power attribute such as SUPERUSER"]
     finally:
@@ -340,20 +564,23 @@ def test_verify_flags_a_login_given_a_power(server):
             cur.execute(f"ALTER ROLE {provision.AGENT_ROLE} NOSUPERUSER")
 
 
-def test_cli_writes_a_private_url_and_sql_with_no_plaintext(tmp_path, capsys):
+@pytest.mark.parametrize("login", ["agent", "mcp"])
+def test_cli_writes_a_private_url_and_sql_with_no_plaintext(tmp_path, capsys, login):
     source = tmp_path / "source.env"
     source.write_text("OTHER=keep\nWAREHOUSE_COOLIFY_URL=postgres://postgres:old@db.example:8432/postgres?sslmode=require\n")
     sql_file, staged = tmp_path / "role.sql", tmp_path / "staged.env"
     staged.write_text(source.read_text())
 
     assert provision.main(
-        ["--env-file", str(source), "--render-sql-file", str(sql_file), "--write-env-file", str(staged)]
+        ["--login", login, "--env-file", str(source),
+         "--render-sql-file", str(sql_file), "--write-env-file", str(staged)]
     ) == 0
 
     written = staged.read_text()
     assert "OTHER=keep\n" in written and "postgres:old" not in written
-    password = written.split("hc_warehouse_agent:")[1].split("@")[0]
+    password = written.split(f"{provision.LOGINS[login].role}:")[1].split("@")[0]
     assert password not in sql_file.read_text()
+    assert f'ALTER ROLE "{provision.LOGINS[login].role}" ' in sql_file.read_text()
     assert password not in capsys.readouterr().out
     for path in (sql_file, staged):
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -364,7 +591,9 @@ def test_cli_requires_the_env_file_with_the_sql_file(tmp_path):
     source = tmp_path / "source.env"
     source.write_text("WAREHOUSE_COOLIFY_URL=postgres://u:p@h/db\n")
     with pytest.raises(SystemExit):
-        provision.main(["--env-file", str(source), "--render-sql-file", str(tmp_path / "x.sql")])
+        provision.main(
+            ["--login", "agent", "--env-file", str(source), "--render-sql-file", str(tmp_path / "x.sql")]
+        )
 
 
 # Stub host: real shell parsing at each ssh hop, a docker that runs locally

@@ -425,15 +425,18 @@ failed job once more, so each failing day counts two `STEP_FAILURE` events.
 
 ## 10. The agents' login and the elevated routes
 
-`WAREHOUSE_COOLIFY_URL` holds **two different values on purpose**:
+`WAREHOUSE_COOLIFY_URL` holds **three different values on purpose**:
 
 - **Agents' login, `hc_warehouse_agent`:** the parent repo's `.env` and the
   Vaultwarden `.env` note.
-- **Superuser login, unchanged:** Coolify's env store, the host `.env` and the
-  containers. The syncs and dbt's scheduled jobs use it.
+- **Query tool's login, `hc_warehouse_mcp`:** the `warehouse-mcp` Coolify app only,
+  and its own Vaultwarden item. It has the same grants, settings and limits on what
+  it can do as the agents' login, and its own password and connection limit.
+- **Superuser login, unchanged:** the Dagster app's Coolify settings, the host `.env`
+  and that app's containers. The syncs and dbt's scheduled jobs use it.
 
-Never copy the variable from the parent `.env` to Coolify or the host: every sync
-would lose write access.
+Never copy the variable from one place to another: every sync would lose write
+access, or the query tool would lose its limits.
 
 ### What each action uses
 
@@ -442,13 +445,19 @@ would lose write access.
 | Ad-hoc SELECTs, `bin/readonly-psql`, `bin/ysws_true_expense.py`, spend preview without `--dbt`, reader row counts | Agents' login |
 | Lock and wedge queries (§3): `pg_stat_activity`, `pg_blocking_pids`, full query text | Agents' login, through `pg_read_all_stats` |
 | Cancel or end your own stuck session | Agents' login |
-| End or cancel any other superuser session: `pg_dump`, a sync, the query tool | `bin/warehouse-admin-psql` |
+| Cancel a stuck query-tool session | Agents' login: `pg_cancel_backend`, see below |
+| End or cancel any superuser session: `pg_dump`, a sync | `bin/warehouse-admin-psql` |
 | Any triage during "too many clients" | `bin/warehouse-admin-psql`, because reserved slots are for superusers |
 | Hand fixes: `metrics_last_fetched_at`, `ALTER COLUMN` for a type overflow, a backfill `UPDATE` | `bin/warehouse-admin-psql` |
 | Sling test into a scratch schema | Prefer a `target: LOCAL` dry run. Otherwise run Sling in the app container and drop the schema with `bin/warehouse-admin-psql` |
 | `dbt compile`, `parse`, `ls` | `bin/warehouse-dbt <command> ...` |
 | `dbt run`, `dbt test`, spend preview `--dbt` | `bin/warehouse-dbt --elevated --reason "<why>" ...` |
 | Dagster materialize from a laptop against prod | Refused, on purpose. In-process runs in the app container still work |
+
+To cancel a query-tool session, find it with `usename = 'hc_warehouse_mcp'` and use
+`pg_cancel_backend`. Do not use `pg_terminate_backend`: the tool retries a lost
+connection, so it runs the same query again without saying so. A cancelled query
+fails and is not retried.
 
 ### Rules for the elevated routes
 
@@ -481,7 +490,7 @@ If the relay drops during a long run, dbt can keep running and leave a
 and the next deploy removes it. Check `pg_stat_activity` for the `elevated-dbt:` name
 before starting another run.
 
-### What the agents' login can still do
+### What the agents' and query tool's logins can still do
 
 - **Read everything,** including tokens in mirrored tables and other sessions'
   query text. Treat the URL as sensitive.
@@ -490,8 +499,9 @@ before starting another run.
   to one login. A verifier cannot log in, but it allows offline password guessing, so
   every warehouse login needs a long random password.
 - **Store data on the server,** after turning off its read-only default: temporary
-  tables and large objects. It cannot change existing tables, but an exposed URL
-  could use these to fill the disk. `temp_file_limit` caps sort and hash spill files
+  tables and large objects. A query through the tool can make temporary tables too,
+  because `SELECT ... INTO TEMP` passes its SQL check. Neither login can change
+  existing tables, but an exposed URL could use these to fill the disk. `temp_file_limit` caps sort and hash spill files
   only; Postgres does not count temporary tables against it. Closing this needs
   `REVOKE TEMP ON DATABASE` and `REVOKE EXECUTE` on the large-object functions
   `FROM PUBLIC`, which affect every login, so it is not done today.
@@ -501,17 +511,42 @@ before starting another run.
 
 `pg_signal_backend` is left out on purpose. Postgres refuses to let a non-superuser
 signal a superuser session, so it cannot end the stuck `pg_dump`. It would only let
-an exposed URL kill the small non-superuser logins.
+an exposed URL kill every other non-superuser login. Agents need to cancel only
+query-tool sessions, so `hc_warehouse_agent` is a member of `hc_warehouse_mcp` with
+`INHERIT TRUE, SET FALSE, ADMIN FALSE`. Postgres lets a role signal the sessions of a
+role whose privileges it inherits. The query tool's role owns nothing and has no
+grant the agents' login lacks, and the agents' login cannot become it.
+
+The query tool's connection limit is 12: 5 for its pool (`max_size` in
+`warehouse-mcp/db.py`), 5 for the old container during a deploy overlap, and 2 for
+sockets that were cut but still look open on the server. If you change the pool,
+change `LOGINS` in the script below and run it again. A query the login's limits stop
+(`lock_timeout`, `temp_file_limit`) fails at once, because the tool retries only a
+lost connection.
 
 ### Create, check, roll back
 
-`scripts/provision_warehouse_agent_login.py` renders the role SQL with only a SCRAM
-verifier and writes the new URL to a 0600 file; running it again gives the role a
-new password. `--verify` checks the login's attributes, that it can see other logins'
-query text, and that changing existing tables, `COPY ... PROGRAM`, server file reads
-and ending a superuser session are all refused.
+`scripts/provision_warehouse_agent_login.py --login agent|mcp` renders the role SQL
+with only a SCRAM verifier and writes the new URL to a 0600 file; running it again
+gives the role a new password. Create the agents' login first, because the query
+tool's SQL grants its role to it. `--verify` checks the login's attributes and exact
+role memberships, that it can see other logins' query text, and that changing existing
+tables, `COPY ... PROGRAM`, server file reads, ending a superuser session and
+cancelling an idle session of another non-superuser login are all refused. If it finds
+no such idle session it fails and says so; run it again when one is connected. With
+`--login mcp` it needs `--agent-env-file`, checks both logins, and cancels a throwaway
+query-tool session from the agents' login.
 
-To roll back, restore `WAREHOUSE_COOLIFY_URL` in the parent `.env` from the host
-`.env` through the relay, update the Vaultwarden note, then
+To roll back the agents' login, restore `WAREHOUSE_COOLIFY_URL` in the parent `.env`
+from the host `.env` through the relay, update the Vaultwarden note, then
 `bin/warehouse-admin-psql --reason "remove agent login" -c "DROP ROLE hc_warehouse_agent;"`.
+The query tool's SQL needs that role, so roll back the query tool first.
+
+To roll back the query tool's login, set `WAREHOUSE_COOLIFY_URL` in the `warehouse-mcp`
+Coolify app back to the value in the host `.env` and redeploy that app. Its host is
+the internal one, so check from the `warehouse-mcp` container that it resolves. Then
+`bin/warehouse-admin-psql --reason "remove query tool login" -c "DROP ROLE hc_warehouse_mcp;"`.
+After that, `--verify --login agent` reports the missing membership until the role is
+created again.
+
 The syncs are not affected either way.

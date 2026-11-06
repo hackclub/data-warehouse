@@ -28,7 +28,7 @@ This is deployed on Coolify to the server `ssh root@warehouse.limited.selfhosted
 
 **One exception to read only:** `bin/warehouse-admin-psql` and `bin/warehouse-dbt --elevated` write through the host. Use them only with a written `--reason`, and only for a runbook step that names them or a request that asks for the write. See `runbooks/prod-health-monitoring.md` §10.
 
-**`WAREHOUSE_COOLIFY_URL` has two different values, on purpose.** In the parent `.env` and Vaultwarden it is the agents' login, `hc_warehouse_agent`, which cannot change existing data. In Coolify, the host `.env` and the containers it is the superuser login the syncs use. Never copy it from the parent `.env` to Coolify or the host: that breaks every sync.
+**`WAREHOUSE_COOLIFY_URL` has three different values, on purpose.** In the parent `.env` and Vaultwarden's `.env` note it is the agents' login, `hc_warehouse_agent`, which cannot change existing data. In the `warehouse-mcp` Coolify app only, it is that tool's login, `hc_warehouse_mcp`, with the same grants. In the Dagster app's Coolify settings, the host `.env` and that app's containers it is the superuser login the syncs use. Never copy it from one place to another: that breaks every sync or the query tool's own limits.
 
 ## Public Repo
 This repository is public. Always triple check your changes before commiting and pushing them. Never, ever publish secret data publicly - even stuff that may not feel private, like people's names in a test.
