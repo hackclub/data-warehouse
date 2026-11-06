@@ -3384,4 +3384,71 @@ class AirtableIDs:
             hackatime_user_id = "fldizxdM02LqrXaUr"  # Name: hackatime_user_id
 
 
+    class shredder:
+        """IDs for Base 'shredder' (ID: app1Knvgk0jNmBuFo)"""
+        BASE_ID = "app1Knvgk0jNmBuFo"
+
+        class rsvp_emails:
+            """IDs for Table 'rsvp_emails' (ID: tblxVGpD5sF20KIKW)"""
+            TABLE_ID = "tblxVGpD5sF20KIKW"
+
+            email = "fldlyYMHugdQRzWRA"  # Name: Email
+            created = "fldToZD5TW9rbvxAI"  # Name: Created
+            loops_list_shredder = "fldpgfwVLefnnvJ9L"  # Name: Loops List - Shredder
+
+        class projects:
+            """IDs for Table 'projects' (ID: tblebWAX42z5KDVZ4)"""
+            TABLE_ID = "tblebWAX42z5KDVZ4"
+
+            name = "fldiK44uRHOXzFUiE"  # Name: name
+            owner = "fld8nHcn1MJcAfefv"  # Name: owner
+            owner_id = "fldCykfcgtbbeXAHy"  # Name: owner_id
+            description = "fldwnjN8OAMX3xsRI"  # Name: description
+            repo_url = "fldu9HhCIWUDAGT30"  # Name: repo_url
+            demo_url = "fld1sJutVchrDuYWh"  # Name: demo_url
+            screenshot = "fldcd844qcorHEunP"  # Name: screenshot
+            hackatime_projects = "fldFR3aLtq0ymFPyD"  # Name: hackatime_projects
+            hackatime_hours = "fldoWQBFK5WmHYTfH"  # Name: hackatime_hours
+            status = "fldlrXD5emPoOIjPh"  # Name: status
+            approved_hours = "fldy0Pn69A230vyHd"  # Name: approved_hours
+            shipped_at = "fldRYW1zXOyf3Oivo"  # Name: shipped_at
+            created_at = "fld2N0gHaJVVEBPwC"  # Name: created_at
+
+        class shop:
+            """IDs for Table 'shop' (ID: tblIApWAlLuH4Aqpz)"""
+            TABLE_ID = "tblIApWAlLuH4Aqpz"
+
+            name = "fld0DShZ3nGmIyaDq"  # Name: name
+            description = "fldcN9KaleiUYhK8k"  # Name: description
+            image = "fldEhpN4c0MDw0Cbw"  # Name: image
+            price = "fldQN8o8l1fFv5lOI"  # Name: price
+            active = "fldANeVQiAmFixS3n"  # Name: active
+            stock = "fldc5FeTQFNLp4jGh"  # Name: stock
+            max_per_user = "fldRwFfMZQeJNKkH2"  # Name: max_per_user
+            orders = "fldX4YqzbRRjiweS5"  # Name: Orders
+
+        class orders:
+            """IDs for Table 'orders' (ID: tbl4IhFpkcxosXlp2)"""
+            TABLE_ID = "tbl4IhFpkcxosXlp2"
+
+            item_name = "fldds0TDMri8pmrxT"  # Name: item_name
+            user = "fldO8fn8ls91hCNkM"  # Name: user
+            user_id = "fldDWUiDU4mNzMNiQ"  # Name: user_id
+            item = "fldQ1jhxcYdXM8IcH"  # Name: item
+            item_id = "fldMUyZC3M2wmiOEO"  # Name: item_id
+            price = "fld41MzJ372nzemZc"  # Name: price
+            status = "fldzBh1iYkSETkrQv"  # Name: status
+            created = "fldxFp65yNfxOf1nS"  # Name: created
+
+        class reviews:
+            """IDs for Table 'reviews' (ID: tbl7d6nSBEL0CFB57)"""
+            TABLE_ID = "tbl7d6nSBEL0CFB57"
+
+            project = "fldthiz1spJBeXhL2"  # Name: Project
+            notes = "fldFmLD7QSOhaLD5l"  # Name: Notes
+            assignee = "fldY0XQbf3sytFuFf"  # Name: Assignee
+            status = "fldB66s17Q4cEdEJI"  # Name: Status
+            attachments = "fldsdGImpAScu5t5I"  # Name: Attachments
+
+
 # fmt: on
