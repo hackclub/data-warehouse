@@ -194,11 +194,22 @@ def _render_reader_setup_sql(
     lines = [
         "BEGIN;",
         "DO $$",
+        "DECLARE",
+        "  r record;",
         "BEGIN",
         f"  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {l_role}) THEN",
         f"    CREATE ROLE {q_role} {role_opts};",
         "  ELSE",
         f"    ALTER ROLE {q_role} WITH {role_opts};",
+        "    FOR r IN",
+        "      SELECT role_r.rolname",
+        "      FROM pg_catalog.pg_auth_members m",
+        "      JOIN pg_catalog.pg_roles member_r ON member_r.oid = m.member",
+        "      JOIN pg_catalog.pg_roles role_r ON role_r.oid = m.roleid",
+        f"      WHERE member_r.rolname = {l_role}",
+        "    LOOP",
+        f"      EXECUTE format('REVOKE %I FROM %I', r.rolname, {l_role});",
+        "    END LOOP;",
         "  END IF;",
         "END",
         "$$;",
@@ -300,7 +311,8 @@ def _build_reader_url(
     netloc = f"{quote(role_name, safe='')}:{quote(password, safe='')}@{host_port}"
     query_pairs = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query_pairs.setdefault("sslmode", "verify-full")
-    query_pairs.setdefault("sslrootcert", "system")
+    if query_pairs.get("sslmode") == "verify-full":
+        query_pairs.setdefault("sslrootcert", "system")
     return urlunparse(parsed._replace(netloc=netloc, query=urlencode(query_pairs)))
 
 
@@ -337,19 +349,61 @@ def _update_env_file_content(content: str, updates: Mapping[str, str]) -> str:
     return "\n".join(out_lines) + ("\n" if content.endswith("\n") or not content else "")
 
 
-def _fetch_live_catalog(conn_url: str) -> tuple[str, dict[str, list[str]]]:
+def _ensure_system_ssl_certs() -> None:
+    """Populate SSL_CERT_FILE and SSL_CERT_DIR from system CA paths when unset
+    so psycopg2-binary's bundled OpenSSL resolves sslrootcert=system."""
+    import ssl
+
+    verify_paths = ssl.get_default_verify_paths()
+    if not os.environ.get("SSL_CERT_FILE"):
+        for candidate in (
+            verify_paths.cafile,
+            "/etc/ssl/certs/ca-certificates.crt",
+            "/etc/ssl/cert.pem",
+            "/etc/pki/tls/certs/ca-bundle.crt",
+        ):
+            if candidate and os.path.isfile(candidate):
+                os.environ["SSL_CERT_FILE"] = candidate
+                break
+    if not os.environ.get("SSL_CERT_DIR"):
+        for candidate in (
+            verify_paths.capath,
+            "/etc/ssl/certs",
+            "/etc/pki/tls/certs",
+        ):
+            if candidate and os.path.isdir(candidate):
+                os.environ["SSL_CERT_DIR"] = candidate
+                break
+
+
+def _connect_pg(conn_url: str):
     import psycopg2
 
-    conn = psycopg2.connect(conn_url)
+    _ensure_system_ssl_certs()
+    return psycopg2.connect(conn_url)
+
+
+def _fetch_live_catalog(conn_url: str) -> tuple[str, dict[str, list[str]]]:
+    """Read table and column names from pg_catalog (pg_class / pg_attribute)
+    rather than information_schema.columns so ungranted tables and excluded
+    columns remain visible even when connected as hc_warehouse_reader."""
+    conn = _connect_pg(conn_url)
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT current_database()")
             db_name = cur.fetchone()[0]
             cur.execute(
-                "SELECT table_schema || '.' || table_name, column_name "
-                "FROM information_schema.columns "
-                "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
-                "ORDER BY table_schema, table_name, ordinal_position"
+                "SELECT n.nspname || '.' || c.relname, a.attname "
+                "FROM pg_catalog.pg_class c "
+                "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+                "JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid "
+                "WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') "
+                "  AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
+                "  AND n.nspname NOT LIKE 'pg_toast%' "
+                "  AND n.nspname NOT LIKE 'pg_temp%' "
+                "  AND a.attnum > 0 "
+                "  AND NOT a.attisdropped "
+                "ORDER BY n.nspname, c.relname, a.attnum"
             )
             catalog: dict[str, list[str]] = {}
             for table_key, col_name in cur.fetchall():
@@ -368,18 +422,34 @@ def _verify_live_reader(
     import psycopg2
 
     grants = _replication_reader_grants(replication_config, source_columns)
-    conn = psycopg2.connect(reader_url)
+    conn = _connect_pg(reader_url)
     try:
         with conn.cursor() as cur:
             cur.execute("SHOW transaction_read_only")
             if cur.fetchone()[0] != "on":
                 raise RuntimeError("Expected transaction_read_only='on'")
             cur.execute(
-                "SELECT rolconnlimit, rolsuper, rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname = %s",
+                "SELECT rolconnlimit, rolsuper, rolcreatedb, rolcreaterole, "
+                "rolreplication, rolbypassrls "
+                "FROM pg_roles WHERE rolname = %s",
                 (role_name,),
             )
-            if cur.fetchone() != (4, False, False, False):
+            if cur.fetchone() != (4, False, False, False, False, False):
                 raise RuntimeError(f"Unexpected role flags for {role_name}")
+            cur.execute(
+                "SELECT r.rolname "
+                "FROM pg_catalog.pg_auth_members m "
+                "JOIN pg_catalog.pg_roles u ON u.oid = m.member "
+                "JOIN pg_catalog.pg_roles r ON r.oid = m.roleid "
+                "WHERE u.rolname = %s "
+                "ORDER BY r.rolname",
+                (role_name,),
+            )
+            memberships = [row[0] for row in cur.fetchall()]
+            if memberships:
+                raise RuntimeError(
+                    f"Unexpected role memberships for {role_name}: {memberships}"
+                )
             cur.execute(
                 "SELECT count(*) FROM information_schema.role_table_grants "
                 "WHERE grantee = %s AND privilege_type IN ('INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER')",
@@ -396,9 +466,20 @@ def _verify_live_reader(
                 raise RuntimeError("Unexpected write column grants")
 
             for table_key, all_cols in source_columns.items():
+                cur.execute(
+                    "SELECT has_table_privilege(%s, %s, 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') "
+                    "    OR has_any_column_privilege(%s, %s, 'INSERT, UPDATE, REFERENCES')",
+                    (role_name, table_key, role_name, table_key),
+                )
+                if cur.fetchone()[0]:
+                    raise RuntimeError(f"Unexpected write privilege on {table_key}")
+
                 if not table_key.startswith("public."):
                     continue
-                cur.execute("SELECT has_any_column_privilege(%s, %s, 'SELECT')", (role_name, table_key))
+                cur.execute(
+                    "SELECT has_any_column_privilege(%s, %s, 'SELECT')",
+                    (role_name, table_key),
+                )
                 has_any = cur.fetchone()[0]
                 if table_key in grants:
                     if not has_any:
@@ -410,9 +491,58 @@ def _verify_live_reader(
                             (role_name, table_key, col),
                         )
                         if cur.fetchone()[0] != (col in kept_cols):
-                            raise RuntimeError(f"Column privilege mismatch on {table_key}.{col}")
+                            raise RuntimeError(
+                                f"Column privilege mismatch on {table_key}.{col}"
+                            )
                 elif has_any:
-                    raise RuntimeError(f"Unexpected SELECT privilege on unmirrored {table_key}")
+                    raise RuntimeError(
+                        f"Unexpected SELECT privilege on unmirrored {table_key}"
+                    )
+
+            first_stream, first_cols = next(iter(grants.items()))
+            s_name, t_name = first_stream.split(".", 1)
+            probe_col = (first_cols or source_columns[first_stream])[0]
+            q_table = f"{_quote_ident(s_name)}.{_quote_ident(t_name)}"
+            q_col = _quote_ident(probe_col)
+            insert_sql = (
+                f"INSERT INTO {q_table} ({q_col}) "
+                f"SELECT {q_col} FROM {q_table} WHERE false"
+            )
+
+            cur.execute("SAVEPOINT _verify_ro_insert")
+            try:
+                cur.execute(insert_sql)
+            except psycopg2.Error as exc:
+                cur.execute("ROLLBACK TO SAVEPOINT _verify_ro_insert")
+                if exc.pgcode not in ("25006", "42501"):
+                    raise RuntimeError(
+                        f"INSERT failed with unexpected SQLSTATE {exc.pgcode}"
+                    ) from exc
+            else:
+                cur.execute("ROLLBACK TO SAVEPOINT _verify_ro_insert")
+                raise RuntimeError(f"INSERT into {first_stream} unexpectedly succeeded")
+            finally:
+                cur.execute("RELEASE SAVEPOINT _verify_ro_insert")
+
+            conn.rollback()
+            cur.execute("SET TRANSACTION READ WRITE")
+            cur.execute("SAVEPOINT _verify_acl_insert")
+            try:
+                cur.execute(insert_sql)
+            except psycopg2.Error as exc:
+                cur.execute("ROLLBACK TO SAVEPOINT _verify_acl_insert")
+                if exc.pgcode != "42501":
+                    raise RuntimeError(
+                        f"INSERT with transaction_read_only=off failed with unexpected SQLSTATE {exc.pgcode}"
+                    ) from exc
+            else:
+                cur.execute("ROLLBACK TO SAVEPOINT _verify_acl_insert")
+                raise RuntimeError(
+                    f"INSERT into {first_stream} succeeded when transaction_read_only=off"
+                )
+            finally:
+                cur.execute("RELEASE SAVEPOINT _verify_acl_insert")
+                conn.rollback()
 
             defaults = replication_config.get("defaults") or {}
             for stream_name, stream_cfg in (replication_config.get("streams") or {}).items():
@@ -428,8 +558,92 @@ def _verify_live_reader(
                     q = f"SELECT {col_expr} FROM {_quote_ident(s_name)}.{_quote_ident(t_name)} LIMIT 1"
                 cur.execute(q)
                 cur.fetchall()
+            conn.rollback()
     finally:
         conn.close()
+
+
+def _resolve_warehouse_table(
+    program: str,
+    stream_name: str,
+    merged_stream_config: Mapping[str, Any],
+) -> tuple[str, str]:
+    _, src_table = stream_name.split(".", 1)
+    obj_template = str(merged_stream_config.get("object") or f"{program}.{{stream_table}}")
+    rendered = obj_template.replace("{stream_table}", src_table)
+    if "." not in rendered:
+        return program, rendered
+    wh_schema, wh_table = rendered.split(".", 1)
+    return wh_schema, wh_table
+
+
+def _fetch_live_row_counts(
+    source_url: str,
+    warehouse_url: str,
+    program: str,
+    replication_config: Mapping[str, Any],
+) -> dict[str, tuple[int, int | None]]:
+    defaults = replication_config.get("defaults") or {}
+    streams = replication_config.get("streams") or {}
+    counts: dict[str, tuple[int, int | None]] = {}
+
+    src_conn = _connect_pg(source_url)
+    wh_conn = _connect_pg(warehouse_url)
+    try:
+        with src_conn.cursor() as src_cur, wh_conn.cursor() as wh_cur:
+            for stream_name, stream_cfg in streams.items():
+                merged = {**defaults, **(stream_cfg or {})}
+                if merged.get("disabled"):
+                    continue
+                if merged.get("sql"):
+                    src_q = f"SELECT count(*) FROM ({merged['sql']}) AS _src_cnt"
+                else:
+                    s_name, t_name = stream_name.split(".", 1)
+                    src_q = f"SELECT count(*) FROM {_quote_ident(s_name)}.{_quote_ident(t_name)}"
+                src_cur.execute(src_q)
+                src_count = int(src_cur.fetchone()[0])
+
+                wh_schema, wh_table = _resolve_warehouse_table(program, stream_name, merged)
+                wh_cur.execute(
+                    "SELECT EXISTS ("
+                    "  SELECT 1 FROM pg_catalog.pg_class c "
+                    "  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+                    "  WHERE n.nspname = %s AND c.relname = %s "
+                    "    AND c.relkind IN ('r', 'p', 'v', 'm', 'f')"
+                    ")",
+                    (wh_schema, wh_table),
+                )
+                if not wh_cur.fetchone()[0]:
+                    wh_count: int | None = None
+                else:
+                    wh_cur.execute(
+                        f"SELECT count(*) FROM {_quote_ident(wh_schema)}.{_quote_ident(wh_table)}"
+                    )
+                    wh_count = int(wh_cur.fetchone()[0])
+                counts[stream_name] = (src_count, wh_count)
+        return counts
+    finally:
+        src_conn.close()
+        wh_conn.close()
+
+
+def _write_counts_json(
+    path: Path, program: str, counts: Mapping[str, tuple[int, int | None]]
+) -> None:
+    payload = {
+        "program": program,
+        "counts": {k: [v[0], v[1]] for k, v in counts.items()},
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _read_counts_json(path: Path) -> dict[str, tuple[int, int | None]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw = payload["counts"] if isinstance(payload, dict) and "counts" in payload else payload
+    return {
+        str(k): (int(v[0]), None if v[1] is None else int(v[1]))
+        for k, v in raw.items()
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -437,63 +651,146 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--program", required=True)
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--env-var")
+    parser.add_argument("--warehouse-env-var", default="WAREHOUSE_COOLIFY_URL")
     parser.add_argument("--catalog-json", type=Path)
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--render-sql-file", type=Path)
     parser.add_argument("--write-env-file", type=Path)
     parser.add_argument("--verify-reader", action="store_true")
+    parser.add_argument("--record-counts-json", type=Path)
+    parser.add_argument("--compare-counts-json", type=Path)
+    parser.add_argument("--post-counts-json", type=Path)
     args = parser.parse_args(argv)
+
+    if bool(args.render_sql_file) != bool(args.write_env_file):
+        parser.error(
+            "--render-sql-file and --write-env-file must be provided together "
+            "so a generated password is never discarded"
+        )
+    if args.post_counts_json and not args.compare_counts_json:
+        parser.error("--post-counts-json requires --compare-counts-json")
+    if not any(
+        (
+            args.check,
+            args.render_sql_file,
+            args.verify_reader,
+            args.record_counts_json,
+            args.compare_counts_json,
+        )
+    ):
+        parser.error(
+            "At least one action flag (--check, --render-sql-file, --verify-reader, "
+            "--record-counts-json, --compare-counts-json) is required"
+        )
 
     mod = importlib.import_module(f"orpheus_engine.defs.sling.programs.{args.program}")
     config = getattr(mod, f"{args.program}_replication_config")
     env_var = args.env_var or PROGRAM_ENV_VARS.get(args.program, f"{args.program.upper()}_K8S_URL")
     env_map = _parse_env_text(args.env_file.read_text(encoding="utf-8")) if args.env_file else {}
 
-    if args.catalog_json:
-        payload = json.loads(args.catalog_json.read_text(encoding="utf-8"))
-        db_name, source_columns = payload["db_name"], payload["columns"]
-    else:
-        conn_url = env_map.get(env_var) or os.getenv(env_var)
-        if not conn_url:
-            raise SystemExit(f"Missing {env_var} for {args.program}")
-        db_name, source_columns = _fetch_live_catalog(conn_url)
+    if args.check or args.render_sql_file or args.verify_reader:
+        if args.catalog_json:
+            payload = json.loads(args.catalog_json.read_text(encoding="utf-8"))
+            db_name, source_columns = payload["db_name"], payload["columns"]
+        else:
+            conn_url = env_map.get(env_var) or os.getenv(env_var)
+            if not conn_url:
+                raise SystemExit(f"Missing {env_var} for {args.program}")
+            db_name, source_columns = _fetch_live_catalog(conn_url)
 
-    grants = _replication_reader_grants(config, source_columns)
-    table_grants = sum(1 for cols in grants.values() if cols is None)
-    col_grants = sum(1 for cols in grants.values() if cols is not None)
+        grants = _replication_reader_grants(config, source_columns)
+        table_grants = sum(1 for cols in grants.values() if cols is None)
+        col_grants = sum(1 for cols in grants.values() if cols is not None)
 
-    if args.check:
-        print(
-            f"{args.program}: {len(grants)} streams ({table_grants} table SELECT, "
-            f"{col_grants} column SELECT), 0 drift errors"
-        )
-    if args.render_sql_file:
-        password = secrets.token_urlsafe(32)
-        sql_text = _render_reader_setup_sql(db_name, _scram_sha256_verifier(password), grants)
-        old_umask = os.umask(0o077)
-        try:
-            args.render_sql_file.write_text(sql_text, encoding="utf-8")
-            if args.write_env_file:
-                src_url = env_map.get(env_var) or os.getenv(env_var)
-                if not src_url:
-                    raise SystemExit(f"Missing {env_var} to build reader URL")
-                reader_url = _build_reader_url(src_url, password)
-                updated = _update_env_file_content(
-                    args.write_env_file.read_text(encoding="utf-8"), {env_var: reader_url}
+        if args.check:
+            print(
+                f"{args.program}: {len(grants)} streams ({table_grants} table SELECT, "
+                f"{col_grants} column SELECT), 0 drift errors"
+            )
+        if args.render_sql_file:
+            assert args.write_env_file is not None
+            if not args.write_env_file.is_file():
+                raise SystemExit(
+                    f"Target --write-env-file does not exist: {args.write_env_file}"
                 )
-                args.write_env_file.write_text(updated, encoding="utf-8")
-        finally:
-            os.umask(old_umask)
+            if not args.render_sql_file.parent.is_dir():
+                raise SystemExit(
+                    f"Parent directory for --render-sql-file does not exist: {args.render_sql_file.parent}"
+                )
+            target_env_text = args.write_env_file.read_text(encoding="utf-8")
+            target_env_map = _parse_env_text(target_env_text)
+            src_url = (
+                env_map.get(env_var)
+                or target_env_map.get(env_var)
+                or os.getenv(env_var)
+            )
+            if not src_url:
+                raise SystemExit(f"Missing {env_var} to build reader URL")
+            password = secrets.token_urlsafe(32)
+            reader_url = _build_reader_url(src_url, password)
+            updated_env = _update_env_file_content(
+                target_env_text, {env_var: reader_url}
+            )
+            sql_text = _render_reader_setup_sql(
+                db_name, _scram_sha256_verifier(password), grants
+            )
+            old_umask = os.umask(0o077)
+            try:
+                args.write_env_file.write_text(updated_env, encoding="utf-8")
+                args.render_sql_file.write_text(sql_text, encoding="utf-8")
+            finally:
+                os.umask(old_umask)
+            print(
+                f"{args.program}: wrote SQL to {args.render_sql_file} and updated {args.write_env_file} "
+                f"({table_grants} table grants, {col_grants} column grants)"
+            )
+        if args.verify_reader:
+            reader_url = env_map.get(env_var) or os.getenv(env_var)
+            if not reader_url:
+                raise SystemExit(f"Missing {env_var} for --verify-reader")
+            _verify_live_reader(reader_url, config, source_columns)
+            print(
+                f"{args.program}: verified hc_warehouse_reader privileges and all {len(grants)} streams"
+            )
+
+    live_counts: dict[str, tuple[int, int | None]] | None = None
+    if args.record_counts_json or (args.compare_counts_json and not args.post_counts_json):
+        src_url = env_map.get(env_var) or os.getenv(env_var)
+        if not src_url:
+            raise SystemExit(f"Missing {env_var} for row-count query")
+        wh_url = env_map.get(args.warehouse_env_var) or os.getenv(args.warehouse_env_var)
+        if not wh_url:
+            raise SystemExit(
+                f"Missing {args.warehouse_env_var} for warehouse row-count query"
+            )
+        live_counts = _fetch_live_row_counts(src_url, wh_url, args.program, config)
+
+    if args.record_counts_json:
+        assert live_counts is not None
+        _write_counts_json(args.record_counts_json, args.program, live_counts)
         print(
-            f"{args.program}: wrote SQL to {args.render_sql_file} "
-            f"({table_grants} table grants, {col_grants} column grants)"
+            f"{args.program}: recorded row counts for {len(live_counts)} streams to {args.record_counts_json}"
         )
-    if args.verify_reader:
-        reader_url = env_map.get(env_var) or os.getenv(env_var)
-        if not reader_url:
-            raise SystemExit(f"Missing {env_var} for --verify-reader")
-        _verify_live_reader(reader_url, config, source_columns)
-        print(f"{args.program}: verified hc_warehouse_reader privileges and all {len(grants)} streams")
+
+    if args.compare_counts_json:
+        pre_counts = _read_counts_json(args.compare_counts_json)
+        post_counts = (
+            _read_counts_json(args.post_counts_json)
+            if args.post_counts_json
+            else live_counts
+        )
+        assert post_counts is not None
+        failures = _check_row_count_parity(config, pre_counts, post_counts)
+        if failures:
+            for msg in failures:
+                print(f"{args.program}: PARITY FAILURE: {msg}")
+            raise SystemExit(
+                f"{args.program}: row-count parity failed ({len(failures)} stream(s))"
+            )
+        print(
+            f"{args.program}: row-count parity passed for {len(post_counts)} streams"
+        )
+
     return 0
 
 

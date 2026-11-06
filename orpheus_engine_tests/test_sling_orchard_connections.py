@@ -1,6 +1,11 @@
 import importlib
 import json
+import shutil
+import socket
+import subprocess
+from pathlib import Path
 
+import psycopg2
 import pytest
 from dagster_sling import SlingResource
 
@@ -301,4 +306,425 @@ def test_provision_cli_writes_sql_and_env_without_printing_secrets(tmp_path, cap
     assert "reader:fake" not in updated_env
     assert "sslrootcert=system" in updated_env
     assert sql_path.read_text(encoding="utf-8").startswith("BEGIN;\n")
+
+
+def test_provision_cli_flag_guards_and_offline_count_comparison(tmp_path, capsys):
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "db_name": "test_db",
+                "columns": _synthetic_catalog_for_program("midnight"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "MIDNIGHT_K8S_URL='postgresql://reader:fake@db.example.com:5432/test?sslmode=verify-full'\n",
+        encoding="utf-8",
+    )
+    sql_path = tmp_path / "setup.sql"
+
+    # 1. No action flag -> fails.
+    with pytest.raises(SystemExit):
+        provision_main(
+            [
+                "--program",
+                "midnight",
+                "--catalog-json",
+                str(catalog_path),
+                "--env-file",
+                str(env_path),
+            ]
+        )
+
+    # 2. --render-sql-file without --write-env-file -> fails without writing SQL.
+    with pytest.raises(SystemExit):
+        provision_main(
+            [
+                "--program",
+                "midnight",
+                "--catalog-json",
+                str(catalog_path),
+                "--env-file",
+                str(env_path),
+                "--render-sql-file",
+                str(sql_path),
+            ]
+        )
+    assert not sql_path.exists()
+
+    # 3. --write-env-file without --render-sql-file -> fails.
+    with pytest.raises(SystemExit):
+        provision_main(
+            [
+                "--program",
+                "midnight",
+                "--catalog-json",
+                str(catalog_path),
+                "--env-file",
+                str(env_path),
+                "--write-env-file",
+                str(env_path),
+            ]
+        )
+
+    # 4. --write-env-file pointing to a missing file -> fails before writing SQL.
+    missing_env = tmp_path / "does_not_exist.env"
+    with pytest.raises(SystemExit, match="does not exist"):
+        provision_main(
+            [
+                "--program",
+                "midnight",
+                "--catalog-json",
+                str(catalog_path),
+                "--env-file",
+                str(env_path),
+                "--render-sql-file",
+                str(sql_path),
+                "--write-env-file",
+                str(missing_env),
+            ]
+        )
+    assert not sql_path.exists()
+
+    # 5. Offline --compare-counts-json + --post-counts-json passes on matching counts and fails on regression.
+    pre_path = tmp_path / "pre_counts.json"
+    post_ok_path = tmp_path / "post_ok.json"
+    post_bad_path = tmp_path / "post_bad.json"
+    pre_counts = {
+        "public.projects": [100, 100],
+        "public.submissions": [50, 50],
+        "public.users": [200, 200],
+        "public.user_sessions": [200, 200],
+    }
+    post_ok = {
+        "public.projects": [102, 102],
+        "public.submissions": [50, 50],
+        "public.users": [201, 201],
+        "public.user_sessions": [201, 201],
+    }
+    post_bad = {
+        "public.projects": [100, 80],
+        "public.submissions": [50, 50],
+        "public.users": [200, 200],
+        "public.user_sessions": [200, 200],
+    }
+    pre_path.write_text(json.dumps({"counts": pre_counts}), encoding="utf-8")
+    post_ok_path.write_text(json.dumps({"counts": post_ok}), encoding="utf-8")
+    post_bad_path.write_text(json.dumps({"counts": post_bad}), encoding="utf-8")
+
+    capsys.readouterr()
+    rc = provision_main(
+        [
+            "--program",
+            "midnight",
+            "--compare-counts-json",
+            str(pre_path),
+            "--post-counts-json",
+            str(post_ok_path),
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "midnight: row-count parity passed for 4 streams" in out
+
+    with pytest.raises(SystemExit, match="row-count parity failed"):
+        provision_main(
+            [
+                "--program",
+                "midnight",
+                "--compare-counts-json",
+                str(pre_path),
+                "--post-counts-json",
+                str(post_bad_path),
+            ]
+        )
+
+
+def _find_pg_bin(binary_name: str) -> str | None:
+    found = shutil.which(binary_name)
+    if found:
+        return found
+    candidates = sorted(
+        Path("/usr/lib/postgresql").glob(f"*/bin/{binary_name}"), reverse=True
+    )
+    return str(candidates[0]) if candidates else None
+
+
+def test_live_loopback_postgres_end_to_end_provision_verify_and_counts(tmp_path, capsys):
+    initdb_bin = _find_pg_bin("initdb")
+    pg_ctl_bin = _find_pg_bin("pg_ctl")
+    if not initdb_bin or not pg_ctl_bin:
+        pytest.skip("local PostgreSQL binaries (initdb/pg_ctl) not installed")
+
+    pgdata = tmp_path / "pgdata"
+    sock_dir = tmp_path / "pgsock"
+    sock_dir.mkdir()
+    log_file = tmp_path / "postgres.log"
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    subprocess.run(
+        [
+            initdb_bin,
+            "-D",
+            str(pgdata),
+            "-U",
+            "postgres",
+            "-A",
+            "trust",
+            "--no-instructions",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    with (pgdata / "pg_hba.conf").open("a", encoding="utf-8") as hba:
+        hba.write("host all hc_warehouse_reader 127.0.0.1/32 scram-sha-256\n")
+
+    pg_opts = (
+        f"-F -p {port} -h 127.0.0.1 -k {sock_dir} "
+        "-c ssl=off -c password_encryption=scram-sha-256"
+    )
+    subprocess.run(
+        [pg_ctl_bin, "-D", str(pgdata), "-l", str(log_file), "-o", pg_opts, "-w", "start"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        admin_conn = psycopg2.connect(
+            host="127.0.0.1", port=port, user="postgres", dbname="postgres"
+        )
+        admin_conn.autocommit = True
+        with admin_conn.cursor() as cur:
+            cur.execute("CREATE ROLE app_owner LOGIN PASSWORD 'owner-pass'")
+            cur.execute("CREATE DATABASE fallen_src OWNER app_owner")
+            cur.execute("CREATE DATABASE warehouse_dst OWNER postgres")
+        admin_conn.close()
+
+        catalog = _synthetic_catalog_for_program("fallen")
+        src_admin = psycopg2.connect(
+            host="127.0.0.1", port=port, user="postgres", dbname="fallen_src"
+        )
+        src_admin.autocommit = True
+        with src_admin.cursor() as cur:
+            for table_key, cols in catalog.items():
+                s_name, t_name = table_key.split(".", 1)
+                col_defs = ", ".join(f"{_quote_ident(c)} text" for c in cols)
+                q_tbl = f"{_quote_ident(s_name)}.{_quote_ident(t_name)}"
+                cur.execute(f"CREATE TABLE {q_tbl} ({col_defs})")
+                cur.execute(f"ALTER TABLE {q_tbl} OWNER TO app_owner")
+                col_names = ", ".join(_quote_ident(c) for c in cols)
+                placeholders = ", ".join(["'row1'"] * len(cols))
+                cur.execute(f"INSERT INTO {q_tbl} ({col_names}) VALUES ({placeholders})")
+                cur.execute(f"INSERT INTO {q_tbl} ({col_names}) VALUES ({placeholders})")
+
+        wh_admin = psycopg2.connect(
+            host="127.0.0.1", port=port, user="postgres", dbname="warehouse_dst"
+        )
+        wh_admin.autocommit = True
+        with wh_admin.cursor() as cur:
+            cur.execute('CREATE SCHEMA "fallen"')
+            for table_key, cols in catalog.items():
+                if table_key == "public.unmirrored_secret_table":
+                    continue
+                _, t_name = table_key.split(".", 1)
+                col_defs = ", ".join(f"{_quote_ident(c)} text" for c in cols)
+                q_tbl = f'"fallen".{_quote_ident(t_name)}'
+                cur.execute(f"CREATE TABLE {q_tbl} ({col_defs})")
+                col_names = ", ".join(_quote_ident(c) for c in cols)
+                placeholders = ", ".join(["'row1'"] * len(cols))
+                cur.execute(f"INSERT INTO {q_tbl} ({col_names}) VALUES ({placeholders})")
+                cur.execute(f"INSERT INTO {q_tbl} ({col_names}) VALUES ({placeholders})")
+
+        env_path = tmp_path / ".env"
+        env_path.write_text(
+            f"FALLEN_K8S_URL='postgresql://app_owner:owner-pass@127.0.0.1:{port}/fallen_src?sslmode=disable'\n"
+            f"WAREHOUSE_COOLIFY_URL='postgresql://postgres@127.0.0.1:{port}/warehouse_dst?sslmode=disable'\n",
+            encoding="utf-8",
+        )
+        sql_path = tmp_path / "fallen_setup.sql"
+        pre_counts_path = tmp_path / "pre_counts.json"
+        post_counts_path = tmp_path / "post_counts.json"
+
+        # 1. Provision using live catalog fetch (no --catalog-json) and record baseline counts.
+        rc = provision_main(
+            [
+                "--program",
+                "fallen",
+                "--env-file",
+                str(env_path),
+                "--check",
+                "--render-sql-file",
+                str(sql_path),
+                "--write-env-file",
+                str(env_path),
+                "--record-counts-json",
+                str(pre_counts_path),
+            ]
+        )
+        assert rc == 0
+        with src_admin.cursor() as cur:
+            cur.execute(sql_path.read_text(encoding="utf-8"))
+
+        # 2. Verify live reader when env_path now points to hc_warehouse_reader (Finding 1).
+        assert "hc_warehouse_reader:" in env_path.read_text(encoding="utf-8")
+        rc = provision_main(
+            [
+                "--program",
+                "fallen",
+                "--env-file",
+                str(env_path),
+                "--check",
+                "--verify-reader",
+            ]
+        )
+        assert rc == 0
+
+        # 3. Simulate an app migration adding a column to a -col table while env_path
+        # already uses hc_warehouse_reader (Runbook §8.3 + Finding 1).
+        with src_admin.cursor() as cur:
+            cur.execute('ALTER TABLE "public"."users" ADD COLUMN "new_migrated_col" text')
+        with pytest.raises(RuntimeError, match="Column privilege mismatch on public.users.new_migrated_col"):
+            provision_main(
+                [
+                    "--program",
+                    "fallen",
+                    "--env-file",
+                    str(env_path),
+                    "--verify-reader",
+                ]
+            )
+        rc = provision_main(
+            [
+                "--program",
+                "fallen",
+                "--env-file",
+                str(env_path),
+                "--check",
+                "--render-sql-file",
+                str(sql_path),
+                "--write-env-file",
+                str(env_path),
+            ]
+        )
+        assert rc == 0
+        with src_admin.cursor() as cur:
+            cur.execute(sql_path.read_text(encoding="utf-8"))
+        rc = provision_main(
+            [
+                "--program",
+                "fallen",
+                "--env-file",
+                str(env_path),
+                "--verify-reader",
+            ]
+        )
+        assert rc == 0
+
+        # 4. Negative cases for Finding 2: read-only flag off, role memberships,
+        # predefined write roles, table write grants, excluded column grants, and unmirrored table grants.
+        with src_admin.cursor() as cur:
+            cur.execute('ALTER ROLE "hc_warehouse_reader" SET default_transaction_read_only = off')
+        with pytest.raises(RuntimeError, match="Expected transaction_read_only='on'"):
+            provision_main(["--program", "fallen", "--env-file", str(env_path), "--verify-reader"])
+        with src_admin.cursor() as cur:
+            cur.execute('ALTER ROLE "hc_warehouse_reader" SET default_transaction_read_only = on')
+
+        with src_admin.cursor() as cur:
+            cur.execute('GRANT "app_owner" TO "hc_warehouse_reader"')
+        with pytest.raises(RuntimeError, match="Unexpected role memberships"):
+            provision_main(["--program", "fallen", "--env-file", str(env_path), "--verify-reader"])
+
+        # Re-applying setup SQL automatically revokes stray role memberships.
+        with src_admin.cursor() as cur:
+            cur.execute(sql_path.read_text(encoding="utf-8"))
+        assert (
+            provision_main(["--program", "fallen", "--env-file", str(env_path), "--verify-reader"])
+            == 0
+        )
+
+        with src_admin.cursor() as cur:
+            cur.execute('GRANT "pg_write_all_data" TO "hc_warehouse_reader"')
+        with pytest.raises(RuntimeError, match="Unexpected role memberships"):
+            provision_main(["--program", "fallen", "--env-file", str(env_path), "--verify-reader"])
+        with src_admin.cursor() as cur:
+            cur.execute('REVOKE "pg_write_all_data" FROM "hc_warehouse_reader"')
+
+        with src_admin.cursor() as cur:
+            cur.execute('GRANT INSERT ON TABLE "public"."users" TO PUBLIC')
+        with pytest.raises(RuntimeError, match="Unexpected write privilege on public.users"):
+            provision_main(["--program", "fallen", "--env-file", str(env_path), "--verify-reader"])
+        with src_admin.cursor() as cur:
+            cur.execute('REVOKE INSERT ON TABLE "public"."users" FROM PUBLIC')
+
+        with src_admin.cursor() as cur:
+            cur.execute('GRANT SELECT ("hca_token") ON TABLE "public"."users" TO "hc_warehouse_reader"')
+        with pytest.raises(RuntimeError, match="Column privilege mismatch on public.users.hca_token"):
+            provision_main(["--program", "fallen", "--env-file", str(env_path), "--verify-reader"])
+        with src_admin.cursor() as cur:
+            cur.execute(sql_path.read_text(encoding="utf-8"))
+
+        with src_admin.cursor() as cur:
+            cur.execute(
+                'GRANT SELECT ON TABLE "public"."unmirrored_secret_table" TO "hc_warehouse_reader"'
+            )
+        with pytest.raises(
+            RuntimeError,
+            match="Unexpected SELECT privilege on unmirrored public.unmirrored_secret_table",
+        ):
+            provision_main(["--program", "fallen", "--env-file", str(env_path), "--verify-reader"])
+        with src_admin.cursor() as cur:
+            cur.execute(
+                'REVOKE ALL ON TABLE "public"."unmirrored_secret_table" FROM "hc_warehouse_reader"'
+            )
+
+        # 5. Live row-count comparison via CLI as hc_warehouse_reader (Finding 3).
+        rc = provision_main(
+            [
+                "--program",
+                "fallen",
+                "--env-file",
+                str(env_path),
+                "--compare-counts-json",
+                str(pre_counts_path),
+                "--record-counts-json",
+                str(post_counts_path),
+            ]
+        )
+        assert rc == 0
+        assert "owner-pass" not in pre_counts_path.read_text(encoding="utf-8")
+        assert "hc_warehouse_reader" not in post_counts_path.read_text(encoding="utf-8")
+
+        # Introduce a count mismatch beyond tolerance and confirm --compare-counts-json fails.
+        with src_admin.cursor() as cur:
+            for _ in range(10):
+                cur.execute('INSERT INTO "public"."users" ("id") VALUES (\'extra\')')
+        with pytest.raises(SystemExit, match="row-count parity failed"):
+            provision_main(
+                [
+                    "--program",
+                    "fallen",
+                    "--env-file",
+                    str(env_path),
+                    "--compare-counts-json",
+                    str(pre_counts_path),
+                ]
+            )
+
+        src_admin.close()
+        wh_admin.close()
+    finally:
+        subprocess.run(
+            [pg_ctl_bin, "-D", str(pgdata), "-m", "immediate", "stop"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
 
