@@ -212,16 +212,18 @@ PROJECT_SEARCH_SELECTION = dg.AssetSelection.groups("unified_ysws_db_processing"
 # already synced on a faster cadence by the jobs below).
 # warehouse_row_hashes is included - it dynamically depends on ALL other assets,
 # so Dagster will automatically run it last after all dependencies complete
+MAIN_JOB_SELECTION = (
+    dg.AssetSelection.all()
+    - dg.AssetSelection.assets(*EXCLUDED_FROM_MAIN_JOB)
+    - UNIFIED_YSWS_SELECTION
+    - FREQUENT_SELECTION
+    - HACKATIME_DAU_SELECTION
+    - PROJECT_SEARCH_SELECTION
+)
+
 materialize_all_assets_job = dg.define_asset_job(
     name="materialize_all_assets_job",
-    selection=(
-        dg.AssetSelection.all()
-        - dg.AssetSelection.assets(*EXCLUDED_FROM_MAIN_JOB)
-        - UNIFIED_YSWS_SELECTION
-        - FREQUENT_SELECTION
-        - HACKATIME_DAU_SELECTION
-        - PROJECT_SEARCH_SELECTION
-    ),
+    selection=MAIN_JOB_SELECTION,
     tags={
         "dagster/max_runtime": "21600",  # 6 h
         "orpheus/serial-job": "materialize_all_assets_job",
@@ -305,7 +307,95 @@ project_search_2h_schedule = _make_skip_if_running_schedule(
     cron_schedule="50 */2 * * *",                          # offset from hackatime :10 and all-assets :30
 )
 
-# 8. Wrap in a Definitions so Dagster can find it
+# 8. dbt marts catch-up.
+#
+# All dbt models run as ONE step (my_dbt_assets) inside materialize_all_assets_job,
+# and that step waits on every upstream sync it reads from. When any one of those
+# syncs fails, the step never runs and EVERY mart in the job goes stale, not just
+# the ones that read the broken source. From 2026-10-02 to 2026-10-13 an expired
+# LOOPS_SESSION_TOKEN (401 on loops_raw_audience) froze 32 marts this way,
+# including public_unified_analytics and the HCB YSWS true-spend tables.
+#
+# This sensor watches finished all-assets runs. When a scheduled run ends in
+# FAILURE or CANCELED and its dbt step never succeeded, it launches a dbt-only
+# run of the same marts. Upstream assets are not in that run, so it builds from
+# whatever the healthy syncs already committed (a broken source stays at its last
+# good load). It starts only after the all-assets run has finished, so it does
+# not overlap that run's syncs. On a normal run (dbt step succeeded) it does
+# nothing.
+DBT_MARTS_CATCHUP_SELECTION = MAIN_JOB_SELECTION & dg.AssetSelection.kind("dbt")
+DBT_STEP_KEY = "my_dbt_assets"
+DBT_CATCHUP_TRIGGER_STATUSES = [
+    dg.DagsterRunStatus.FAILURE,
+    dg.DagsterRunStatus.CANCELED,
+]
+
+materialize_dbt_marts_catchup_job = dg.define_asset_job(
+    name="materialize_dbt_marts_catchup_job",
+    selection=DBT_MARTS_CATCHUP_SELECTION,
+    tags={
+        "dagster/max_runtime": "7200",  # 2 h; the dbt step p50 is ~11 min
+        "orpheus/serial-job": "materialize_dbt_marts_catchup_job",
+    },
+)
+
+
+def _dbt_step_succeeded(instance: dg.DagsterInstance, run_id: str) -> bool:
+    records = instance.get_records_for_run(
+        run_id=run_id,
+        of_type=dg.DagsterEventType.STEP_SUCCESS,
+        limit=1000,
+    ).records
+    return any(
+        r.event_log_entry.step_key == DBT_STEP_KEY for r in records
+    )
+
+
+@dg.sensor(
+    name="dbt_marts_catchup_sensor",
+    job=materialize_dbt_marts_catchup_job,
+    minimum_interval_seconds=300,
+    default_status=dg.DefaultSensorStatus.RUNNING,
+)
+def dbt_marts_catchup_sensor(context: dg.SensorEvaluationContext):
+    instance = context.instance
+    in_flight = instance.get_runs(
+        filters=dg.RunsFilter(
+            job_name=materialize_dbt_marts_catchup_job.name,
+            statuses=IN_FLIGHT_STATUSES,
+        ),
+        limit=1,
+    )
+    if in_flight:
+        return dg.SkipReason(
+            f"dbt marts catch-up run {in_flight[0].run_id} is still in flight."
+        )
+
+    finished = instance.get_runs(
+        filters=dg.RunsFilter(
+            job_name=materialize_all_assets_job.name,
+            statuses=DBT_CATCHUP_TRIGGER_STATUSES,
+            tags={"dagster/schedule_name": materialize_all_assets_schedule.name},
+        ),
+        limit=1,
+    )
+    if not finished:
+        return dg.SkipReason("No failed or canceled scheduled all-assets run.")
+
+    run = finished[0]
+    # Only the newest finished run matters: an older one is superseded by it.
+    if _dbt_step_succeeded(instance, run.run_id):
+        return dg.SkipReason(
+            f"Run {run.run_id} ended {run.status.value} but its dbt step succeeded."
+        )
+    return dg.RunRequest(
+        # One catch-up per failed run; Dagster drops repeated run_keys.
+        run_key=f"dbt-marts-catchup-{run.run_id}",
+        tags={"orpheus/dbt-catchup-for-run": run.run_id},
+    )
+
+
+# 9. Wrap in a Definitions so Dagster can find it
 defs = dg.Definitions(
     jobs=[
         materialize_all_assets_job,
@@ -313,7 +403,9 @@ defs = dg.Definitions(
         materialize_hackatime_dau_job,
         materialize_frequent_job,
         materialize_project_search_job,
+        materialize_dbt_marts_catchup_job,
     ],
+    sensors=[dbt_marts_catchup_sensor],
     schedules=[
         materialize_all_assets_schedule,
         unified_ysws_15min_schedule,

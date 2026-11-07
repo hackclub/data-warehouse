@@ -293,3 +293,88 @@ class _FakeCookies:
 def test_image_fetch_swallows_connection_errors():
     # A dead connection must degrade to "no image", not kill the whole sync
     assert fetch_item_image_url(_ExplodingSession(), 12345) is None
+
+
+# ---------------------------------------------------------------------------
+# dbt marts catch-up sensor
+# ---------------------------------------------------------------------------
+
+from orpheus_engine.schedules import (  # noqa: E402
+    DBT_STEP_KEY,
+    dbt_marts_catchup_sensor,
+    materialize_all_assets_job,
+    materialize_dbt_marts_catchup_job,
+)
+
+
+def _fake_scheduled_main_run(instance, status, scheduled=True):
+    from dagster._core.storage.dagster_run import DagsterRun
+
+    tags = {"dagster/schedule_name": materialize_all_assets_schedule.name} if scheduled else {}
+    run = DagsterRun(job_name=materialize_all_assets_job.name, status=status, tags=tags)
+    instance.run_storage.add_run(run)
+    return run
+
+
+def _store_step_success(instance, run, step_key):
+    from dagster._core.events import DagsterEvent, DagsterEventType
+    from dagster._core.events.log import EventLogEntry
+    from dagster._core.execution.plan.objects import StepSuccessData
+
+    event = DagsterEvent(
+        event_type_value=DagsterEventType.STEP_SUCCESS.value,
+        job_name=run.job_name,
+        step_key=step_key,
+        event_specific_data=StepSuccessData(duration_ms=1.0),
+    )
+    instance.store_event(
+        EventLogEntry(
+            error_info=None,
+            level="INFO",
+            user_message="",
+            run_id=run.run_id,
+            timestamp=time.time(),
+            step_key=step_key,
+            job_name=run.job_name,
+            dagster_event=event,
+        )
+    )
+
+
+def _evaluate_sensor(instance):
+    context = dg.build_sensor_context(instance=instance)
+    return dbt_marts_catchup_sensor.evaluate_tick(context)
+
+
+class TestDbtMartsCatchupSensor:
+    def test_no_runs_skips(self, instance):
+        assert not _evaluate_sensor(instance).run_requests
+
+    def test_failed_run_without_dbt_triggers_catchup(self, instance):
+        run = _fake_scheduled_main_run(instance, dg.DagsterRunStatus.FAILURE)
+        _store_step_success(instance, run, "loops_raw_audience_downstream_other")
+        result = _evaluate_sensor(instance)
+        assert len(result.run_requests) == 1
+        assert result.run_requests[0].run_key == f"dbt-marts-catchup-{run.run_id}"
+
+    def test_canceled_run_without_dbt_triggers_catchup(self, instance):
+        _fake_scheduled_main_run(instance, dg.DagsterRunStatus.CANCELED)
+        assert len(_evaluate_sensor(instance).run_requests) == 1
+
+    def test_failed_run_whose_dbt_step_succeeded_skips(self, instance):
+        run = _fake_scheduled_main_run(instance, dg.DagsterRunStatus.FAILURE)
+        _store_step_success(instance, run, DBT_STEP_KEY)
+        assert not _evaluate_sensor(instance).run_requests
+
+    def test_successful_run_skips(self, instance):
+        _fake_scheduled_main_run(instance, dg.DagsterRunStatus.SUCCESS)
+        assert not _evaluate_sensor(instance).run_requests
+
+    def test_manual_subset_runs_are_ignored(self, instance):
+        _fake_scheduled_main_run(instance, dg.DagsterRunStatus.FAILURE, scheduled=False)
+        assert not _evaluate_sensor(instance).run_requests
+
+    def test_skips_while_catchup_in_flight(self, instance):
+        _fake_scheduled_main_run(instance, dg.DagsterRunStatus.FAILURE)
+        _fake_run(instance, materialize_dbt_marts_catchup_job.name, dg.DagsterRunStatus.STARTED)
+        assert not _evaluate_sensor(instance).run_requests
