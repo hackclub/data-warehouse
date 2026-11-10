@@ -100,15 +100,33 @@ def ensure_schema_and_tables(conn):
     conn.commit()
 
 
+def _jsonb_safe(value: Any) -> Any:
+    """Make every string Postgres jsonb can store: drop NUL characters and
+    replace lone UTF-16 surrogates (Airtable can return half an emoji), which
+    jsonb rejects as invalid JSON."""
+    if isinstance(value, str):
+        value = value.replace("\x00", "")
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            value = value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+        return value
+    if isinstance(value, dict):
+        return {_jsonb_safe(k): _jsonb_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonb_safe(v) for v in value]
+    return value
+
+
 def _clean_field_value(value: Any) -> Any:
     if isinstance(value, dict):
         if "specialValue" in value or "error" in value:
             return None
-    return value
+    return _jsonb_safe(value)
 
 
 def _clean_record_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: _clean_field_value(v) for k, v in fields.items()}
+    return {_jsonb_safe(k): _clean_field_value(v) for k, v in fields.items()}
 
 
 def fetch_with_retry(fn, *, max_attempts=30, log=None):
@@ -212,6 +230,12 @@ class WriteQueue:
         self._log = log
         self._total_bases_flushed = 0
         self._total_records_flushed = 0
+        self._skipped_records = 0
+
+    @property
+    def skipped_records(self) -> int:
+        """Records Postgres rejected even after cleaning; logged one by one."""
+        return self._skipped_records
 
     def push_base(self, row: Tuple):
         """Push a single base row (base_id, base_name, schema_json)."""
@@ -265,28 +289,55 @@ class WriteQueue:
             return
         rows = self._records_buf
         self._records_buf = []
+        # The buffer mixes rows from every base in flight. A failed batch used to
+        # drop all of them and blame whichever table triggered the flush, so
+        # whole bases (YSWS - Aria, 2026-11-10) never reached the warehouse.
+        # On a data error, retry row by row and skip only the rows Postgres rejects.
         conn = get_db_connection()
         try:
-            with conn.cursor() as cur:
-                execute_values(
-                    cur,
-                    f"""
-                    INSERT INTO {SCHEMA_NAME}.records
-                        (base_id, table_id, record_id, fields, _synced_at)
-                    VALUES %s
-                    ON CONFLICT (base_id, table_id, record_id) DO UPDATE SET
-                        fields = EXCLUDED.fields,
-                        _synced_at = EXCLUDED._synced_at
-                    """,
-                    [(r[0], r[1], r[2], r[3], self._run_ts) for r in rows],
-                    template="(%s, %s, %s, %s::jsonb, %s)",
-                    page_size=500,
+            try:
+                self._insert_records(conn, rows)
+                conn.commit()
+                written = len(rows)
+            except psycopg2.DataError as exc:
+                conn.rollback()
+                self._log.warning(
+                    f"Batch of {len(rows)} records failed ({type(exc).__name__}); retrying row by row"
                 )
-            conn.commit()
-            self._total_records_flushed += len(rows)
-            self._log.info(f"Flushed {len(rows)} records (total: {self._total_records_flushed})")
+                written = 0
+                for row in rows:
+                    try:
+                        self._insert_records(conn, [row])
+                        conn.commit()
+                        written += 1
+                    except psycopg2.DataError as row_exc:
+                        conn.rollback()
+                        self._skipped_records += 1
+                        self._log.warning(
+                            f"Skipped record {row[0]}/{row[1]}/{row[2]}: "
+                            f"{str(row_exc).splitlines()[0][:200]}"
+                        )
+            self._total_records_flushed += written
+            self._log.info(f"Flushed {written} records (total: {self._total_records_flushed})")
         finally:
             conn.close()
+
+    def _insert_records(self, conn, rows: List[Tuple]):
+        with conn.cursor() as cur:
+            execute_values(
+                cur,
+                f"""
+                INSERT INTO {SCHEMA_NAME}.records
+                    (base_id, table_id, record_id, fields, _synced_at)
+                VALUES %s
+                ON CONFLICT (base_id, table_id, record_id) DO UPDATE SET
+                    fields = EXCLUDED.fields,
+                    _synced_at = EXCLUDED._synced_at
+                """,
+                [(r[0], r[1], r[2], r[3], self._run_ts) for r in rows],
+                template="(%s, %s, %s, %s::jsonb, %s)",
+                page_size=500,
+            )
 
 
 def _stream_table_records(table, base_id: str, table_id: str, queue: WriteQueue) -> int:
@@ -303,7 +354,7 @@ def _stream_table_records(table, base_id: str, table_id: str, queue: WriteQueue)
     for page in table.iterate():
         for record in page:
             fields = _clean_record_fields(record.get("fields", {}))
-            rows.append((base_id, table_id, record["id"], json.dumps(fields).replace("\\u0000", "")))
+            rows.append((base_id, table_id, record["id"], json.dumps(fields)))
         if len(rows) >= 1_000:
             queue.push_records(rows)
             count += len(rows)
@@ -467,6 +518,7 @@ def airtable_raw_all_bases_sync(
             "records": MetadataValue.int(total_records),
             "base_errors": MetadataValue.int(base_errors),
             "table_errors": MetadataValue.int(table_errors),
+            "skipped_records": MetadataValue.int(queue.skipped_records),
             "deleted_bases": MetadataValue.int(deleted_bases),
             "deleted_records": MetadataValue.int(deleted_records),
         },
