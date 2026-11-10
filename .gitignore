@@ -24,3 +24,6 @@ prompt.txt
 
 # Private/transient agent workflow inputs
 .factory-scratch/
+
+# Agent scratch space: scripts, queries, results and notes. Never commit.
+/work/
