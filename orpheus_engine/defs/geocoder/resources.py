@@ -1,5 +1,13 @@
+import random
+import time
+
 import requests
 from dagster import ConfigurableResource, InitResourceContext, EnvVar
+
+# Gateway errors from the geocoder are usually momentary; retry them this many times
+GEOCODER_RETRY_STATUSES = {502, 503, 504}
+GEOCODER_MAX_RETRIES = 2
+
 
 class GeocodingError(Exception):
     """Custom exception for errors during geocoding operations."""
@@ -21,11 +29,15 @@ class GeocoderResource(ConfigurableResource):
             GeocodingError: If any error occurs during the geocoding API call.
         """
         try:
-            response = requests.get(
-                f"{self.base_url}/geocode",
-                params={"address": address, "key": self.api_key},
-                timeout=30
-            )
+            for attempt in range(GEOCODER_MAX_RETRIES + 1):
+                response = requests.get(
+                    f"{self.base_url}/geocode",
+                    params={"address": address, "key": self.api_key},
+                    timeout=30
+                )
+                if response.status_code not in GEOCODER_RETRY_STATUSES or attempt == GEOCODER_MAX_RETRIES:
+                    break
+                time.sleep(2 * (2 ** attempt) + random.uniform(0, 1))
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
