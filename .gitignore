@@ -21,3 +21,6 @@ prompt.txt
 **/.DS_Store
 .idea
 .claude/*.lock
+
+# Private/transient agent workflow inputs
+.factory-scratch/

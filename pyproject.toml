@@ -73,4 +73,4 @@ module_name = "orpheus_engine.definitions"
 code_location_name = "orpheus_engine"
 
 [tool.setuptools.packages.find]
-exclude=["orpheus_engine_tests"]
+exclude=["orpheus_engine_tests", "work", "work.*"]
