@@ -1591,7 +1591,7 @@ phantom_ht_claims AS (
     LEFT JOIN {{ source('phantom', 'provider_accounts') }} pa
         ON pa."user_id" = hp."user_id" AND pa."provider" = 'hackatime'
     LEFT JOIN ht_user_email m ON m.hackatime_user_id::text = pa."provider_account_id"
-    CROSS JOIN LATERAL unnest(string_to_array(hp."hackatime_projects", ',')) AS alias_val
+    CROSS JOIN LATERAL jsonb_array_elements_text(hp."hackatime_project_names"::jsonb) AS alias_val
     WHERE alias_val IS NOT NULL AND alias_val <> ''
 ),
 -- Half Life: journals, timelapse attachments and published reels all mark activity,
