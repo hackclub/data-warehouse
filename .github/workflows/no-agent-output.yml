@@ -1,0 +1,26 @@
+name: No agent output or data files
+
+# This repository is public. Reports, analyses and data pulls belong in a private repository,
+# and a file added by any pushed commit is published even if a later commit deletes it.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fail if Git tracks, or any pushed commit adds, work/, scratch or data files
+        run: |
+          base=${{ github.event.before || 'origin/main' }}
+          git cat-file -e "$base^{commit}" 2>/dev/null || base=$(git rev-list --max-parents=0 HEAD | tail -1)
+          # -m: what merge commits add too; git log leaves their diffs out by default
+          added=$(git log -m --no-renames --diff-filter=A --name-only --format= "$base..HEAD")
+          bad=$( { git ls-files; echo "$added"; } | sort -u | grep -E '^(work|scratch|\.factory-scratch|\.factory-evidence)/|\.(csv|tsv|xlsx|xls|parquet|duckdb|sqlite|jsonl)$' || true)
+          if [ -n "$bad" ]; then echo "$bad"; echo "Agent output or data files are tracked or added; see AGENTS.md"; exit 1; fi

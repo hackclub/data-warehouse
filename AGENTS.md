@@ -36,8 +36,9 @@ This is deployed on Coolify to the server `ssh root@warehouse.limited.selfhosted
 This repository is public. Always triple check your changes before commiting and pushing them. Never, ever publish secret data publicly - even stuff that may not feel private, like people's names in a test.
 
 ### Never commit agent scratch work
-- `work/` is local scratch space (scripts, SQL, query results, notes, decks). It is in `.gitignore`. Never commit it, never `git add -f` it, and never remove it from `.gitignore`.
+- Reports, decks, analyses and data pulls do not belong in this repository, which is public. Do them in a private repository. `work/` here is only throwaway scratch for warehouse code changes. It is in `.gitignore`. Never commit it, never `git add -f` it, and never remove it from `.gitignore`.
 - On 2026-11-10 two audit and analysis folders under `work/` were pushed to `main` and the history had to be rewritten. Don't repeat it.
 - Ship findings as a runbook in `runbooks/` or as code with tests, written for a public audience. Share raw evidence through private channels, not this repo.
 - Before every commit, run `git diff --cached --stat`. If any path starts with `work/`, `.factory-scratch/` or `scratch/`, unstage it.
 - `orpheus_engine_tests/test_no_scratch_tracked.py` fails if Git tracks any of those paths.
+- CI (`.github/workflows/no-agent-output.yml`) fails if Git tracks, or any pushed commit adds (merge commits included), `work/`, scratch folders or data files (CSV, spreadsheets, Parquet, DuckDB, SQLite, JSON Lines). It runs after the push, so check before pushing.
