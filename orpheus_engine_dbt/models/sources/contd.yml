@@ -4,9 +4,6 @@ sources:
   - name: contd
     schema: contd
     tables:
-      - name: __drizzle_migrations
-        description: "Contd __drizzle_migrations table."
-        meta: {dagster: {deps: [contd_warehouse_mirror]}}
       - name: airtable_exports
         description: "Contd airtable_exports table."
         meta: {dagster: {deps: [contd_warehouse_mirror]}}
@@ -25,6 +22,9 @@ sources:
       - name: devlogs
         description: "Contd devlogs table."
         meta: {dagster: {deps: [contd_warehouse_mirror]}}
+      - name: hackatime_activity
+        description: "Contd hackatime_activity table."
+        meta: {dagster: {deps: [contd_warehouse_mirror]}}
       - name: orders
         description: "Contd orders table."
         meta: {dagster: {deps: [contd_warehouse_mirror]}}
@@ -33,9 +33,6 @@ sources:
         meta: {dagster: {deps: [contd_warehouse_mirror]}}
       - name: review_events
         description: "Contd review_events table."
-        meta: {dagster: {deps: [contd_warehouse_mirror]}}
-      - name: sessions
-        description: "Contd sessions table."
         meta: {dagster: {deps: [contd_warehouse_mirror]}}
       - name: settings
         description: "Contd settings table."

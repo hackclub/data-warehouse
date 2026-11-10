@@ -1,15 +1,19 @@
 import dagster as dg
 from dagster_sling import SlingConnectionResource, SlingResource
-from dagster import EnvVar, Nothing
+from dagster import Nothing
+from .._helpers import _sling_connection_url
 
 
+# contd (Orchard: production_database, namespace ysws-contd).
 contd_db_connection = SlingConnectionResource(
     name="CONTD_DB",
     type="postgres",
-    connection_string=EnvVar("CONTD_DATABASE_URL"),
+    connection_string=_sling_connection_url("CONTD_K8S_URL"),
 )
 
 
+# Not mirrored: sessions, api_keys (key hashes) and drizzle.__drizzle_migrations.
+# settings holds only launch dates and coins_per_hour (checked 2026-10-31).
 contd_replication_config = {
     "source": "CONTD_DB",
     "target": "WAREHOUSE_DB",
@@ -20,21 +24,25 @@ contd_replication_config = {
     },
 
     "streams": {
-        "drizzle.__drizzle_migrations": None,
-        "public.airtable_exports": None,
+        "public.airtable_exports": {
+            # Full Unified export payload, contact details included
+            "select": ["-fields"],
+        },
         "public.audit_log": None,
         "public.beta_invite_links": {
-            "select": [
-                "-token",
-            ],
+            # Unused invite links still work
+            "select": ["-token"],
         },
         "public.cdn_uploads": None,
         "public.coin_ledger": None,
         "public.devlogs": None,
-        "public.orders": None,
+        "public.hackatime_activity": None,
+        "public.orders": {
+            # Shipping address
+            "select": ["-address"],
+        },
         "public.pool_projects": None,
         "public.review_events": None,
-        "public.sessions": None,
         "public.settings": None,
         "public.shop_items": None,
         "public.shop_requests": None,
@@ -44,9 +52,8 @@ contd_replication_config = {
         "public.submission_activity": None,
         "public.submissions": None,
         "public.users": {
-            "select": [
-                "-hackatime_token",
-            ],
+            # address JSON holds street, postcode and region
+            "select": ["-hackatime_token", "-address"],
         },
     },
 }
@@ -61,8 +68,8 @@ def contd_warehouse_mirror(
     context: dg.AssetExecutionContext,
     sling: SlingResource,
 ) -> Nothing:
-    """Replicates the entire Contd DB → warehouse in a single shot."""
-    context.log.info("Starting Contd → warehouse Sling replication")
+    """Replicates the contd DB → warehouse in a single shot."""
+    context.log.info("Starting contd → warehouse Sling replication")
 
     for _ in sling.replicate(
         context=context,

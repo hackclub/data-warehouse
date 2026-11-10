@@ -269,9 +269,8 @@ WITH program_windows AS (
                    NULL::timestamptz),
         ('contd', TIMESTAMP WITH TIME ZONE '2026-10-01 00:00:00+00',
                    NULL::timestamptz)
-    
-    
-    
+
+
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
@@ -1897,6 +1896,17 @@ mipmap_ht_claims AS (
     WHERE hp."name" IS NOT NULL AND hp."name" <> ''
 ),
 
+-- contd stores Hackatime project names per remake in submissions.hackatime_projects
+-- (text[]) with the owner's Hackatime user id copied onto the same row
+-- (submissions.hackatime_id), so claims resolve id → email via ht_user_email.
+-- Every alias row belongs to one remake (FK user_id → users), so this is not the
+-- all-projects mirror trap. Drafts count, matching contd's own DAU job.
+-- Quality controls:
+--   * banned users excluded (users.banned; banned users can't sign in).
+--   * remakes rejected as fraud excluded: legacy auto-rejections
+--     (review_events.kind = 'fraud.reject') and Robert flags a 2nd-pass reviewer
+--     confirmed (kind = 'reject', meta.proposedBy = 'robert'). Ordinary
+--     rejections and unconfirmed Robert flags are not adjudicated fraud.
 contd_ht_claims AS (
     SELECT 'contd'::text AS program_name,
         CASE WHEN POSITION('@' IN LOWER(BTRIM(m.hackatime_first_email))) > 0
@@ -1905,13 +1915,22 @@ contd_ht_claims AS (
              ELSE SPLIT_PART(LOWER(BTRIM(m.hackatime_first_email)), '+', 1)
         END AS user_email,
         LOWER(BTRIM(alias_val)) AS hackatime_alias,
-        NULL::text AS project_name,
-        NULL::text AS code_url,
+        hp."title" AS project_name,
+        NULLIF(BTRIM(hp."repo_url"), '') AS code_url,
         hp."created_at" AT TIME ZONE 'UTC' AS claim_start_ts
     FROM {{ source('contd', 'submissions') }} hp
-    JOIN ht_user_email m ON m.hackatime_user_id = hp."hackatime_id"
+    JOIN {{ source('contd', 'users') }} u ON u."id" = hp."user_id"
+    JOIN ht_user_email m ON m.hackatime_user_id::text = hp."hackatime_id"::text
     CROSS JOIN LATERAL unnest(hp."hackatime_projects"::text[]) AS alias_val
     WHERE alias_val IS NOT NULL AND alias_val <> ''
+      AND hp."hackatime_id" IS NOT NULL AND hp."hackatime_id" <> ''
+      AND NOT COALESCE(u."banned", false)
+      AND NOT EXISTS (
+          SELECT 1 FROM {{ source('contd', 'review_events') }} e
+          WHERE e."submission_id" = hp."id"
+            AND (e."kind" = 'fraud.reject'
+                 OR (e."kind" = 'reject' AND e."meta"::jsonb->>'proposedBy' = 'robert'))
+      )
 ),
 
 all_claims_raw AS (
