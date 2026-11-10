@@ -276,8 +276,8 @@ WITH program_windows AS (
                    NULL::timestamptz),
         ('contd', TIMESTAMP WITH TIME ZONE '2026-10-01 00:00:00+00',
                    NULL::timestamptz)
-
-
+    
+    
     ) AS t(program_name, start_at, end_at_exclusive)
 ),
 
