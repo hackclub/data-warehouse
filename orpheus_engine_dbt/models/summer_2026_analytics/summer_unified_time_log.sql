@@ -1577,10 +1577,10 @@ high_seas_ht_claims AS (
 -- ============================================================
 phantom_ht_claims AS (
     SELECT 'phantom'::text AS program_name,
-        CASE WHEN POSITION('@' IN LOWER(BTRIM(u."email"))) > 0
-             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(u."email")), '@', 1), '+', 1)
-                  || '@' || SPLIT_PART(LOWER(BTRIM(u."email")), '@', 2)
-             ELSE SPLIT_PART(LOWER(BTRIM(u."email")), '+', 1)
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(COALESCE(m.hackatime_first_email, u."email")))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(COALESCE(m.hackatime_first_email, u."email"))), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(COALESCE(m.hackatime_first_email, u."email"))), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(COALESCE(m.hackatime_first_email, u."email"))), '+', 1)
         END AS user_email,
         LOWER(BTRIM(alias_val)) AS hackatime_alias,
         NULL::text AS project_name,
@@ -1588,6 +1588,9 @@ phantom_ht_claims AS (
         hp."created_at" AT TIME ZONE 'UTC' AS claim_start_ts
     FROM {{ source('phantom', 'projects') }} hp
     JOIN {{ source('phantom', 'users') }} u ON u."id" = hp."user_id"
+    LEFT JOIN {{ source('phantom', 'provider_accounts') }} pa
+        ON pa."user_id" = hp."user_id" AND pa."provider" = 'hackatime'
+    LEFT JOIN ht_user_email m ON m.hackatime_user_id::text = pa."provider_account_id"
     CROSS JOIN LATERAL unnest(string_to_array(hp."hackatime_projects", ',')) AS alias_val
     WHERE alias_val IS NOT NULL AND alias_val <> ''
 ),
