@@ -40,6 +40,10 @@ RETRY_BACKOFF_SECONDS = 0.25
 # fast with a clear error instead of hanging an interactive request.
 POOL_ACQUIRE_TIMEOUT_SECONDS = 10.0
 
+# AdminShutdown, CrashShutdown and CannotConnectNow. A running query dies with these
+# when its backend ends, whatever the login's limits are.
+CONNECTION_LOST_SQLSTATES = {"57P01", "57P02", "57P03"}
+
 
 # SQL statements that are never allowed, even with read-only connection
 DANGEROUS_PATTERNS = [
@@ -278,6 +282,19 @@ def validate_sql(sql: str) -> None:
             )
 
 
+def is_connection_lost(error: psycopg.OperationalError) -> bool:
+    """
+    True if the connection is gone, so the same query can succeed on a new one.
+
+    Other OperationalErrors are the server refusing this query: a statement or lock
+    timeout, temp_file_limit, a full disk. Running it again repeats the same damage,
+    such as queuing behind a TRUNCATE or spilling to disk again.
+    """
+    # A socket cut without a word from the server has no SQLSTATE.
+    state = error.sqlstate
+    return state is None or state.startswith("08") or state in CONNECTION_LOST_SQLSTATES
+
+
 def get_connection_url() -> str:
     """Get the warehouse connection URL from environment."""
     url = os.environ.get('WAREHOUSE_COOLIFY_URL')
@@ -433,9 +450,7 @@ class Database:
                 # surface it immediately rather than hanging the request.
                 raise
             except psycopg.OperationalError as e:
-                # OperationalError covers severed/closed connections. Don't
-                # retry a deliberately cancelled query (e.g. statement timeout).
-                if isinstance(e, psycopg.errors.QueryCanceled) or attempt >= MAX_QUERY_ATTEMPTS:
+                if not is_connection_lost(e) or attempt >= MAX_QUERY_ATTEMPTS:
                     raise
                 logger.warning(
                     "Connection error on query attempt %d/%d, retrying: %s",

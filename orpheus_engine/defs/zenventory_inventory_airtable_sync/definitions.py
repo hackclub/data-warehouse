@@ -3,7 +3,8 @@ Zenventory Inventory -> Airtable Sync
 
 Reads items and inventory from the PostgreSQL warehouse (written by the
 agh_fulfillment_zenventory assets), joins them to compute total in-stock
-quantities per SKU, and upserts to Airtable using SKU as the match key.
+quantities per SKU (less any placed order units Zenventory has not picked
+yet), and upserts to Airtable using SKU as the match key.
 
 Also syncs item images from Zenventory's web app (images are publicly
 accessible) to populate the Airtable Picture field.
@@ -55,13 +56,23 @@ INVENTORY_QUERY = """
         WHERE i.sku IS NOT NULL AND i.sku != ''
         GROUP BY i.id, i.sku, i.description, i.unit_cost
     ),
+    -- Zenventory picks placed orders (order_placed = true) immediately, and
+    -- picked units are already out of inventory in_stock. Only subtract the
+    -- placed-but-unpicked remainder so real backorders still show negative;
+    -- draft orders (order_placed = false) hold no stock and are ignored.
     committed AS (
         SELECT
             item->>'sku' AS sku,
-            SUM((item->>'quantity')::int) AS committed_qty
+            SUM(GREATEST(
+                COALESCE((item->>'orderQuantity')::numeric, (item->>'quantity')::numeric, 0)
+                    - COALESCE((item->>'pickedQuantity')::numeric, 0),
+                0
+            ))::int AS committed_qty
         FROM agh_fulfillment_zenventory.customer_orders co,
              jsonb_array_elements(co.items) AS item
-        WHERE co.completed = false AND co.cancelled = false
+        WHERE co.completed = false
+          AND co.cancelled = false
+          AND co.order_placed = true
         GROUP BY item->>'sku'
     )
     SELECT

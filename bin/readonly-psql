@@ -1,6 +1,8 @@
 #!/bin/bash
 # 
-# Run a readonly SQL query against the data warehouse.
+# Run a readonly SQL query against the data warehouse. In the parent repo's .env,
+# WAREHOUSE_COOLIFY_URL logs in as hc_warehouse_agent, which has no write privileges
+# on existing tables; for a write see bin/warehouse-admin-psql.
 #
 # Usage:
 #   ./bin/readonly-psql 'SELECT * FROM some_table LIMIT 10;'

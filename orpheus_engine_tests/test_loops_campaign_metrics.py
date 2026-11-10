@@ -234,3 +234,39 @@ def test_weekly_branch_covers_campaigns_sent_one_to_two_weeks_ago():
 
     assert "(sent_at < NOW() - INTERVAL '1 week'" in source
     assert "INTERVAL '2 weeks'" not in source
+
+
+def test_expired_cookie_fails_the_run_and_keeps_earlier_campaigns(harness):
+    # 2026-10-02: the cookie expired mid-run; each later campaign was logged
+    # as a per-campaign failure and the run still succeeded.
+    harness.raise_on_fetch["b"] = loops_defs.LoopsAuthError("HTTP 401")
+
+    with pytest.raises(loops_defs.LoopsAuthError):
+        _run(_due("a", "b", "c"))
+
+    assert ("stamp", "a") in harness.events
+    assert ("stamp", "b") not in harness.events
+    assert ("resolve", "c") not in harness.events
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_metrics_page_raises_auth_error_on_rejected_cookie(monkeypatch, status):
+    response = SimpleNamespace(status_code=status, text='{"error":"UNAUTHORIZED"}')
+    monkeypatch.setattr(loops_defs.requests, "get", lambda *a, **k: response)
+
+    with pytest.raises(loops_defs.LoopsAuthError, match="LOOPS_SESSION_TOKEN"):
+        loops_defs._fetch_campaign_metrics_page("token", "msg-a")
+
+
+def test_incomplete_campaigns_are_due_daily_and_first():
+    # 2026-10-02: a 401 at page 1,199 left "Dev @ Haven Orgwide Announcement"
+    # with 119,900 of 243,779 recipients, stamped as fetched for 30 days.
+    source = inspect.getsource(
+        loops_defs.loops_campaigns_needing_metrics_fetch.op.compute_fn.decorated_fn
+    )
+
+    assert "COALESCE(rc.recipients, 0) < sent_count * 0.98" in source
+    order_by = source.split("ORDER BY", 1)[1]
+    assert order_by.index("IS NULL DESC") < order_by.index("sent_count * 0.98") < order_by.index(
+        "metrics_last_fetched_at\n"
+    )

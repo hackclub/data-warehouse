@@ -1,12 +1,15 @@
 import dagster as dg
 from dagster_sling import SlingConnectionResource, SlingResource
-from dagster import EnvVar, Nothing
+from dagster import Nothing
+from .._helpers import _sling_connection_url
 
 
+# Attend moved from Coolify to Orchard in 2026-08. The env var keeps its old
+# name; point it at the Orchard database (attend-db, namespace ysws-attend).
 attend_db_connection = SlingConnectionResource(
     name="ATTEND_DB",
     type="postgres",
-    connection_string=EnvVar("ATTEND_COOLIFY_URL"),
+    connection_string=_sling_connection_url("ATTEND_COOLIFY_URL"),
 )
 
 
@@ -114,9 +117,11 @@ attend_replication_config = {
                 "departure_airport", "departure_time", "flight_code", "position",
                 "travel_id", "updated_at", "live_status", "live_departure_time",
                 "live_arrival_time", "live_data", "last_tracked_at",
-                "airport_picked_up_at", "picked_up_by_user_id",
+                "travel_picked_up_at", "picked_up_by_user_id",
                 "oag_schedule_instance_key", "oag_flight_data",
             ],  # Excludes confirmation_code (PNR grants booking access)
+                # Renamed upstream (2026-08-24): airport_picked_up_at ->
+                # travel_picked_up_at.
         },
         "public.accommodations": {
             "select": [

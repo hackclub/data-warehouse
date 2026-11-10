@@ -7,7 +7,11 @@ fixes that came out of it).
 
 Connection strings referenced here live in `.env` (parent repo if you are on a
 worktree): `PROD_DAGSTER_DB_URL` (Dagster instance DB) and
-`WAREHOUSE_COOLIFY_URL` (warehouse Postgres).
+`WAREHOUSE_COOLIFY_URL` (warehouse Postgres). In that `.env`,
+`WAREHOUSE_COOLIFY_URL` is the agents' login `hc_warehouse_agent`, which cannot
+change existing data; §10 lists what it can do and the elevated route for the
+rest. `PROD_DAGSTER_DB_URL` is the read-only login `dagster_reader`; §11 lists
+what it can do and the route for the rest.
 
 ## 1. Is the run queue healthy?
 
@@ -69,6 +73,9 @@ FROM event_logs
 WHERE step_key='<asset name>' AND timestamp > now() - interval '30 days';
 ```
 
+A `check_warehouse_reader_grants` failure means a program's reader login has
+drifted from its config: see §9.
+
 ## 3. Is the warehouse Postgres wedged?
 
 ```sql
@@ -106,12 +113,17 @@ Interpretation guide:
   backends stuck for 3+ hours, "sorry, too many clients already" errors, run
   queue 18 deep. Real backups are pgBackRest (physical, lock-free) on the
   host's systemd timers — a logical pg_dump of the whole DB should never run
-  against prod. If one is mid-flight and wedging everything:
-  `SELECT pg_terminate_backend(<pid>);` after confirming pgBackRest is green
-  (`pgbackrest --stanza=warehouse info` inside the postgres container).
+  against prod. If one is mid-flight and wedging everything: confirm pgBackRest
+  is green (`pgbackrest --stanza=warehouse info` inside the postgres container),
+  then
+  `bin/warehouse-admin-psql --reason "stuck pg_dump" -c "SELECT pg_terminate_backend(<pid>);"`.
+  The agents' login is refused here because the session is a superuser's (§10).
 - "sorry, too many clients already" on its own usually means orphaned/blocked
   connections accumulating; see the reaper settings notes in the team memory
-  (idle_in_transaction_session_timeout + tcp keepalives are configured).
+  (idle_in_transaction_session_timeout + tcp keepalives are configured). In this
+  state the agents' login cannot connect, so run the queries above with
+  `bin/warehouse-admin-psql --reason "too many clients triage" -c "<query>"`,
+  which uses a slot reserved for superusers.
 
 ## 4. Known failure signatures (fixed, but watch for regressions)
 
@@ -150,3 +162,458 @@ SELECT count(*), min(create_timestamp) FROM runs;  -- oldest should approach the
   run monitoring kill it (both configured in `orpheus_engine/schedules.py`).
 - Coolify rebuilds ALL repo services on any push to main (no path filtering),
   and a redeploy during a backup window kills in-flight `docker exec` backups.
+
+## 7. Cut over Half Life, Macondo, Auth and Theseus
+
+Code changes alone do not restore these mirrors. Perform this procedure only
+in the authorized deployment step, after code review. Never record URLs,
+passwords, key material, or row data in this public repository.
+
+### Prerequisites and credential repair
+
+1. Inspect the queue (§1), active mirror writers, and backup activity (§3).
+   Save the current deployment configuration securely outside Git for rollback.
+   Read the latest `STEP_FAILURE` cause chain (§2) before acting.
+2. Confirm the app's current database identity and the endpoint reachable from
+   the warehouse for each source. Macondo must use Orchard `macondo-prod-pg18`.
+   Establish Theseus's active database from its app configuration, then compare
+   distinctive tables and source timestamps; a name match is insufficient.
+3. Determine all consumers of Half Life's failing login before changing it.
+   If dedicated to warehouse reads, rotate its password and preserve read-only
+   grants. If shared with the app, leave its password unchanged: create a
+   dedicated read-only warehouse login, or use the verified current password
+   in the warehouse configuration. If ownership is unresolved, stop that change.
+   Verify CONNECT, schema USAGE and SELECT for every configured stream, with
+   no write grants or privileged role memberships.
+4. Restore Auth's dedicated `warehouse_sync` credential and verify its read-only
+   grants on the four configured tables. Preserve Auth's SSH tunnel and key.
+5. Compare all configured streams and selected columns with the live source
+   schemas, including exclusions and disabled sensitive tables. Do not widen
+   a sensitive-column allow-list to make a query pass.
+
+### Configuration and deployment
+
+- Save `HALF_LIFE_DATABASE_URL`, `AUTH_DB_PASSWORD` (and any changed `AUTH_DB_*`
+  fields), `MACONDO_K8S_URL` and `THESEUS_K8S_URL` in **Coolify's UI env store**,
+  then reconcile the host application `.env`. Host-only edits are overwritten
+  by Coolify. Reconcile the previously repaired Attend/Fallen values into the
+  UI store too, so deployment cannot undo those repairs.
+- Use the public Orchard endpoints with verified TLS. The shared
+  `_sling_connection_url` helper removes `sslrootcert=system` for Sling while
+  retaining `sslmode=verify-full`; store the original URL in Coolify.
+- Deploy the reviewed revision using the existing `docker_deploy/` setup in a
+  quiet window. A restart can cancel runs and backups. Verify the deployed
+  revision and privately compare fingerprints of stored and running values.
+  Check for orphaned containers; do not leave two schedulers running.
+- Materialize only the four repaired mirrors, with no concurrent writers.
+  Half Life, Macondo and Theseus already use full refresh. Auth is incremental:
+  perform a one-off full refresh of its four configured streams with the same
+  selections, including `oauth_access_tokens` whose cursor is `created_at`.
+  This recovers outage gaps and edits/deletes that an incremental retry misses.
+  Keep this override out of the normal scheduled configuration.
+- After successful cutover, delete `MACONDO_COOLIFY_URL`,
+  `THESEUS_COOLIFY_URL`, `THESEUS_SSH_TUNNEL` and
+  `THESEUS_SSH_PRIVATE_KEY_B64` from **both** Coolify's env store and the host
+  `.env`. Reconcile containers through the existing deployment process. Verify
+  these variables are absent from running containers and that
+  `AUTH_SSH_PRIVATE_KEY_B64` remains available to Auth alone.
+
+### Acceptance and rollback
+
+For each mirror, require a new `ASSET_MATERIALIZATION` event (§2) after deployment,
+then compare source and warehouse counts for every configured stream and maximum
+creation/update timestamps (notably Auth activities and Theseus letters). Check
+source identity and timestamps even for green runs: a frozen pre-migration copy
+can sync successfully. Require a subsequent scheduled success, and repeat all
+checks after any cleanup deployment. Record aggregate results privately; a build
+test is not production verification.
+
+If a deployment fails, restore the prior reviewed image and required connection
+settings from the secure configuration record. Deleted old settings must be
+explicitly restored when needed by old code. Never restore a revoked password;
+use a working read credential. Recheck run events and freshness after rollback.
+
+Build investigation on 2026-10-30 UTC confirmed production failures for all four
+mirrors. Last materializations in the preceding 60 days were Oct 15 for Half
+Life and Theseus, Oct 2 for Macondo, and none for Auth. Orchard lists
+`macondo-prod-pg18`.
+
+Follow-up on 2026-10-30 UTC established that Half Life's Orchard app uses the
+same database login as the failing warehouse connection. It is also the
+Orchard database owner. **Do not rotate this shared app password.** Provision
+a dedicated warehouse reader with CONNECT, schema USAGE and SELECT only,
+verify its grants and stream access, then save its URL in Coolify before
+cutover. The Half Life database reports healthy and its app pod reports ready.
+
+### Theseus Orchard source access gate
+
+A prior investigation on 2026-10-14 confirmed Orchard deployments for the live
+Theseus app but found that the connected account could not access their project.
+Cross-project Orchard searches on 2026-10-30 UTC for `theseus` and
+`mail.hackclub.com` returned no results. That does not overturn the earlier
+Orchard finding or establish the live database identity.
+
+Read-only inspection on 2026-10-30 UTC found a Theseus-related database Compose
+configuration on the legacy source host, a retained PostgreSQL 17 volume, and no
+container attached to that volume. Treat this as the likely old copy, not the
+authoritative source for the warehouse. Its freshness remains unverified.
+
+Before repointing the warehouse:
+
+1. Obtain access to the live Theseus Orchard project, or obtain a dedicated
+   read-only database URL through a secure channel. Verify the live app's
+   database configuration to establish the authoritative Orchard database.
+2. Validate the reader's grants, configured streams and sensitive-column
+   selections. Compare source counts and maximum creation/update timestamps,
+   especially for letters, against the warehouse's September snapshot. Confirm
+   the source is current before allowing a full refresh; a successful connection
+   alone does not establish freshness.
+3. Save the verified URL as `THESEUS_K8S_URL` in Coolify's UI env store, then
+   follow the configuration, deployment and acceptance steps above. Keep
+   endpoints, credentials and aggregate verification results in the private
+   deployment record.
+
+If evidence indicates the old volume is needed, stop and raise a separate
+question for approval of application database recovery. Recovery of that volume,
+recreation of the app database service and changes to application workers are
+outside this warehouse connection repair.
+
+No database recovery, credential mutation, Coolify edit, deployment or backfill
+was performed during this follow-up investigation. Until source access and
+freshness are verified, the Theseus cutover remains blocked. All four mirrors,
+the Auth backfill and production acceptance checks remain incomplete.
+
+## 8. Adding an Orchard program mirror
+
+A program mirror is one module, `orpheus_engine/defs/sling/programs/<name>.py`,
+exporting `<name>_db_connection`, `<name>_replication_config` and
+`<name>_warehouse_mirror`; `assets.py` discovers it. Copy `fallen.py`: full
+refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
+
+1. **Public endpoint, starting URL, and streams.** The database's public
+   endpoint may be off: check `get_database` in Orchard, turn it on with
+   `enable_database_public` if needed, and verify the listed
+   `<publicHost>:<publicPort>` answers (`nc -z`). A listed port that does not
+   answer comes back after disabling and re-enabling public access (Haven
+   booking's did). Copy `.env` to a scratch file `<staged.env>` (under
+   `umask 077`). For a new copy that has no saved URL in `.env` yet, seed
+   `<NAME>_K8S_URL` in `<staged.env>` with the database's public connection URL
+   from `get_database` (`postgresql://<user>:<password>@<publicHost>:<publicPort>/<dbName>?sslmode=verify-full&sslrootcert=system`)
+   so Step 2 has the endpoint and a login that can read the catalog before
+   `hc_warehouse_reader` exists; for an existing mirror, `<staged.env>` already
+   has `<NAME>_K8S_URL` (or `ATTEND_COOLIFY_URL` for Attend). List every table
+   explicitly and exclude columns with `-col`. Leave out session, token,
+   OTP/verification, rate-limit, cache, migration and backup tables. Drop
+   tokens, passwords, encrypted values, join/share codes, IP addresses, street
+   address lines, postcodes, phone numbers and tracking numbers; keep names,
+   email, birthday, city, state and country. Check every stream and `-col`
+   against the live schema (`--check` in Step 2), then add the module to
+   `test_sling_orchard_connections.py` and `test_sling_program_exclusions.py`.
+   Column names do not show secrets stored as row values: for every mirrored
+   key/value settings table, list its key names (never the values) and leave
+   the table out if any is a credential, adding it to `UNMIRRORED_TABLES`
+   (Coral's `app_settings` holds an Anthropic auth token).
+2. **Reader login.** Never use the app's own login as the warehouse mirror
+   credential. Run
+   `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <staged.env> --check --render-sql-file <scratch.sql> --write-env-file <staged.env>`
+   which connects with the starting login in `<staged.env>` (`get_database`'s
+   login on initial setup, or the existing login / `hc_warehouse_reader` on a
+   later switch or after losing the password; this always creates a new
+   password, so use the grants-only refresh in step 3 for column changes) to
+   inspect the live `pg_catalog` schema
+   (automatically resolving system CA certificates for `psycopg2-binary` and
+   seeing all tables and columns regardless of caller table/column privileges),
+   derives the exact table and column grants from `<name>_replication_config`,
+   renders the single-transaction SCRAM-SHA-256 setup SQL to `<scratch.sql>`,
+   and overwrites `<NAME>_K8S_URL` in `<staged.env>` with the new
+   `hc_warehouse_reader` URL in Orchard's public-endpoint shape with
+   `sslmode=verify-full&sslrootcert=system` (`--write-env-file` is required with
+   `--render-sql-file` so a generated password is never discarded). In the
+   database's primary pod, named by `get_database`
+   `clusterStatus.currentPrimary` (not always `pg-<cluster>-1`: contd's is
+   `pg-production-database-2`), through `exec_in_pod` with container `postgres`,
+   execute `<scratch.sql>` (`psql -U postgres -d <dbName> -v ON_ERROR_STOP=1`)
+   in one transaction: `CREATE ROLE hc_warehouse_reader LOGIN CONNECTION LIMIT 4
+   PASSWORD '<SCRAM-SHA-256 verifier>'`, `ALTER ROLE … SET
+   default_transaction_read_only = on`, `GRANT CONNECT` on the database, `USAGE`
+   on `public`, and `SELECT` on exactly the mirrored tables (`attend`, `fallen`,
+   `horizons` and `midnight` use this same `hc_warehouse_reader` setup).
+   Generate the password locally and send only its SCRAM verifier, so the
+   plaintext never reaches the pod or Orchard's audit log. For tables with
+   `-col` exclusions or positive `select` allow-lists, grant
+   `SELECT (<kept columns>)` instead of the whole table, then confirm a Sling
+   run still reads them; if Sling selects `*` and fails, fall back to a table
+   grant and record that the excluded columns stay readable by the login (for
+   Horizons `public.user_sessions`, `hc_warehouse_reader` retains `SELECT` on
+   `id` because Postgres computes the SHA-256 digest on the source server).
+   Verify over the public endpoint as `hc_warehouse_reader` with
+   `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <staged.env> --verify-reader`:
+   `has_column_privilege` is true on kept columns and false on excluded columns
+   and on every column of unmirrored tables, no write privileges or `pg_auth_members` role
+   memberships exist, and a real `INSERT` over the public endpoint fails (both
+   in the default read-only session and after `SET TRANSACTION READ WRITE`).
+3. **The login or its column grants can go stale.** The role is created outside
+   Orchard: restoring or recreating the database cluster drops it, an app
+   migration that drops and recreates a table drops that table's grant, and an
+   app migration that adds a new column to a table with `-col` exclusions leaves
+   `hc_warehouse_reader` without `SELECT` on the new column. The mirror stays
+   green and the warehouse lacks the column; §9's daily check reports it.
+   - **Lost login** (a login error after the role was dropped): rerun step 2,
+     apply `<scratch.sql>`, verify, then save the new URL as in step 4.
+   - **Stale grants** (`permission denied` or a §9 finding): first decide
+     whether a new column is sensitive, using the rules in step 1. If it is, add
+     a `-col` for it to the config and land that; the column stays ungranted, so
+     no grant change is needed. If it is not, or the reader can read a column it
+     should not, run
+     `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <staged.env> --refresh-grants-sql-file <scratch.sql>`
+     (the existing `hc_warehouse_reader` URL can read the full `pg_catalog`
+     schema). It renders one transaction of `REVOKE` and `GRANT` on the mirrored
+     tables and leaves the role, password and URL alone, so there is no URL to
+     save. Apply `<scratch.sql>` on the primary pod as in step 2, verify with
+     `--verify-reader --env-file <staged.env>`, then materialize the mirror and
+     confirm the warehouse has the column, comparing names case-insensitively
+     because the warehouse column's case can differ from the source's.
+     Incremental streams only fill the new column on rows updated after the
+     grant; older rows need a full refresh of that stream.
+4. **Save the URL, deploy, verify row-count parity, and roll back on failure.**
+   Save the verified `<NAME>_K8S_URL` (or `ATTEND_COOLIFY_URL` for Attend)
+   written by `--write-env-file` in `<staged.env>` in Coolify's UI env store
+   (host-only `.env` edits are reverted: a subsequent Coolify deploy overwrites
+   `/data/coolify/applications/<app-uuid>/.env` and can silently restore the
+   previous write-capable login unless Coolify's UI env store or a persistent
+   host env file outside Coolify's rewrite path is updated) and the parent
+   repo's `.env`. Then deploy the reviewed revision and verify as in §7
+   (build/deploy the reviewed image first, then write the updated URL to the
+   host `.env` before starting the container, verify the running image revision
+   and env fingerprints, and remove any orphaned container), including a new
+   materialization and source/warehouse row-count parity. When switching an
+   existing mirror to
+   `hc_warehouse_reader`, back up the host `.env` and `docker-compose.yaml`
+   first, record baseline source and warehouse row counts before the switch with
+   `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <pre.env> --record-counts-json <pre-counts.json>`,
+   materialize the asset after deploying the reviewed revision and restarting,
+   and verify post-switch row counts with
+   `PYTHONPATH=. .venv/bin/python scripts/provision_warehouse_reader.py --program <name> --env-file <post.env> --compare-counts-json <pre-counts.json> --record-counts-json <post-counts.json>`
+   (full refresh matches within live-write tolerance; incremental streams do
+   not regress below baseline warehouse counts or drift in their
+   source-to-warehouse gap). After verification passes, update the Vaultwarden
+   `.env` notes. If a cutover fails verification, roll back by restoring the
+   backed-up host `.env` and `docker-compose.yaml` (and parent `.env`),
+   restarting the container, and confirming no orphaned container remains.
+
+## 9. Reader grant drift
+
+`warehouse_reader_grant_drift_job` runs daily at 06:20 ET
+(`warehouse_reader_grant_drift_schedule`, on by default). It finds enabled
+program modules whose URL logs in as `hc_warehouse_reader` and compares each
+`-col` stream's grants, derived from the config, with `has_column_privilege`. It
+reads catalog metadata only, in a read-only session with timeouts, using one of
+the login's 4 connections, and it never grants anything. Allow-list, `sql:` and
+whole-table streams are not checked: a new column cannot change what an
+allow-list copies. Programs on any other login are skipped and logged.
+
+A failure appears in the §2 queries as step `check_warehouse_reader_grants`,
+naming programs, tables and columns (no URLs or row values). `run_retries` runs a
+failed job once more, so each failing day counts two `STEP_FAILURE` events.
+
+| Message | Meaning | Fix |
+| --- | --- | --- |
+| `kept column not granted` | A column the mirror should copy is missing from the warehouse, usually after an app migration | §8 step 3, stale grants |
+| `excluded column is readable` | The reader can read a column the config excludes | §8 step 3 refresh, then find out who granted it |
+| `config no longer matches the source` | The table is gone, or a `-col` names a column that no longer exists | Update the program config, and refresh grants if the kept columns changed |
+| `could not check` | Connection failed or the catalog query timed out; only the error type is shown | Check the endpoint and the connection limit. A one-off collision with a running mirror clears on the next run |
+| `No program was checked` | No URL logs in as `hc_warehouse_reader`, so the program URLs probably did not load | Check the container's env and the URLs' fingerprints; a Coolify deploy can revert them (§8 step 4) |
+
+## 10. The agents' login and the elevated routes
+
+`WAREHOUSE_COOLIFY_URL` holds **three different values on purpose**:
+
+- **Agents' login, `hc_warehouse_agent`:** the parent repo's `.env` and the
+  Vaultwarden `.env` note.
+- **Query tool's login, `hc_warehouse_mcp`:** the `warehouse-mcp` Coolify app only,
+  and its own Vaultwarden item. It has the same grants, settings and limits on what
+  it can do as the agents' login, and its own password and connection limit.
+- **Superuser login, unchanged:** the Dagster app's Coolify settings, the host `.env`
+  and that app's containers. The syncs and dbt's scheduled jobs use it.
+
+Never copy the variable from one place to another: every sync would lose write
+access, or the query tool would lose its limits.
+
+### What each action uses
+
+| Action | How |
+| --- | --- |
+| Ad-hoc SELECTs, `bin/readonly-psql`, `bin/ysws_true_expense.py`, spend preview without `--dbt`, reader row counts | Agents' login |
+| Lock and wedge queries (§3): `pg_stat_activity`, `pg_blocking_pids`, full query text | Agents' login, through `pg_read_all_stats` |
+| Cancel or end your own stuck session | Agents' login |
+| Cancel a stuck query-tool session | Agents' login: `pg_cancel_backend`, see below |
+| End or cancel any superuser session: `pg_dump`, a sync | `bin/warehouse-admin-psql` |
+| Any triage during "too many clients" | `bin/warehouse-admin-psql`, because reserved slots are for superusers |
+| Hand fixes: `metrics_last_fetched_at`, `ALTER COLUMN` for a type overflow, a backfill `UPDATE` | `bin/warehouse-admin-psql` |
+| Sling test into a scratch schema | Prefer a `target: LOCAL` dry run. Otherwise run Sling in the app container and drop the schema with `bin/warehouse-admin-psql` |
+| `dbt compile`, `parse`, `ls` | `bin/warehouse-dbt <command> ...` |
+| `dbt run`, `dbt test`, spend preview `--dbt` | `bin/warehouse-dbt --elevated --reason "<why>" ...` |
+| Dagster materialize from a laptop against prod | Refused, on purpose. In-process runs in the app container still work |
+
+To cancel a query-tool session, find it with `usename = 'hc_warehouse_mcp'` and use
+`pg_cancel_backend`. Do not use `pg_terminate_backend`: the tool retries a lost
+connection, so it runs the same query again without saying so. A cancelled query
+fails and is not retried.
+
+### Rules for the elevated routes
+
+Use one only with a written `--reason`, and only for a runbook step that names it
+or a request that asks for the write. The reason shows as `application_name`
+(`elevated:<reason>` or `elevated-dbt:<reason>`) in `pg_stat_activity`.
+
+Both routes need SSH access to the host, so a leaked `.env` cannot reach them, and
+no superuser password reaches the machine you run them on. They read three settings
+from the environment or the parent `.env`, kept out of this public repo:
+`WAREHOUSE_SSH_RELAY` (the ssh command that reaches the host, relay included),
+`WAREHOUSE_POSTGRES_CONTAINER` and `WAREHOUSE_APP_CONTAINER` (each a name, or the
+part before the `-<timestamp>` a deploy adds). Write the relay with SSH host aliases,
+not `user@host`: `bin/readonly-psql` loads `.env` by splitting on spaces, and an `@`
+word makes it abort.
+
+Each tool refuses unless exactly one running container is named that, with or without
+a timestamp; a sibling such as `<name>-proxy` does not count. Finding several means a
+deploy is running, so wait it out. Finding none means the container is down or the
+setting is wrong.
+
+`bin/warehouse-dbt --elevated` uploads this checkout's `orpheus_engine_dbt/` tree
+to the app container and runs it there, so a branch is built and tested before any
+merge. It prints the commit, and whether the tree has uncommitted changes. It runs
+as the syncs' login and uses the container's `HACK_CLUBBERS_LOCATION_SALT`. A model
+that needs a new variable fails until the container has it.
+
+If the relay drops during a long run, dbt can keep running and leave a
+`/tmp/warehouse-dbt-*` folder in the app container. The folder holds no password,
+and the next deploy removes it. Check `pg_stat_activity` for the `elevated-dbt:` name
+before starting another run.
+
+### What the agents' and query tool's logins can still do
+
+- **Read everything,** including tokens in mirrored tables and other sessions'
+  query text. Treat the URL as sensitive.
+- **Read `pg_authid`,** so it can see every login's SCRAM verifier, including the
+  superuser's. `pg_read_all_data` covers system catalogs, and Postgres cannot deny this
+  to one login. A verifier cannot log in, but it allows offline password guessing, so
+  every warehouse login needs a long random password.
+- **Store data on the server,** after turning off its read-only default: temporary
+  tables and large objects. A query through the tool can make temporary tables too,
+  because `SELECT ... INTO TEMP` passes its SQL check. Neither login can change
+  existing tables, but an exposed URL could use these to fill the disk. `temp_file_limit` caps sort and hash spill files
+  only; Postgres does not count temporary tables against it. Closing this needs
+  `REVOKE TEMP ON DATABASE` and `REVOKE EXECUTE` on the large-object functions
+  `FROM PUBLIC`, which affect every login, so it is not done today.
+- **Hold locks,** up to its timeouts: `lock_timeout` 30s, `statement_timeout` 30min,
+  `idle_in_transaction_session_timeout` 5min. To adjust one, change `ROLE_SETTINGS` in
+  the script below and run it again.
+
+`pg_signal_backend` is left out on purpose. Postgres refuses to let a non-superuser
+signal a superuser session, so it cannot end the stuck `pg_dump`. It would only let
+an exposed URL kill every other non-superuser login. Agents need to cancel only
+query-tool sessions, so `hc_warehouse_agent` is a member of `hc_warehouse_mcp` with
+`INHERIT TRUE, SET FALSE, ADMIN FALSE`. Postgres lets a role signal the sessions of a
+role whose privileges it inherits. The query tool's role owns nothing and has no
+grant the agents' login lacks, and the agents' login cannot become it.
+
+The query tool's connection limit is 12: 5 for its pool (`max_size` in
+`warehouse-mcp/db.py`), 5 for the old container during a deploy overlap, and 2 for
+sockets that were cut but still look open on the server. If you change the pool,
+change `LOGINS` in the script below and run it again. A query the login's limits stop
+(`lock_timeout`, `temp_file_limit`) fails at once, because the tool retries only a
+lost connection.
+
+### Create, check, roll back
+
+`scripts/provision_warehouse_agent_login.py --login agent|mcp` renders the role SQL
+with only a SCRAM verifier and writes the new URL to a 0600 file; running it again
+gives the role a new password. Create the agents' login first, because the query
+tool's SQL grants its role to it. `--verify` checks the login's attributes and exact
+role memberships, that it can see other logins' query text, and that changing existing
+tables, `COPY ... PROGRAM`, server file reads, ending a superuser session and
+cancelling an idle session of another non-superuser login are all refused. If it finds
+no such idle session it fails and says so; run it again when one is connected. With
+`--login mcp` it needs `--agent-env-file`, checks both logins, and cancels a throwaway
+query-tool session from the agents' login.
+
+To roll back the agents' login, restore `WAREHOUSE_COOLIFY_URL` in the parent `.env`
+from the host `.env` through the relay, update the Vaultwarden note, then
+`bin/warehouse-admin-psql --reason "remove agent login" -c "DROP ROLE hc_warehouse_agent;"`.
+The query tool's SQL needs that role, so roll back the query tool first.
+
+To roll back the query tool's login, set `WAREHOUSE_COOLIFY_URL` in the `warehouse-mcp`
+Coolify app back to the value in the host `.env` and redeploy that app. Its host is
+the internal one, so check from the `warehouse-mcp` container that it resolves. Then
+`bin/warehouse-admin-psql --reason "remove query tool login" -c "DROP ROLE hc_warehouse_mcp;"`.
+After that, `--verify --login agent` reports the missing membership until the role is
+created again.
+
+The syncs are not affected either way.
+
+## 11. The agents' read-only Dagster login
+
+`PROD_DAGSTER_DB_URL` in the parent `.env` and the Vaultwarden `.env` note logs in as
+`dagster_reader`, which has `pg_read_all_data` and nothing else. The superuser value
+belongs only in Coolify's store, the host `.env` and the app container. The app does
+not use this variable, so nothing here touches it.
+
+| Action | How |
+| --- | --- |
+| §1, §2, §5 queries, freshness checks, `scripts/ysws_true_spend_preview.py` | `PROD_DAGSTER_DB_URL` |
+| Launch, retry or cancel a run, turn a schedule on or off | Dagster GraphQL (`scripts/cancel_orphaned_runs.py`), never SQL |
+| Superuser work on this database | The database's local socket on the host: `docker exec -i -u postgres <container> psql`. Only for a request that asks for it |
+
+Do not copy the superuser URL back into the parent `.env` or the vault note, even to
+restore a backup: `provision` also changes the line in the checkout's `.env*` backups.
+
+### What the login can still do
+
+- **Read everything,** including tokens in event logs. Treat the URL as sensitive.
+- **Read `pg_authid`,** so it can see the superuser's SCRAM hash. `pg_read_all_data`
+  covers system catalogs. A hash cannot log in, but it allows offline password
+  guessing, so the superuser password must stay long and random.
+- **Store data on the server,** after turning off its read-only default: temporary
+  tables and large objects. It cannot change Dagster's tables.
+- **Hold connections,** up to 10 of the server's 50, with `statement_timeout` 5min and
+  `idle_in_transaction_session_timeout` 60s. To adjust these, change `ROLE_SETTINGS` or
+  `CONNECTION_LIMIT` in the script below and run `provision` again.
+
+This limits what a leaked connection string can do. Anyone with root on the host can
+still read the host `.env` or use the socket.
+
+### Create, check, roll back
+
+Use `scripts/dagster_db_reader.py`. It sends secrets only through stdin and prints
+names and booleans. A line whose name is not an uppercase identifier, such as a
+commented-out URL, prints as `<unnamed line>`. Identifiers are arguments; keep them
+in a private `@args` file, not in this repo. `--ssh` is the command that reaches the host (see the skill
+`warehouse-dagster-prod-health`), and `--vault-note` is repeated for each `.env` note.
+
+- **`provision`** generates a password and sends only its SCRAM hash to Postgres over
+  the local socket. It logs in with the new URL at its public address, and changes
+  nothing an agent reads unless that works. It then rereads and changes the one URL line
+  in the parent `.env` and the vault note, and the same line in the checkout's `.env*`
+  backups. Every other name stays as it was. Running it again is safe and gives the
+  login a new password. `--url-host` and `--url-port` move both copies to a new address;
+  never change only one, or a restore brings back the old address.
+- **`verify`** checks the login's attributes, memberships and settings. It confirms no
+  write privilege on any relation in `public`, that a real insert is refused with the
+  read-only default off, and that the §1, §2 and §5 reads work. It confirms both copies
+  log in as the reader, and that the parent `.env`, the checkout's backups, worktree
+  env files and the vault notes do not hold the superuser value. It also lists, without
+  failing, host `.env.bak*` files holding the current value and names that differ
+  between the parent `.env` and the vault notes.
+- **`push-gate --store-names-file <file>`** runs before a push to main, because a push
+  regenerates the host `.env` from Coolify's store (§8 step 4). It compares the running
+  app's variable names with the store's, listed one per line, and stops if the app has
+  any the store lacks. Do not push until those are resolved.
+
+**Rotating the superuser password:** read the current value from the host, not the
+parent `.env`. The parent URL holds the reader's password and only says where the
+database is.
+
+**Roll back:** copy the superuser value from the host `.env` into `PROD_DAGSTER_DB_URL`
+in the parent `.env` and the vault note, in-process, then drop the login over the
+socket with `DROP ROLE dagster_reader;`. Nothing in the app depends on the login.

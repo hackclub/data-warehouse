@@ -16,8 +16,10 @@ horizons_replication_config = {
     "source": "HORIZONS_DB",
     "target": "WAREHOUSE_DB",
 
-    # Create warehouse tables for streams that are currently empty, so every
-    # source table exists in the warehouse.
+    # Create warehouse tables for listed streams that are currently empty, so
+    # every configured stream exists in the warehouse. Streams are listed
+    # explicitly rather than via public.* because hc_warehouse_reader holds
+    # table and column SELECT grants only on these 26 tables.
     "env": {"SLING_ALLOW_EMPTY": True},
 
     # Every stream is full-refresh, so the mirror matches the source exactly
@@ -35,25 +37,42 @@ horizons_replication_config = {
         "object": "horizons.{stream_table}",
     },
 
-    # All columns sync except live credentials.
+    # All 26 tables are listed explicitly; live credentials are excluded.
     "streams": {
-        "public.*": None,
-
-        "public.users": {
-            "select": ["-hackatime_access_token"],
-        },
-        "public.hackatime_link_otps": {
-            "select": ["-otp_code"],
-        },
-        "public.sticker_tokens": {
-            "select": ["-token"],
-        },
+        "public._prisma_migrations": None,
+        "public.announcement_reads": None,
+        "public.announcements": None,
+        "public.community_events": None,
+        "public.email_jobs": None,
+        "public.events": None,
         # Unredeemed codes are spendable.
         "public.gift_codes": {
             "select": ["-code"],
         },
+        "public.global_settings": None,
+        "public.hackatime_link_otps": {
+            "select": ["-otp_code"],
+        },
+        "public.historical_metrics": None,
+        "public.pinned_events": None,
+        "public.pinned_items": None,
+        "public.projects": None,
+        "public.reviewer_checklists": None,
+        "public.reviewer_payouts": None,
+        "public.shop_item_variants": None,
+        "public.shop_items": None,
+        "public.shops": None,
+        "public.sticker_tokens": {
+            "select": ["-token"],
+        },
+        "public.submission_audit_logs": None,
+        "public.submissions": None,
+        "public.transactions": None,
+        "public.user_daily_activity": None,
         # user_sessions.id is the sessionId login cookie. Sync a SHA-256 of it
-        # instead so rows stay distinct and joinable without being usable.
+        # instead so rows stay distinct and joinable in the warehouse without
+        # storing the raw cookie. Note: hc_warehouse_reader still needs SELECT
+        # on id because Postgres computes the digest on the source server.
         "public.user_sessions": {
             "sql": """
                 select encode(sha256(convert_to(id, 'UTF8')), 'hex') as id_sha256,
@@ -61,10 +80,10 @@ horizons_replication_config = {
                 from public.user_sessions
             """,
         },
-
-        # --- Disabled: infrastructure ---
-        "public.pg_stat_statements": {"disabled": True},
-        "public.pg_stat_statements_info": {"disabled": True},
+        "public.users": {
+            "select": ["-hackatime_access_token"],
+        },
+        "public.users_airtable": None,
     }
 }
 

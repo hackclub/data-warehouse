@@ -1,0 +1,393 @@
+diff --git a/orpheus_engine_dbt/models/hackatime_analytics/daily_activity.sql b/orpheus_engine_dbt/models/hackatime_analytics/daily_activity.sql
+index c47a2b3..664c1e3 100644
+--- a/orpheus_engine_dbt/models/hackatime_analytics/daily_activity.sql
++++ b/orpheus_engine_dbt/models/hackatime_analytics/daily_activity.sql
+@@ -64,9 +64,9 @@ emails AS (
+            LOWER(email) AS email
+     FROM   hackatime.email_addresses
+     ORDER  BY user_id, id                -- earliest id wins
+-)
++),
++legacy AS (
+
+--- Final projection
+ SELECT
+     d.user_id                                       AS hackatime_user_id,
+     d.activity_date,
+@@ -80,5 +80,71 @@ LEFT JOIN  lang_daily l
+     AND  l.activity_date = d.activity_date
+ LEFT JOIN  emails e
+     ON  e.user_id       = d.user_id
+-ORDER BY   d.activity_date DESC,
+-        d.user_id
++),
++all_hb AS (
++    SELECT
++        hb.*,
++        CASE
++            WHEN hb.time > 32503680000 * 1000  THEN hb.time / 1000000   -- µs → s
++            WHEN hb.time > 32503680000         THEN hb.time / 1000      -- ms → s
++            ELSE                                    hb.time             -- already s
++        END::double precision AS ts_sec
++    -- Use the dbt source function to reference the upstream table
++    FROM {{ source('hackatime_raw', 'heartbeats') }} hb
++),
++all_valid AS (
++    SELECT h.* FROM all_hb h CROSS JOIN params p
++    WHERE ts_sec BETWEEN 0 AND 253402300799
++),
++all_gaps AS (
++    SELECT h.*,
++        LAG(ts_sec) OVER (PARTITION BY user_id ORDER BY ts_sec, id) AS previous_ts
++    FROM all_valid h
++),
++category_seconds AS (
++    SELECT user_id,
++        (to_timestamp(ts_sec) AT TIME ZONE p.tz)::date AS activity_date,
++        LOWER(BTRIM(category)) AS normalized_category,
++        LEAST(GREATEST(ts_sec - COALESCE(previous_ts, ts_sec), 0), p.hb_timeout) AS seconds
++    FROM all_gaps CROSS JOIN params p
++),
++category_aggregate AS (
++    SELECT user_id, activity_date,
++        COALESCE(SUM(seconds) FILTER (WHERE normalized_category = 'coding'), 0)::numeric AS coding_seconds,
++        COALESCE(SUM(seconds) FILTER (WHERE normalized_category = 'ai coding'), 0)::numeric AS ai_seconds,
++        COALESCE(SUM(seconds) FILTER (WHERE normalized_category IS NULL OR normalized_category NOT IN ('coding', 'ai coding')), 0)::numeric AS other_seconds,
++        SUM(seconds)::numeric AS total_seconds
++    FROM category_seconds
++    GROUP BY user_id, activity_date
++
++),
++category_hours AS (
++    SELECT user_id, activity_date,
++        ROUND(coding_seconds / 3600, 2) AS tracked_coding_hours,
++        ROUND(ai_seconds / 3600, 2) AS ai_coding_hours,
++        ROUND(other_seconds / 3600, 2) AS other_hours,
++        ROUND(total_seconds / 3600, 2) AS total_hours
++    FROM category_aggregate
++),
++grain AS (
++    SELECT hackatime_user_id AS user_id, activity_date FROM legacy
++    UNION
++    SELECT user_id, activity_date FROM category_hours
++)
++SELECT
++    g.user_id AS hackatime_user_id,
++    g.activity_date,
++    COALESCE(l.legacy_coding_row_present, FALSE) AS legacy_coding_row_present,
++    COALESCE(l.hackatime_hours, 0) AS hackatime_hours,
++    COALESCE(c.tracked_coding_hours, 0) AS tracked_coding_hours,
++    COALESCE(c.ai_coding_hours, 0) AS ai_coding_hours,
++    COALESCE(c.other_hours, 0) AS other_hours,
++    COALESCE(c.total_hours, 0) AS total_hours,
++    COALESCE(l.languages_used, '') AS languages_used,
++    e.email AS first_email
++FROM grain g
++LEFT JOIN legacy l ON l.hackatime_user_id IS NOT DISTINCT FROM g.user_id
++    AND l.activity_date IS NOT DISTINCT FROM g.activity_date
++LEFT JOIN category_hours c ON c.user_id IS NOT DISTINCT FROM g.user_id AND c.activity_date IS NOT DISTINCT FROM g.activity_date
++LEFT JOIN emails e ON e.user_id = g.user_id
++ORDER BY g.activity_date DESC, g.user_id
+diff --git a/orpheus_engine_dbt/models/hackatime_analytics/hourly_project_activity.sql b/orpheus_engine_dbt/models/hackatime_analytics/hourly_project_activity.sql
+index 1ab6516..95f934a 100644
+--- a/orpheus_engine_dbt/models/hackatime_analytics/hourly_project_activity.sql
++++ b/orpheus_engine_dbt/models/hackatime_analytics/hourly_project_activity.sql
+@@ -86,9 +86,9 @@ emails AS (
+            LOWER(email) AS hackatime_first_email
+     FROM hackatime.email_addresses
+     ORDER BY user_id, id        -- earliest id wins
+-)
++),
++legacy AS (
+
+-/* 7️⃣  Final result */
+ SELECT
+     s.user_id                                 AS hackatime_user_id,
+     e.hackatime_first_email,
+@@ -101,6 +101,74 @@ SELECT
+     s.editors_used
+ FROM sec_per_hour s
+ LEFT JOIN emails  e ON e.user_id = s.user_id
+-ORDER BY s.activity_time DESC,
+-         s.user_id,
+-         s.project_name
++),
++all_hb AS (
++    SELECT
++        hb.*,
++        CASE
++            WHEN hb."time" > 32503680000 * 1000 THEN hb."time" / 1000000  -- µs → s
++            WHEN hb."time" > 32503680000        THEN hb."time" / 1000     -- ms → s
++            ELSE                                 hb."time"                -- already s
++        END::double precision  AS ts_sec
++    FROM {{ source('hackatime_raw', 'heartbeats') }} hb
++),
++all_valid AS (
++    SELECT h.* FROM all_hb h CROSS JOIN params p
++    WHERE ts_sec >= p.cutoff_utc AND ts_sec <= 253402300799
++),
++all_gaps AS (
++    SELECT h.*,
++        LAG(ts_sec) OVER (PARTITION BY user_id ORDER BY ts_sec, id) AS previous_ts
++    FROM all_valid h
++),
++category_seconds AS (
++    SELECT user_id, project AS project_name,
++        DATE_TRUNC('hour', to_timestamp(ts_sec) AT TIME ZONE p.tz)::timestamptz AS activity_time,
++        LOWER(BTRIM(category)) AS normalized_category,
++        LEAST(GREATEST(ts_sec - COALESCE(previous_ts, ts_sec), 0), p.hb_timeout) AS seconds
++    FROM all_gaps CROSS JOIN params p
++),
++category_aggregate AS (
++    SELECT user_id, project_name, activity_time,
++        COALESCE(SUM(seconds) FILTER (WHERE normalized_category = 'coding'), 0)::numeric AS coding_seconds,
++        COALESCE(SUM(seconds) FILTER (WHERE normalized_category = 'ai coding'), 0)::numeric AS ai_seconds,
++        COALESCE(SUM(seconds) FILTER (WHERE normalized_category IS NULL OR normalized_category NOT IN ('coding', 'ai coding')), 0)::numeric AS other_seconds,
++        SUM(seconds)::numeric AS total_seconds
++    FROM category_seconds
++    GROUP BY user_id, project_name, activity_time
++    HAVING SUM(seconds) > 0
++),
++category_hours AS (
++    SELECT user_id, project_name, activity_time,
++        ROUND(coding_seconds / GREATEST(total_seconds, 3600), 2) AS tracked_coding_hours,
++        ROUND(ai_seconds / GREATEST(total_seconds, 3600), 2) AS ai_coding_hours,
++        ROUND(other_seconds / GREATEST(total_seconds, 3600), 2) AS other_hours,
++        ROUND(total_seconds / GREATEST(total_seconds, 3600), 2) AS total_hours
++    FROM category_aggregate
++),
++grain AS (
++    SELECT hackatime_user_id AS user_id, project_name, activity_time FROM legacy
++    UNION
++    SELECT user_id, project_name, activity_time FROM category_hours
++)
++SELECT
++    g.user_id AS hackatime_user_id,
++    e.hackatime_first_email,
++    g.project_name,
++    g.activity_time,
++    COALESCE(l.legacy_coding_row_present, FALSE) AS legacy_coding_row_present,
++    COALESCE(l.hackatime_hours, 0) AS hackatime_hours,
++    COALESCE(c.tracked_coding_hours, 0) AS tracked_coding_hours,
++    COALESCE(c.ai_coding_hours, 0) AS ai_coding_hours,
++    COALESCE(c.other_hours, 0) AS other_hours,
++    COALESCE(c.total_hours, 0) AS total_hours,
++    CASE WHEN l.legacy_coding_row_present THEN l.languages_used ELSE '' END AS languages_used,
++    CASE WHEN l.legacy_coding_row_present THEN l.files_edited ELSE '' END AS files_edited,
++    CASE WHEN l.legacy_coding_row_present THEN l.editors_used ELSE '' END AS editors_used
++FROM grain g
++LEFT JOIN legacy l ON l.hackatime_user_id IS NOT DISTINCT FROM g.user_id
++    AND l.project_name IS NOT DISTINCT FROM g.project_name
++    AND l.activity_time IS NOT DISTINCT FROM g.activity_time
++LEFT JOIN category_hours c ON c.user_id IS NOT DISTINCT FROM g.user_id AND c.project_name IS NOT DISTINCT FROM g.project_name AND c.activity_time IS NOT DISTINCT FROM g.activity_time
++LEFT JOIN emails e ON e.user_id = g.user_id
++ORDER BY g.activity_time DESC, g.user_id, g.project_name
+diff --git a/orpheus_engine_dbt/models/hackatime_analytics/schema.yml b/orpheus_engine_dbt/models/hackatime_analytics/schema.yml
+new file mode 100644
+index 0000000..b19873c
+--- /dev/null
++++ b/orpheus_engine_dbt/models/hackatime_analytics/schema.yml
+@@ -0,0 +1,62 @@
++version: 2
++models:
++  - name: daily_activity
++    description: >-
++      Activity by user and New York day. Rows now include noncoding activity. To preserve the
++      old row set for counts, averages and membership, filter legacy_coding_row_present.
++      Daily includes zero-second heartbeat days; hourly includes positive unrounded
++      seconds from either timeline (even if rounded hours are zero).
++    columns:
++      - name: hackatime_hours
++        description: Exact legacy case-sensitive coding-only timeline, rounding and hourly ceiling. Not total tracked activity.
++        tests: [not_null]
++      - name: legacy_coding_row_present
++        description: True exactly when the original coding-only model emits this grain, including hours rounded to zero.
++        tests: [not_null]
++      - name: tracked_coding_hours
++        description: Coding component of the all-category timeline; can differ from hackatime_hours.
++        tests: [not_null]
++      - name: ai_coding_hours
++        description: All-category timeline gaps attributed to normalized category ai coding.
++        tests: [not_null]
++      - name: other_hours
++        description: All other categories including NULL, blank, unknown and timelapsing.
++        tests: [not_null]
++      - name: total_hours
++        description: >-
++          All-category capped time, not credited programming time. Each user gap is
++          capped at 120 seconds, attributed to the current heartbeat. Categories
++          normalize with LOWER(BTRIM(category)); equal timestamps order by heartbeat id.
++          Hourly components scale proportionally to a one-hour ceiling before rounding.
++          Total rounds once; sum of three rounded components may differ by at most 0.02 hours.
++        tests: [not_null]
++  - name: hourly_project_activity
++    description: >-
++      Activity by user, project and local hour. Rows now include noncoding activity. To preserve the
++      old row set for counts, averages and membership, filter legacy_coding_row_present.
++      Daily includes zero-second heartbeat days; hourly includes positive unrounded
++      seconds from either timeline (even if rounded hours are zero).
++    columns:
++      - name: hackatime_hours
++        description: Exact legacy case-sensitive coding-only timeline, rounding and hourly ceiling. Not total tracked activity.
++        tests: [not_null]
++      - name: legacy_coding_row_present
++        description: True exactly when the original coding-only model emits this grain, including hours rounded to zero.
++        tests: [not_null]
++      - name: tracked_coding_hours
++        description: Coding component of the all-category timeline; can differ from hackatime_hours.
++        tests: [not_null]
++      - name: ai_coding_hours
++        description: All-category timeline gaps attributed to normalized category ai coding.
++        tests: [not_null]
++      - name: other_hours
++        description: All other categories including NULL, blank, unknown and timelapsing.
++        tests: [not_null]
++      - name: total_hours
++        description: >-
++          All-category capped time, not credited programming time. Each user gap is
++          capped at 120 seconds, attributed to the current heartbeat. Categories
++          normalize with LOWER(BTRIM(category)); equal timestamps order by heartbeat id.
++          Hourly components scale proportionally to a one-hour ceiling before rounding.
++          Total rounds once; sum of three rounded components may differ by at most 0.02 hours.
++        tests: [not_null]
+diff --git a/orpheus_engine_dbt/models/stardance_analytics/journey_user_stages.sql b/orpheus_engine_dbt/models/stardance_analytics/journey_user_stages.sql
+index 7daecf6..dae5877 100644
+--- a/orpheus_engine_dbt/models/stardance_analytics/journey_user_stages.sql
++++ b/orpheus_engine_dbt/models/stardance_analytics/journey_user_stages.sql
+@@ -92,7 +92,7 @@ idents AS (
+     GROUP BY 1
+ ),
+
+--- >=1 Hackatime heartbeat on/after the user's Stardance signup date
++-- >=1 legacy coding Hackatime heartbeat on/after the user's Stardance signup date
+ hb AS (
+     SELECT DISTINCT i.user_id
+     FROM {{ source('stardance', 'user_identities') }} i
+@@ -101,6 +101,7 @@ hb AS (
+         ON da.hackatime_user_id::text = i.uid
+         AND da.activity_date >= u.created_at::date
+     WHERE i.provider = 'hackatime'
++      AND da.legacy_coding_row_present
+ ),
+
+ proj AS (
+diff --git a/orpheus_engine_dbt/models/summer_2026_analytics/summer_unified_time_log.sql b/orpheus_engine_dbt/models/summer_2026_analytics/summer_unified_time_log.sql
+index 86b935e..2b867be 100644
+--- a/orpheus_engine_dbt/models/summer_2026_analytics/summer_unified_time_log.sql
++++ b/orpheus_engine_dbt/models/summer_2026_analytics/summer_unified_time_log.sql
+@@ -338,6 +338,7 @@ ht_user_email AS (
+     SELECT DISTINCT hackatime_user_id, hackatime_first_email
+     FROM {{ ref('hourly_project_activity') }}
+     WHERE hackatime_first_email IS NOT NULL
++      AND legacy_coding_row_present
+ ),
+
+ -- ============================================================
+diff --git a/orpheus_engine_dbt/tests/hackatime_category_hours_reconcile.sql b/orpheus_engine_dbt/tests/hackatime_category_hours_reconcile.sql
+new file mode 100644
+index 0000000..1901b66
+--- /dev/null
++++ b/orpheus_engine_dbt/tests/hackatime_category_hours_reconcile.sql
+@@ -0,0 +1,12 @@
++SELECT 'daily_activity' AS model, hackatime_user_id
++FROM {{ ref('daily_activity') }}
++WHERE LEAST(hackatime_hours, tracked_coding_hours, ai_coding_hours, other_hours, total_hours) < 0
++   OR ABS(total_hours - tracked_coding_hours - ai_coding_hours - other_hours) > 0.02
++   OR (NOT legacy_coding_row_present AND hackatime_hours <> 0)
++UNION ALL
++SELECT 'hourly_project_activity' AS model, hackatime_user_id
++FROM {{ ref('hourly_project_activity') }}
++WHERE LEAST(hackatime_hours, tracked_coding_hours, ai_coding_hours, other_hours, total_hours) < 0
++   OR ABS(total_hours - tracked_coding_hours - ai_coding_hours - other_hours) > 0.02
++   OR (NOT legacy_coding_row_present AND hackatime_hours <> 0)
++   OR total_hours > 1
+diff --git a/orpheus_engine_tests/test_hackatime_category_hours.py b/orpheus_engine_tests/test_hackatime_category_hours.py
+index 9ec5e46..b0b1102 100644
+--- a/orpheus_engine_tests/test_hackatime_category_hours.py
++++ b/orpheus_engine_tests/test_hackatime_category_hours.py
+@@ -28,7 +28,7 @@ class CategoryHours(unittest.TestCase):
+         ], text=True).strip()
+         try:
+             for _ in range(60):
+-                if subprocess.run(['docker', 'exec', cls.container, 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres'],
++                if subprocess.run(['docker', 'exec', cls.container, 'pg_isready', '-U', 'postgres'],
+                                   capture_output=True).returncode == 0:
+                     break
+                 time.sleep(0.25)
+@@ -78,7 +78,7 @@ class CategoryHours(unittest.TestCase):
+
+     @classmethod
+     def sql(cls, sql):
+-        result = subprocess.run(['docker','exec','-i',cls.container,'psql','-h','127.0.0.1','-U','postgres',
++        result = subprocess.run(['docker','exec','-i',cls.container,'psql','-U','postgres',
+                                  '-v','ON_ERROR_STOP=1','-At'],input=sql,text=True,capture_output=True)
+         if result.returncode:
+             raise AssertionError(result.stderr)
+@@ -93,18 +93,27 @@ class CategoryHours(unittest.TestCase):
+                 (SELECT {columns} FROM new_{name} WHERE legacy_coding_row_present EXCEPT ALL SELECT {columns} FROM old_{name})
+                 ) x'''), '0')
+
+-    def test_compatibility_only(self):
+-        for name in ['daily_activity', 'hourly_project_activity']:
+-            self.assertEqual(self.sql(f'SELECT bool_and(legacy_coding_row_present) FROM new_{name}'), 't')
+-            self.assertEqual(self.sql(f'SELECT count(*) FROM new_{name}'),
+-                             self.sql(f'SELECT count(*) FROM old_{name}'))
+-            self.assertEqual(self.sql(f"SELECT count(*) FROM information_schema.columns WHERE table_name='new_{name}' AND column_name IN ('total_hours','ai_coding_hours','other_hours','tracked_coding_hours')"), '0')
+-        # Scheduled consumers must run against the pre-refresh schema too.
+-        for path in [
+-            'stardance_analytics/journey_user_stages.sql',
+-            'summer_2026_analytics/summer_unified_time_log.sql',
+-        ]:
+-            self.assertNotIn('legacy_coding_row_present', (MODELS.parent / path).read_text())
++    def test_contract(self):
++        for name in ['daily_activity','hourly_project_activity']:
++            self.assertEqual(self.sql(f'''SELECT count(*) FROM new_{name} WHERE
++                tracked_coding_hours IS NULL OR ai_coding_hours IS NULL OR other_hours IS NULL OR total_hours IS NULL
++                OR LEAST(tracked_coding_hours,ai_coding_hours,other_hours,total_hours,hackatime_hours)<0
++                OR abs(total_hours-tracked_coding_hours-ai_coding_hours-other_hours)>0.02
++                OR (NOT legacy_coding_row_present AND hackatime_hours<>0)'''),'0')
++            grain='hackatime_user_id, '+('activity_date' if name=='daily_activity' else 'project_name, activity_time')
++            self.assertEqual(self.sql(f'SELECT count(*) FROM (SELECT {grain} FROM new_{name} GROUP BY {grain} HAVING count(*)>1) x'),'0')
++        self.assertEqual(self.sql('SELECT max(total_hours)<=1 FROM new_hourly_project_activity'),'t')
++        self.assertEqual(self.sql('SELECT count(*) FROM new_hourly_project_activity WHERE hackatime_user_id=10 AND total_hours=1 AND ai_coding_hours=0.5 AND tracked_coding_hours=0.5'),'1')
++        self.assertEqual(self.sql('SELECT total_hours=0 AND legacy_coding_row_present FROM new_hourly_project_activity WHERE hackatime_user_id=4 AND project_name IS NULL'),'t')
++        self.assertEqual(self.sql('SELECT hackatime_hours=0.03 AND tracked_coding_hours=0.02 AND ai_coding_hours=0.02 AND total_hours=0.03 FROM new_daily_activity WHERE hackatime_user_id=1'),'t')
++
++    def test_consumer_eligibility(self):
++        for name in ['daily_activity','hourly_project_activity']:
++            # Positive-hours callers and row-presence callers retain identical membership.
++            for predicate in ['hackatime_hours>0','TRUE']:
++                old=self.sql(f'SELECT count(*) FROM old_{name} WHERE {predicate}')
++                new=self.sql(f'SELECT count(*) FROM new_{name} WHERE legacy_coding_row_present AND ({predicate})')
++                self.assertEqual(old,new)
+
+ 
+ if __name__ == '__main__':
+diff --git a/runbooks/ysws-dau.md b/runbooks/ysws-dau.md
+index 287712f..1f409f4 100644
+--- a/runbooks/ysws-dau.md
++++ b/runbooks/ysws-dau.md
+@@ -218,7 +218,9 @@ descriptions. Then:
+    the grandfathered exception, NOT a reusable pattern: do not reconstruct DAU from a
+    submitted repo's commit history for any other program — those repos were unknown until
+    submission, so the signal is lagging and survivorship-biased.
+-4. Hours come from `{{ ref('hourly_project_activity') }}` for Hackatime paths
++4. Credited Hackatime hours retain the legacy coding-only `hackatime_hours` measure;
++   category-aware `total_hours` is not program credit. See [category hours](hackatime-category-hours.md).
++   Hours come from `{{ ref('hourly_project_activity') }}` for Hackatime paths
+    (prod: `public_hackatime_analytics.hourly_project_activity`). Known quirks: hour
+    buckets are ET-labeled (pre-existing, applies to every program — do not "fix" it
+    for one program); no Hackatime trust-level filtering exists upstream.
+diff --git a/warehouse-mcp/server.py b/warehouse-mcp/server.py
+index 15e41c1..3a7867c 100644
+--- a/warehouse-mcp/server.py
++++ b/warehouse-mcp/server.py
+@@ -244,7 +244,7 @@ async def list_tools() -> list[Tool]:
+             description=(
+                 "Execute a read-only SQL query against the data warehouse. "
+                 "Returns a query_id for fetching more rows, plus a preview of results. "
+-                "Use LIMIT in your SQL for large tables. Max 10,000 rows cached per query."
++                "Use LIMIT in your SQL for large tables. Max 10,000 rows cached per query. Hackatime hackatime_hours retains legacy coding-only time; total_hours includes all categories. Filter legacy_coding_row_present to retain the old mart row set."
+             ),
+             inputSchema={
+                 "type": "object",

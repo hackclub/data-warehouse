@@ -72,9 +72,11 @@ decision made so far, per program.
 - Secrets: `~/dev/hackclub/data-warehouse/.env` (if running from a worktree, the
   canonical dev checkout's `.env` is the source of truth). Load with
   `set -a && source ~/dev/hackclub/data-warehouse/.env && set +a`.
-- Prod warehouse, read-only validation: `psql "$WAREHOUSE_COOLIFY_URL"`.
-- dbt against prod: `cd orpheus_engine_dbt && DBT_PROFILES_DIR=~/.dbt_stardance_tmp uv run dbt <cmd>`
-  (env must be loaded first — sources.yml needs env vars to parse).
+- Prod warehouse, read-only validation: `psql "$WAREHOUSE_COOLIFY_URL"`. This login
+  cannot change existing data or tables (`prod-health-monitoring.md` §10).
+- dbt against prod: `bin/warehouse-dbt compile|parse|ls ...` with that login. `run` and
+  `test` need `bin/warehouse-dbt --elevated --reason "<why>" ...`, which uses this
+  checkout's models in the app container (§4d).
 - **The serving schema is `public_summer_2026_analytics`** (dbt target schema `public` +
   custom schema). There is no bare `summer_2026_analytics` schema in prod.
 - `git fetch` and branch off latest `origin/main`.
@@ -267,7 +269,8 @@ descriptions. Then:
 
 ### 4c. Validation protocol (all steps, read-only, BEFORE rebuilding prod)
 
-1. `dbt compile` the changed models; wrap the compiled `summer_unified_time_log` SQL in a
+1. `bin/warehouse-dbt compile -s <changed models>` (output in
+   `orpheus_engine_dbt/target/`); wrap the compiled `summer_unified_time_log` SQL in a
    per-program aggregate (`WITH model AS (<compiled sql sans final ORDER BY>) SELECT ...`)
    and run via psql: new program's totals plausible vs the unified YSWS db scale; existing
    programs unchanged except quantified dedup deltas.
@@ -282,9 +285,11 @@ descriptions. Then:
 ### 4d. Build, test, deliver
 
 ```bash
-DBT_PROFILES_DIR=~/.dbt_stardance_tmp uv run dbt run  -s "summer_unified_time_log+" "summer_2026_metadata+"
-DBT_PROFILES_DIR=~/.dbt_stardance_tmp uv run dbt test -s "summer_unified_time_log+" "summer_2026_metadata+"
+bin/warehouse-dbt --elevated --reason "<why>" run  -s "summer_unified_time_log+" "summer_2026_metadata+"
+bin/warehouse-dbt --elevated --reason "<why>" test -s "summer_unified_time_log+" "summer_2026_metadata+"
 ```
+Both build this branch's models before any merge. `test` is elevated too, because the
+project's `on-run-end` GRANT hooks run after tests and the agents' login cannot grant.
 All `summer_2026_dashboard_*` tests must pass, plus `summer_2026_dau_deduped_reconciles`
 (asserts `SUM(summer_unified_time_log.dau_deduped)` per day == `daily_active_users_deduped.dau`
 — it guards the split arithmetic and that both models filter identity/NULL the same way;

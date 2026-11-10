@@ -94,6 +94,8 @@ SELECT
     e.hackatime_first_email,
     s.project_name,
     s.activity_time,                          -- tz-aware hour start
+    -- Preserve coding-row eligibility; future category-only rows will set this false.
+    TRUE AS legacy_coding_row_present,
     ROUND(LEAST(s.seconds_hour::numeric / 3600, 1), 2) AS hackatime_hours,
     s.languages_used,
     s.files_edited,
@@ -102,4 +104,4 @@ FROM sec_per_hour s
 LEFT JOIN emails  e ON e.user_id = s.user_id
 ORDER BY s.activity_time DESC,
          s.user_id,
-         s.project_name 
+         s.project_name

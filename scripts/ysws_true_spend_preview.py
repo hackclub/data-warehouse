@@ -45,6 +45,7 @@ TRUE_SPEND_MODELS = [
     "ysws_unmatched_orgs",
     "ysws_unlinked_programs",
 ]
+DBT_REASON = "true-spend preview --dbt"
 
 DEFAULT_ROOT = Path.home() / "previews" / "ysws-true-spend-site"
 DEFAULT_PORT = 8899
@@ -83,22 +84,17 @@ def _load_env() -> None:
 
 
 def run_dbt(models=TRUE_SPEND_MODELS) -> None:
-    """Rebuild the true-spend models in the warehouse (target: prod)."""
-    _load_env()
-    for line in (Path.home() / "dev" / "hackclub" / "data-warehouse" / ".env").read_text().splitlines():
-        if line.startswith("HACK_CLUBBERS_LOCATION_SALT="):
-            os.environ.setdefault("HACK_CLUBBERS_LOCATION_SALT", line.split("=", 1)[1].strip())
-    from orpheus_engine.defs.dbt.definitions import DBT_PROFILES_DIR_PATH
+    """Rebuild the true-spend models in the warehouse, from this checkout's code.
 
-    dbt_bin = REPO_ROOT / ".venv" / "bin" / "dbt"
+    The agents' login cannot change existing tables, so this takes the elevated
+    route, which needs SSH access to the warehouse host (runbooks/prod-health-monitoring.md §10).
+    """
     started = time.time()
     result = subprocess.run(
         [
-            str(dbt_bin) if dbt_bin.exists() else "dbt", "run",
-            "--select", *models,
-            "--project-dir", str(REPO_ROOT / "orpheus_engine_dbt"),
-            "--profiles-dir", str(DBT_PROFILES_DIR_PATH),
-            "--target", "prod",
+            str(REPO_ROOT / "bin" / "warehouse-dbt"),
+            "--elevated", "--reason", DBT_REASON,
+            "run", "--select", *models,
         ],
         capture_output=True, text=True,
     )

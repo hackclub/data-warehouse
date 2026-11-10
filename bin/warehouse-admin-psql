@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Run SQL on the warehouse as the postgres superuser, through the host.
+
+    bin/warehouse-admin-psql --reason "why this needs elevated access" -c "SQL"
+    bin/warehouse-admin-psql --reason "why this needs elevated access" -f file.sql
+
+This is the elevated route for changing existing data or tables and for ending
+other logins' sessions. The everyday WAREHOUSE_COOLIFY_URL login cannot do either.
+It needs SSH access to the warehouse host, so a leaked .env cannot reach it, and it
+handles no password. Use it only with a written reason, and only for a runbook step that names it or a
+request that asks for the write: runbooks/prod-health-monitoring.md §10.
+
+The SQL goes on stdin, so quoting cannot break it through the SSH hops, and psql
+stops at the first error. The reason shows as application_name in pg_stat_activity.
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _warehouse_relay import (  # noqa: E402
+    POSTGRES_CONTAINER_VAR,
+    Refused,
+    clean_reason,
+    fail,
+    find_container,
+    relay_argv,
+)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Run SQL on the warehouse as postgres, through the host."
+    )
+    parser.add_argument("--reason", help="why this needs elevated access (required)")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("-c", dest="sql", help="SQL to run")
+    source.add_argument("-f", dest="file", type=Path, help="file of SQL to run")
+    args = parser.parse_args()
+
+    try:
+        reason = clean_reason(args.reason)
+        sql = args.sql if args.sql is not None else args.file.read_text()
+        container = find_container(POSTGRES_CONTAINER_VAR)
+        command = relay_argv(
+            [
+                "docker", "exec", "-i",
+                "-e", f"PGAPPNAME=elevated:{reason}",
+                container,
+                "psql", "-U", "postgres", "-X", "-v", "ON_ERROR_STOP=1", "-f", "-",
+            ]
+        )
+    except (Refused, OSError) as error:
+        return fail(str(error))
+    return subprocess.run(command, input=sql, text=True).returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())
