@@ -352,6 +352,21 @@ refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
    and on every column of unmirrored tables, no write privileges or `pg_auth_members` role
    memberships exist, and a real `INSERT` over the public endpoint fails (both
    in the default read-only session and after `SET TRANSACTION READ WRITE`).
+   **Since about 2026-11-09 Orchard refuses `exec_in_pod` on database pods**,
+   and the app's owner role has no `CREATEROLE`, so the step above cannot
+   run on a new database. Use Orchard's own `create_database_user` (access
+   `read`) with the name `hc_warehouse_orchard_reader`:
+   `PYTHONPATH=. .venv/bin/python scripts/provision_orchard_reader.py --env-file <staged.env> <NAME>_K8S_URL=<databaseId>`
+   creates it, checks it can read but not write, and writes the public URL
+   into `<staged.env>`. Orchard shows the password only once, so the script
+   replaces an existing login of that name. That login
+   is a member of `pg_read_all_data`, so it can read every column and
+   Postgres cannot narrow it: the `-col` exclusions in the replication config
+   are the only thing keeping excluded columns out of the warehouse. Its
+   different name makes §9's column-grant check skip it instead of failing
+   daily. Still run `--check` against the staged URL before saving it.
+   Logins made this way on 2026-11-10: Macondo, Half Life, Embassy, jame gam,
+   Save Point, Ari, Fallen and Attend.
 3. **The login or its column grants can go stale.** The role is created outside
    Orchard: restoring or recreating the database cluster drops it, an app
    migration that drops and recreates a table drops that table's grant, and an
