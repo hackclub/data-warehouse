@@ -273,7 +273,10 @@ WITH program_windows AS (
         ('wrong_tool', TIMESTAMP WITH TIME ZONE '2026-10-06 00:00:00+00',
                    TIMESTAMP WITH TIME ZONE '2026-10-21 00:00:00+00'),
         ('mipmap', TIMESTAMP WITH TIME ZONE '2026-10-01 00:00:00+00',
+                   NULL::timestamptz),
+        ('shredder', TIMESTAMP WITH TIME ZONE '2026-11-09 00:00:00+00',
                    NULL::timestamptz)
+    
     
     
     ) AS t(program_name, start_at, end_at_exclusive)
@@ -1973,6 +1976,21 @@ mipmap_ht_claims AS (
     WHERE hp."name" IS NOT NULL AND hp."name" <> ''
 ),
 
+shredder_ht_claims AS (
+    SELECT 'shredder'::text AS program_name,
+        CASE WHEN POSITION('@' IN LOWER(BTRIM(hp."owner_id"))) > 0
+             THEN SPLIT_PART(SPLIT_PART(LOWER(BTRIM(hp."owner_id")), '@', 1), '+', 1)
+                  || '@' || SPLIT_PART(LOWER(BTRIM(hp."owner_id")), '@', 2)
+             ELSE SPLIT_PART(LOWER(BTRIM(hp."owner_id")), '+', 1)
+        END AS user_email,
+        LOWER(BTRIM(hp."hackatime_projects")) AS hackatime_alias,
+        NULL::text AS project_name,
+        NULL::text AS code_url,
+        hp."created_at" AT TIME ZONE 'UTC' AS claim_start_ts
+    FROM {{ source('airtable_shredder', 'projects') }} hp
+    WHERE hp."hackatime_projects" IS NOT NULL AND hp."hackatime_projects" <> ''
+),
+
 all_claims_raw AS (
     SELECT * FROM stardance_ht_claims
     UNION ALL SELECT * FROM flavortown_ht_claims
@@ -2002,6 +2020,7 @@ all_claims_raw AS (
     UNION ALL SELECT * FROM genesis_ht_claims
     UNION ALL SELECT * FROM wrong_tool_ht_claims
     UNION ALL SELECT * FROM mipmap_ht_claims
+    UNION ALL SELECT * FROM shredder_ht_claims
 ),
 
 all_claims AS (
