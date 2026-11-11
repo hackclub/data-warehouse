@@ -1,12 +1,16 @@
 import dagster as dg
 from dagster_sling import SlingConnectionResource, SlingResource
-from dagster import EnvVar, Nothing
+from dagster import Nothing
+from .._helpers import _sling_connection_url
 
 
+# Half Life (Orchard: half-life-db, namespace ysws-half-life). The URL keeps
+# sslrootcert=system for psycopg2; _sling_connection_url removes it for Sling,
+# which otherwise fails with "open system: no such file or directory".
 half_life_db_connection = SlingConnectionResource(
     name="HALF_LIFE_DB",
     type="postgres",
-    connection_string=EnvVar("HALF_LIFE_DATABASE_URL"),
+    connection_string=_sling_connection_url("HALF_LIFE_DATABASE_URL"),
 )
 
 
