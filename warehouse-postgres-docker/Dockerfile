@@ -4,13 +4,18 @@ ARG BASE_IMAGE=postgres:17-alpine
 ## pg_rowhash: Fast row hashing using xxHash - hashes binary tuples directly
 FROM ${BASE_IMAGE} AS builder
 
-# Install required dependencies for building the extension
-RUN apk --no-cache add \
+# Install required dependencies for building the extension. The clang/llvm
+# major must match the one the base image's PostgreSQL was built with (PGXS
+# CLANG = clang-N); it moves with the Alpine release (19 on 3.23, 21 on 3.24),
+# so read it instead of pinning it.
+RUN LLVM_MAJOR="$(sed -n 's/^CLANG = clang-\([0-9]*\)$/\1/p' /usr/local/lib/postgresql/pgxs/src/Makefile.global)" && \
+    test -n "$LLVM_MAJOR" && \
+    apk --no-cache add \
     make \
     gcc \
     g++ \
-    clang19 \
-    llvm19 \
+    "clang${LLVM_MAJOR}" \
+    "llvm${LLVM_MAJOR}" \
     postgresql-dev
 
 # Copy pg_rowhash source
