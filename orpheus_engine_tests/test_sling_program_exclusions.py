@@ -7,7 +7,8 @@ PROGRAMS = [
     "haven", "haven_booking", "atlantis", "pixl", "cubed", "mipmap", "contd",
     "coral", "grandma", "stern", "out_to_c", "scraps", "trmnt", "three_am",
     "canvas", "club_starter_grant", "dyad", "embassy", "jame_gam",
-    "save_point", "scare", "fallen", "ari",
+    "save_point", "scare", "fallen", "ari", "expedition", "taiyaki",
+    "player_two",
 ]
 
 # Tables that hold login state, bearer secrets, caches or one-off backups.
@@ -23,6 +24,14 @@ UNMIRRORED_TABLE = re.compile(
 # stored as a row value (a key/value settings table) is invisible to the
 # column checks below, so the whole table stays out.
 UNMIRRORED_TABLES = {
+    "expedition": ["public.sessions", "public.hackatime_connections"],
+    "taiyaki": [
+        "public.user_sessions",
+        "public.hackatime_link_otps",
+        "public.sticker_tokens",
+        "public._prisma_migrations",
+    ],
+    "player_two": ["public.jobs", "drizzle.__drizzle_migrations"],
     "canvas": ["drizzle.__drizzle_migrations"],
     "club_starter_grant": ["public.sessions", "public.knex_migrations", "public.knex_migrations_lock"],
     "dyad": ["public._sqlx_migrations", "public.wrong_friend_code"],
@@ -106,6 +115,34 @@ UNMIRRORED_TABLES = {
 # Secret or contact columns that must stay excluded wherever their table is
 # mirrored, checked against each program's live schema when it was added.
 EXCLUDED_COLUMNS = {
+    "expedition": {
+        "public.files": ["bytes"],
+        "public.users": ["hca_address"],
+        "public.submission_queue": ["address_line1", "address_line2", "zip"],
+        "public.ireland_signups": ["ip_hash", "attend_error"],
+        "public.ireland_notify_emails": ["ip_hash"],
+        "public.trip_flights": ["booking_ref", "booking_url"],
+    },
+    "taiyaki": {
+        "public.gift_codes": ["code", "fillout_url"],
+        "public.users": [
+            "address_line_1",
+            "address_line_2",
+            "zip_code",
+            "hackatime_access_token",
+            "phone_number",
+        ],
+        "public.users_airtable": ["code"],
+        "public.email_jobs": ["errorMessage", "metadata"],
+    },
+    "player_two": {
+        "public.identities": ["token_enc"],
+        "public.orders": ["address_enc", "reference"],
+        "public.users": ["invite_code"],
+        "public.admin_messages": ["error"],
+        "public.ships": ["ari_error", "airtable_error"],
+        "public.audit_log": ["meta"],
+    },
     "canvas": {
         "public.users": ["hca", "hackatime", "referral_code"],
         "public.shop_orders": ["address"],

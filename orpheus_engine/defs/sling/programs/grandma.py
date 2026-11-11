@@ -44,6 +44,9 @@ grandma_replication_config = {
         "public.ledger_cookieentry": None,
         "public.metrics_activeday": None,
         "public.metrics_dayviews": None,
+        # Page-view and web-vitals events; session/visitor are anonymous analytics
+        # IDs (none match a django_session key, checked 2026-11-11).
+        "public.metrics_event": None,
         "public.orders_order": {
             # 32-hex order nonce of unknown use; no reporting value
             "select": ["-nonce"],
@@ -65,6 +68,10 @@ grandma_replication_config = {
         "public.submissions_aridelivery": {
             # Raw Ari submission payload
             "select": ["-body"],
+        },
+        "public.submissions_airtablerow": {
+            # Airtable push queue; sync errors are free text
+            "select": ["-last_error"],
         },
         "public.submissions_arievent": None,
         "public.submissions_submission": None,
