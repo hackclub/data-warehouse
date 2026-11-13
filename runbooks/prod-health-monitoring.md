@@ -375,7 +375,10 @@ refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
    green and the warehouse lacks the column; §9's daily check reports it.
    - **Lost login** (a login error after the role was dropped): rerun step 2,
      apply `<scratch.sql>`, verify, then save the new URL as in step 4.
-   - **Stale grants** (`permission denied` or a §9 finding): first decide
+   - **Stale grants** (`permission denied for table <t>`, or a §9 finding;
+     between 2026-11-11 and 2026-11-13 Haven `events`, Pixl `projects`, contd
+     `orders` and Stern `apps` lost theirs when their apps recreated those
+     tables): first decide
      whether a new column is sensitive, using the rules in step 1. If it is, add
      a `-col` for it to the config and land that; the column stays ungranted, so
      no grant change is needed. If it is not, or the reader can read a column it
@@ -384,7 +387,10 @@ refresh, schema `<name>`, connection `<NAME>_DB`, env var `<NAME>_K8S_URL`.
      (the existing `hc_warehouse_reader` URL can read the full `pg_catalog`
      schema). It renders one transaction of `REVOKE` and `GRANT` on the mirrored
      tables and leaves the role, password and URL alone, so there is no URL to
-     save. Apply `<scratch.sql>` on the primary pod as in step 2, verify with
+     save. Apply `<scratch.sql>` as the database's owner role over its public
+     endpoint (Orchard `get_database_connection`): the owner owns the app's
+     tables, so it may grant on them, and the file has no role statements. The
+     primary-pod route in step 2 is closed since about 2026-11-09. Then verify with
      `--verify-reader --env-file <staged.env>`, then materialize the mirror and
      confirm the warehouse has the column, comparing names case-insensitively
      because the warehouse column's case can differ from the source's.
