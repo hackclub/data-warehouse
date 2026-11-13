@@ -148,12 +148,23 @@ def _compare_program(
     return findings
 
 
+READS_EVERY_COLUMN = "reads every column (pg_read_all_data), so only the -col lists exclude columns"
+
+
+class ReadsEveryColumn(Exception):
+    """The login is a member of pg_read_all_data: column grants cannot narrow it,
+    so comparing them would report every excluded column as drift."""
+
+
 def _fetch_program_tables(url: str) -> dict[str, Any]:
     conn = _connect_pg(url, connect_timeout=CONNECT_TIMEOUT_SECONDS)
     try:
         conn.set_session(readonly=True, autocommit=True)
         with conn.cursor() as cur:
             cur.execute("SELECT set_config('statement_timeout', %s, false)", (STATEMENT_TIMEOUT,))
+            cur.execute("SELECT pg_has_role(current_user, 'pg_read_all_data', 'MEMBER')")
+            if cur.fetchone()[0]:
+                raise ReadsEveryColumn()
             return _fetch_catalog_privileges(cur)
     finally:
         conn.close()
@@ -166,6 +177,9 @@ def check_reader_grant_drift(environ: Mapping[str, str] | None = None) -> DriftR
     for program in programs:
         try:
             tables = _fetch_program_tables(program.url)
+        except ReadsEveryColumn:
+            report.skipped[program.name] = READS_EVERY_COLUMN
+            continue
         except Exception as exc:  # noqa: BLE001 - reported per program below
             # Only the type: driver messages can carry the host and login.
             report.findings.append(

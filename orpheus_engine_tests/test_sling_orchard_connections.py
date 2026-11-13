@@ -32,7 +32,7 @@ from scripts.provision_warehouse_reader import (
 @pytest.mark.parametrize(
     "program",
     [
-        "attend", "fallen", "horizons", "midnight", "half_life",
+        "attend", "fallen", "horizons", "midnight", "half_life", "forge",
         "macondo", "theseus", "haven", "haven_booking", "atlantis", "pixl",
         "cubed", "mipmap", "contd", "coral", "grandma", "stern", "out_to_c",
         "scraps", "trmnt", "three_am", "canvas", "club_starter_grant",

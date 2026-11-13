@@ -409,3 +409,33 @@ def test_full_check_against_real_server_reports_real_connection_failure(
     assert report.checked == ["good"]
     assert [f.kind for f in report.findings] == [NOT_CHECKED]
     assert "no_such_db" not in str(report.findings[0])
+
+
+def test_reader_with_full_read_is_skipped_not_reported(fake_programs, monkeypatch):
+    def fetch(url):
+        if "bad" in url:
+            raise drift.ReadsEveryColumn()
+        return _clean_tables()
+
+    monkeypatch.setattr(drift, "_fetch_program_tables", fetch)
+    report = check_reader_grant_drift(
+        {
+            "HAVEN_K8S_URL": READER_URL.replace("db.example", "bad.example"),
+            "PIXL_K8S_URL": READER_URL,
+        }
+    )
+    assert report.checked == ["pixl"]
+    assert report.findings == []
+    assert report.skipped["haven"] == drift.READS_EVERY_COLUMN
+
+
+def test_real_full_read_member_is_detected(loopback_postgres):
+    port = loopback_postgres
+    admin = psycopg2.connect(host="127.0.0.1", port=port, user="postgres", dbname="postgres")
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute("CREATE ROLE hc_warehouse_reader LOGIN; GRANT pg_read_all_data TO hc_warehouse_reader;")
+    admin.close()
+    url = f"postgresql://hc_warehouse_reader@127.0.0.1:{port}/postgres?sslmode=disable"
+    with pytest.raises(drift.ReadsEveryColumn):
+        drift._fetch_program_tables(url)

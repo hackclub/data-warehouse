@@ -8,14 +8,15 @@ PROGRAMS = [
     "coral", "grandma", "stern", "out_to_c", "scraps", "trmnt", "three_am",
     "canvas", "club_starter_grant", "dyad", "embassy", "jame_gam",
     "save_point", "scare", "fallen", "ari", "expedition", "taiyaki",
-    "player_two",
+    "player_two", "forge",
 ]
 
 # Tables that hold login state, bearer secrets, caches or one-off backups.
 # Fallen's timer_sessions and huddle_sessions are work-timer and coworking
-# activity logs, not auth session tables.
+# activity logs, and Forge's review_sessions is reviewer work time; none are
+# auth session tables.
 UNMIRRORED_TABLE = re.compile(
-    r"(^|(?<!timer)(?<!huddle)_)(sessions?)$"
+    r"(^|(?<!timer)(?<!huddle)(?<!review)_)(sessions?)$"
     r"|(^|_)(auth_tokens?|rate_limits?|cache|migrations)$"
     r"|_bak_|backup|verifications?$|snapshot_state$"
 )
@@ -24,6 +25,14 @@ UNMIRRORED_TABLE = re.compile(
 # stored as a row value (a key/value settings table) is invisible to the
 # column checks below, so the whole table stays out.
 UNMIRRORED_TABLES = {
+    "forge": [
+        "public.app_settings",
+        "public.versions",
+        "public.airtable_queue_items",
+        "public.active_storage_variant_records",
+        "public.schema_migrations",
+        "public.ar_internal_metadata",
+    ],
     "expedition": ["public.sessions", "public.hackatime_connections"],
     "taiyaki": [
         "public.user_sessions",
@@ -115,6 +124,16 @@ UNMIRRORED_TABLES = {
 # Secret or contact columns that must stay excluded wherever their table is
 # mirrored, checked against each program's live schema when it was added.
 EXCLUDED_COLUMNS = {
+    "forge": {
+        "public.active_storage_blobs": ["key", "metadata"],
+        "public.ahoy_visits": ["ip", "visit_token", "visitor_token", "latitude", "longitude"],
+        "public.audit_events": ["metadata", "ip_address"],
+        "public.contractor_agreements": ["signed_ip"],
+        "public.contractor_invoices": ["signed_ip"],
+        "public.orders": ["hcb_grant_link"],
+        "public.spork_checks": ["screen_errors", "error_message"],
+        "public.users": ["address_line1", "address_line2", "postal_code", "phone_number", "hca_token"],
+    },
     "expedition": {
         "public.files": ["bytes"],
         "public.users": ["hca_address"],

@@ -35,6 +35,7 @@ from orpheus_engine.defs.sling.reader_grants import (
 PROGRAM_ENV_VARS: dict[str, str] = {
     "half_life": "HALF_LIFE_DATABASE_URL",
     "attend": "ATTEND_COOLIFY_URL",
+    "forge": "FORGE_COOLIFY_URL",
     "fallen": "FALLEN_K8S_URL",
     "horizons": "HORIZONS_K8S_URL",
     "midnight": "MIDNIGHT_K8S_URL",
