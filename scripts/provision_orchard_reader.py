@@ -1,23 +1,12 @@
-"""Create an Orchard-native read-only login for a warehouse program mirror.
+"""Create a read-only login for a warehouse program mirror through Orchard.
 
-Since about 2026-11-09 Orchard refuses exec into database pods, and an app's
-owner role has no CREATEROLE, so the hc_warehouse_reader setup in
-runbooks/prod-health-monitoring.md §8 step 2 cannot run on a new database.
-This script uses Orchard's own create_database_user (access "read") instead,
-through the `pdw` CLI's hack_club_orchard_k8s connection.
-
-The login is named hc_warehouse_orchard_reader. Orchard makes it a member of
-pg_read_all_data, so Postgres cannot narrow it to columns: the replication
-config's `-col` exclusions are the only thing keeping excluded columns out of
-the warehouse. The different name makes the §9 column-grant check skip it.
-
-For each VAR=<databaseId> it (re)creates the login, waits for Orchard to apply
-it, checks it can read but not write, and writes VAR=<public URL> into the
-staged env file (mode 600). It prints no secrets. Afterwards run
+For each VAR=<databaseId> it creates the login, waits until it can connect,
+checks that it cannot write, and writes VAR=<public URL> into the staged env
+file (mode 600). It prints no secrets. Afterwards run
 scripts/provision_warehouse_reader.py --check against the staged file.
 
     PYTHONPATH=. .venv/bin/python scripts/provision_orchard_reader.py \\
-        --env-file <staged.env> MACONDO_K8S_URL=<databaseId> ...
+        --env-file <staged.env> <NAME>_K8S_URL=<databaseId> ...
 """
 
 from __future__ import annotations

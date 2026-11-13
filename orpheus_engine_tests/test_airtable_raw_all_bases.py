@@ -67,8 +67,7 @@ def test_discovered_names_reach_base_rows(monkeypatch, schema_fails):
 
 
 # --- Values Postgres jsonb rejects --------------------------------------------
-# On 2026-11-10 a few records with such values made whole 10k-row flushes fail,
-# and every other base's rows in those batches (all of "YSWS - Aria") were lost.
+# One such record used to fail a whole mixed batch and drop other bases' rows.
 
 import glob
 import json

@@ -291,7 +291,7 @@ class WriteQueue:
         self._records_buf = []
         # The buffer mixes rows from every base in flight. A failed batch used to
         # drop all of them and blame whichever table triggered the flush, so
-        # whole bases (YSWS - Aria, 2026-11-10) never reached the warehouse.
+        # whole bases never reached the warehouse.
         # On a data error, retry row by row and skip only the rows Postgres rejects.
         conn = get_db_connection()
         try:

@@ -4,7 +4,7 @@ from dagster import Nothing
 from .._helpers import _sling_connection_url
 
 
-# Half Life (Orchard: half-life-db, namespace ysws-half-life). The URL keeps
+# Half Life. The URL keeps
 # sslrootcert=system for psycopg2; _sling_connection_url removes it for Sling,
 # which otherwise fails with "open system: no such file or directory".
 half_life_db_connection = SlingConnectionResource(

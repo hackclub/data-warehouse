@@ -4,7 +4,7 @@ from dagster import Nothing
 from .._helpers import _sling_connection_url
 
 
-# Player Two (Orchard; schema checked 2026-11-11).
+# Player Two (schema checked 2026-11-11).
 player_two_db_connection = SlingConnectionResource(
     name="PLAYER_TWO_DB",
     type="postgres",

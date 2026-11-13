@@ -4,7 +4,7 @@ from dagster import Nothing
 from .._helpers import _sling_connection_url
 
 
-# Expedition (Orchard: expedition, namespace ysws-expedition; schema checked 2026-11-11).
+# Expedition (schema checked 2026-11-11).
 expedition_db_connection = SlingConnectionResource(
     name="EXPEDITION_DB",
     type="postgres",

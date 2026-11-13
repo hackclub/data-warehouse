@@ -4,7 +4,7 @@ from dagster import Nothing
 from .._helpers import _sling_connection_url
 
 
-# Ari (Orchard: prod, namespace ysws-ari-1). Ari is the shared submission and
+# Ari is the shared submission and
 # review platform: its Program table holds Macondo, Half Life, third.space,
 # Snowglobe, 3am, Embassy, Twisted, Scare, grandma, Hackrail, Player Two and
 # others (checked 2026-11-10). jame gam runs its own copy of the same app

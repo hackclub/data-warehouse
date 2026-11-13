@@ -23,8 +23,7 @@ def test_reader_url_keeps_public_endpoint_and_quotes_password():
 
 
 def test_reader_is_not_the_column_grant_reader():
-    # The §9 drift check expects column grants; an Orchard read login has
-    # pg_read_all_data, so it must log in under a different name.
+    # The §9 drift check expects column grants, which this login does not use.
     assert por.READER != READER_ROLE
 
 

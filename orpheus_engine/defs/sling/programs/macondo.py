@@ -11,12 +11,11 @@ macondo_db_connection = SlingConnectionResource(
 )
 
 
-# Macondo (Orchard: macondo-prod-pg18, namespace ysws-macondo; moved off Coolify
-# 2026-10-02). Every table is listed; new tables need a review before they sync.
+# Macondo. Every table is listed; new tables need a review before they sync.
 # Not mirrored: sessions, api_keys, mcp_tokens, mcp_auth_codes and
 # internal_oauth_connections (tokens and hashes), pii_locker (phone, birthday,
-# addresses), user_backups (payload copies a deleted user's sessions, OAuth
-# connections and pii_locker rows) and drizzle.__drizzle_migrations.
+# addresses), user_backups (copies of deleted accounts) and
+# drizzle.__drizzle_migrations.
 # audit_logs old/new values can hold any changed field, including PII.
 # app_settings holds only feature flags (key names checked 2026-11-10).
 # Schema checked 2026-11-10.

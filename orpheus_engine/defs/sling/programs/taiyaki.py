@@ -4,7 +4,7 @@ from dagster import Nothing
 from .._helpers import _sling_connection_url
 
 
-# Taiyaki (Orchard: taiyaki-db, namespace ysws-taiyaki; schema checked 2026-11-11).
+# Taiyaki (schema checked 2026-11-11).
 taiyaki_db_connection = SlingConnectionResource(
     name="TAIYAKI_DB",
     type="postgres",
