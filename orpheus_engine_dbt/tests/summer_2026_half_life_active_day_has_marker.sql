@@ -14,7 +14,7 @@
 SELECT
     program_name,
     user_email,
-    activity_date,
+    (activity_hour AT TIME ZONE 'America/New_York')::date AS activity_date,
     ROUND(SUM(raw_hours_logged), 2) AS hours_logged
 FROM {{ ref('summer_unified_time_log') }}
 WHERE program_name = 'half_life'

@@ -1,0 +1,24 @@
+name: Summer dbt SQL tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  singular-sql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - name: Compile and execute Summer singular tests on fixture PostgreSQL
+        run: >-
+          uv run --no-project --with pytest --with 'dbt-core>=1.7,<2'
+          --with 'dbt-postgres>=1.7,<2'
+          pytest -q orpheus_engine_tests/test_summer_2026_singular_sql.py
