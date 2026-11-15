@@ -297,6 +297,14 @@ it does NOT vouch for identity quality, see 4b). Spot-check
 `dashboard_program_daily_metrics` (label renders correctly, `in_45_day_chart_window`
 sane). Rebuild takes ~1min and swaps tables atomically.
 
+A singular test that errors (bad column, invalid SQL) fails the job even at
+`severity='warn'`, and dbt then skips every downstream model, so the dashboard goes
+stale. CI (`.github/workflows/summer-dbt-tests.yml`) compiles and runs every
+`tests/summer_2026*.sql` on a synthetic PostgreSQL. Run it locally (needs Docker) with
+`uv run --extra dev pytest orpheus_engine_tests/test_summer_2026_singular_sql.py`. When a
+test reads a new relation or column, add it to
+`orpheus_engine_tests/fixtures/summer_2026/singular_tests.sql`.
+
 Commit to the feature branch (do NOT push to main unless the user says so). The durable
 record of what was decided and why belongs in the model comments, not in this runbook.
 Report to the user: methodology + audit numbers, dedup deltas, validation results,
