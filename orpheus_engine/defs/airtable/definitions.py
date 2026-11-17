@@ -461,6 +461,26 @@ airtable_config = AirtableServiceConfig(
                 ),
             }
         ),
+        "shredder": AirtableBaseConfig(
+            base_id="app1Knvgk0jNmBuFo",
+            tables={
+                "rsvp_emails": AirtableTableConfig(
+                    table_id="tblxVGpD5sF20KIKW"
+                ),
+                "projects": AirtableTableConfig(
+                    table_id="tblebWAX42z5KDVZ4"
+                ),
+                "shop": AirtableTableConfig(
+                    table_id="tblIApWAlLuH4Aqpz"
+                ),
+                "orders": AirtableTableConfig(
+                    table_id="tbl4IhFpkcxosXlp2"
+                ),
+                "reviews": AirtableTableConfig(
+                    table_id="tbl7d6nSBEL0CFB57"
+                ),
+            }
+        ),
     }
 )
 

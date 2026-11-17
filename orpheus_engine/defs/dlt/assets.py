@@ -730,6 +730,12 @@ mipmap_assets = create_airtable_sync_assets(
     description="Loads mipmap data into the warehouse.airtable_mipmap schema."
 )
 
+shredder_assets = create_airtable_sync_assets(
+    base_name="shredder",
+    tables=["rsvp_emails", "projects", "shop", "orders", "reviews"],
+    description="Loads shredder data into the warehouse.airtable_shredder schema."
+)
+
 # --- DLT Asset: Loads Data into Warehouse using DLT ---
 @asset(
     compute_kind="dlt", # Tagging the compute type for UI clarity

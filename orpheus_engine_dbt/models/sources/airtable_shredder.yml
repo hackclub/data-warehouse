@@ -1,0 +1,21 @@
+version: 2
+
+sources:
+  - name: airtable_shredder
+    schema: airtable_shredder
+    tables:
+      - name: rsvp_emails
+        description: "Shredder rsvp_emails table."
+        meta: {dagster: {deps: [shredder_rsvp_emails_warehouse]}}
+      - name: projects
+        description: "Shredder projects table."
+        meta: {dagster: {deps: [shredder_projects_warehouse]}}
+      - name: shop
+        description: "Shredder shop table."
+        meta: {dagster: {deps: [shredder_shop_warehouse]}}
+      - name: orders
+        description: "Shredder orders table."
+        meta: {dagster: {deps: [shredder_orders_warehouse]}}
+      - name: reviews
+        description: "Shredder reviews table."
+        meta: {dagster: {deps: [shredder_reviews_warehouse]}}
