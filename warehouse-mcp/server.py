@@ -12,6 +12,7 @@ Provides tools for:
 import contextlib
 import base64
 import contextvars
+from datetime import datetime, timezone
 import hashlib
 import json
 import logging
@@ -68,6 +69,62 @@ _oauth_codes: dict[str, dict] = {}
 _pending_auth: dict[str, dict] = {}
 # Current user context (firstname, lastname) for SQL query attribution
 _current_user: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar('current_user', default=None)
+# Short SHA-256 prefix of the authenticated bearer token (never the token itself)
+_current_token_fp: contextvars.ContextVar[str | None] = contextvars.ContextVar('current_token_fp', default=None)
+
+AUDIT_SQL_MAX_CHARS = 4000
+
+
+def _token_fingerprint(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
+
+def _format_caller(user_info: tuple[str, str] | None) -> str:
+    if not user_info:
+        return "unknown"
+    parts = [p.strip() for p in user_info if p and p.strip()]
+    return " ".join(parts) if parts else "unknown"
+
+
+def _emit_audit_log(
+    *,
+    tool: str,
+    arguments: dict[str, Any],
+    user_info: tuple[str, str] | None,
+    token_fp: str | None,
+    outcome: str,
+    duration_ms: int,
+    row_count: int | None = None,
+    query_id: str | None = None,
+    error: str | None = None,
+) -> None:
+    record: dict[str, Any] = {
+        "event": "mcp_tool_call",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "tool": tool,
+        "caller": _format_caller(user_info),
+        "token_fingerprint": token_fp or "none",
+        "outcome": outcome,
+        "duration_ms": duration_ms,
+    }
+    if tool == "query" and isinstance(arguments.get("sql"), str):
+        sql = arguments["sql"]
+        record["sql"] = sql[:AUDIT_SQL_MAX_CHARS]
+        if len(sql) > AUDIT_SQL_MAX_CHARS:
+            record["sql_truncated"] = True
+    if "schema_name" in arguments:
+        record["schema"] = arguments["schema_name"]
+    if "table_name" in arguments:
+        record["table"] = arguments["table_name"]
+    if query_id is not None:
+        record["query_id"] = query_id
+    elif "query_id" in arguments:
+        record["query_id"] = arguments["query_id"]
+    if row_count is not None:
+        record["row_count"] = row_count
+    if error is not None:
+        record["error"] = error[:500]
+    logger.info("mcp_audit %s", json.dumps(record, separators=(",", ":")))
 
 
 def generate_pending_auth(client_id: str, redirect_uri: str, code_challenge: str, state: str) -> str:
@@ -389,6 +446,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     db = get_database()
     cache = get_cache()
     user_info = _current_user.get()
+    token_fp = _current_token_fp.get()
+    started = time.monotonic()
+    outcome = "ok"
+    row_count: int | None = None
+    query_id_out: str | None = None
+    error_out: str | None = None
 
     try:
         if name == "query":
@@ -400,6 +463,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             
             # Cache results
             entry = cache.store(sql, rows, columns)
+            row_count = entry.row_count
+            query_id_out = entry.query_id
             
             # Format response
             preview = rows[:preview_rows]
@@ -424,12 +489,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             
             result = cache.get_rows(query_id, offset, limit)
             if result is None:
+                outcome = "not_found"
                 return [TextContent(
                     type="text",
                     text=f"Query ID '{query_id}' not found or expired. Run a new query."
                 )]
             
             rows, total = result
+            row_count = len(rows)
             entry = cache.get(query_id)
             columns = entry.columns if entry else []
             
@@ -451,12 +518,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             
             result = cache.grep_rows(query_id, pattern, limit)
             if result is None:
+                outcome = "not_found"
                 return [TextContent(
                     type="text",
                     text=f"Query ID '{query_id}' not found or expired. Run a new query."
                 )]
             
             rows, total_matches = result
+            row_count = len(rows)
             entry = cache.get(query_id)
             columns = entry.columns if entry else []
             
@@ -471,6 +540,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         
         elif name == "list_schemas":
             schemas = await db.list_schemas()
+            row_count = len(schemas)
             
             response = "Available schemas:\n"
             for schema in schemas:
@@ -491,6 +561,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             limit = arguments.get("limit", 100)
             
             columns, total = await db.list_columns(schema_name, table_name, offset, limit)
+            row_count = len(columns)
             
             if not columns:
                 return [TextContent(
@@ -507,13 +578,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             ]
             
             for col in columns:
-                name = col['column_name']
+                col_name = col['column_name']
                 dtype = col['data_type']
                 if col.get('character_maximum_length'):
                     dtype += f"({col['character_maximum_length']})"
                 nullable = "YES" if col['is_nullable'] == 'YES' else "NO"
                 default = str(col['column_default'])[:30] if col['column_default'] else ""
-                lines.append(f"| {name} | {dtype} | {nullable} | {default} |")
+                lines.append(f"| {col_name} | {dtype} | {nullable} | {default} |")
             
             if offset + len(columns) < total:
                 lines.append("")
@@ -522,23 +593,44 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(type="text", text="\n".join(lines))]
         
         else:
+            outcome = "unknown_tool"
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
     
     except SQLValidationError as e:
+        outcome = "validation_error"
+        error_out = str(e)
         # Safe to expose - these are intentional validation messages
         return [TextContent(type="text", text=f"SQL validation error: {e}")]
     except ValueError as e:
+        outcome = "value_error"
+        error_out = str(e)
         # Safe to expose - argument validation errors
         return [TextContent(type="text", text=f"Invalid argument: {e}")]
     except psycopg.Error as e:
+        outcome = "db_error"
         # Safe to expose - PostgreSQL errors help users fix their queries
         error_msg = e.diag.message_primary if e.diag and e.diag.message_primary else str(e)
+        error_out = error_msg
         return [TextContent(type="text", text=f"Database error: {error_msg}")]
     except Exception as e:
+        outcome = "internal_error"
+        error_out = type(e).__name__
         # Log full exception for debugging, but don't expose details to client
         logger.exception("Tool execution error")
         # Return generic message to avoid leaking internal information
         return [TextContent(type="text", text="An internal error occurred. Please try again or contact support if the issue persists.")]
+    finally:
+        _emit_audit_log(
+            tool=name,
+            arguments=arguments,
+            user_info=user_info,
+            token_fp=token_fp,
+            outcome=outcome,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            row_count=row_count,
+            query_id=query_id_out,
+            error=error_out,
+        )
 
 
 def validate_auth(scope) -> bool:
@@ -1068,22 +1160,32 @@ async def app(scope, receive, send):
         })
         return
 
-    # Extract user context from auth token for SQL attribution
+    # Extract user context and token fingerprint for SQL attribution and audit logging
     headers = dict(scope.get("headers", []))
     auth_header = headers.get(b"authorization", b"").decode()
+    user_ctx_token = None
+    fp_ctx_token = None
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
         is_valid, firstname, lastname = decode_access_token(token)
-        if is_valid and firstname and lastname:
-            _current_user.set((firstname, lastname))
+        if is_valid:
+            fp_ctx_token = _current_token_fp.set(_token_fingerprint(token))
+            if (firstname and firstname.strip()) or (lastname and lastname.strip()):
+                user_ctx_token = _current_user.set((firstname or "", lastname or ""))
 
-    # MCP endpoint at root path (/) for Streamable HTTP transport
-    if path == "/" and method in ("GET", "POST", "DELETE"):
-        await session_manager.handle_request(scope, receive, send)
-        return
+    try:
+        # MCP endpoint at root path (/) for Streamable HTTP transport
+        if path == "/" and method in ("GET", "POST", "DELETE"):
+            await session_manager.handle_request(scope, receive, send)
+            return
 
-    # 404 for unknown routes
-    await send_error(send, 404, "Not found")
+        # 404 for unknown routes
+        await send_error(send, 404, "Not found")
+    finally:
+        if user_ctx_token is not None:
+            _current_user.reset(user_ctx_token)
+        if fp_ctx_token is not None:
+            _current_token_fp.reset(fp_ctx_token)
 
 
 @contextlib.asynccontextmanager
