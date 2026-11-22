@@ -24,7 +24,6 @@ from materialize_all_assets_job and only runs on demand.
 
 import asyncio
 import os
-import re
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
@@ -40,6 +39,8 @@ from dagster import (
     Output,
     asset,
 )
+
+from ..shared.github_utils import parse_github_repo
 
 SCHEMA_NAME = "highway_github"
 
@@ -83,9 +84,6 @@ CREATE TABLE IF NOT EXISTS {SCHEMA_NAME}.commits (
 );
 """
 
-GITHUB_REPO_RE = re.compile(r"github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)", re.IGNORECASE)
-
-
 def get_db_connection():
     conn_string = os.getenv("WAREHOUSE_COOLIFY_URL")
     if not conn_string:
@@ -104,17 +102,11 @@ def ensure_schema_and_tables(conn):
 
 
 def parse_repo_key(github_url: str) -> Optional[Tuple[str, str]]:
-    """Extract (owner, repo) from a GitHub URL, dropping .git and deep paths."""
-    match = GITHUB_REPO_RE.search(github_url or "")
-    if not match:
+    """Extract a lowercased (owner, repo) key from a GitHub URL."""
+    parsed = parse_github_repo(github_url)
+    if not parsed:
         return None
-    owner = match.group(1).lower()
-    repo = match.group(2).lower()
-    if repo.endswith(".git"):
-        repo = repo[:-4]
-    if not repo or owner in ("orgs", "topics", "search"):
-        return None
-    return owner, repo
+    return parsed[0].lower(), parsed[1].lower()
 
 
 def load_highway_repos(conn) -> List[Tuple[str, str]]:

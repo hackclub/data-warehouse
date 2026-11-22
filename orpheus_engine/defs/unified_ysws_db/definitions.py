@@ -1,6 +1,7 @@
 import hashlib
 import polars as pl
 import os
+import random
 import re
 import requests
 import json
@@ -28,6 +29,7 @@ from ..geocoder.resources import GeocoderResource, GeocodingError
 from ..airtable.generated_ids import AirtableIDs
 from .true_spend_sync import ysws_programs_hcb_stats, ysws_programs_true_spend_update_status
 from ..shared.address_utils import build_address_string_from_airtable_row
+from ..shared.github_utils import parse_github_repo
 from ..shared.daily_backups import (
     ParquetBackupFile,
     dataframe_to_parquet_bytes,
@@ -133,179 +135,246 @@ def _calculate_archive_hash(code_url: str, playable_url: str, archive_code_url: 
     return hashlib.sha256(hash_string.encode('utf-8')).hexdigest()
 
 
-async def _fetch_github_stars_single_async(session: aiohttp.ClientSession, project_id: str, github_repo_url: str, gh_proxy_api_key: str, current_time: datetime, logger=None) -> dict:
+# gh-proxy throttling. Cloudflare rate-limits gh-proxy per IP and a trip blocks
+# the warehouse's whole egress IP (geocoder + archive calls included) for 300s,
+# so stay under gh-proxy's own ~10 req/s per-key default.
+GH_PROXY_MAX_RPS = float(os.getenv("GH_PROXY_MAX_RPS", "8"))
+GH_PROXY_MAX_CONCURRENCY = 16
+GH_PROXY_MAX_ATTEMPTS = 4
+GH_PROXY_MAX_RETRY_WAIT = 300  # seconds; matches Cloudflare's block duration
+GH_PROXY_CIRCUIT_BREAKER_THRESHOLD = 20  # consecutive rate-limited responses
+GH_PROXY_RETRYABLE_STATUSES = {429, 502, 503, 504}
+
+
+class _GhProxyThrottle:
+    """Spaces requests across all tasks to a fixed req/s, and trips a circuit
+    breaker after too many consecutive rate-limited responses."""
+
+    def __init__(self, max_rps: float, logger=None):
+        self._interval = 1.0 / max_rps
+        self._next_allowed = 0.0
+        self._lock = asyncio.Lock()
+        self._logger = logger
+        self.consecutive_rate_limited = 0
+        self.tripped = False
+
+    async def acquire(self):
+        async with self._lock:
+            scheduled = max(time.monotonic(), self._next_allowed)
+            self._next_allowed = scheduled + self._interval
+        wait = scheduled - time.monotonic()
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+    def pause(self, seconds: float):
+        """Hold back every request, since the rate limit is per IP, not per repo."""
+        self._next_allowed = max(self._next_allowed, time.monotonic() + seconds)
+
+    def record(self, rate_limited: bool):
+        if not rate_limited:
+            self.consecutive_rate_limited = 0
+            return
+        self.consecutive_rate_limited += 1
+        if not self.tripped and self.consecutive_rate_limited >= GH_PROXY_CIRCUIT_BREAKER_THRESHOLD:
+            self.tripped = True
+            if self._logger:
+                self._logger.error(
+                    f"🚨 gh-proxy circuit breaker tripped after {self.consecutive_rate_limited} consecutive "
+                    f"rate-limited responses; skipping all remaining repo stats requests this run"
+                )
+
+
+def _gh_proxy_retry_wait(headers, attempt: int) -> float:
+    """Seconds to wait before retrying: Retry-After if given, else exponential backoff, plus jitter."""
+    try:
+        wait = float(headers.get("Retry-After"))
+    except (TypeError, ValueError):
+        wait = min(2 * (2 ** attempt), 60)
+    return min(max(wait, 0), GH_PROXY_MAX_RETRY_WAIT) + random.uniform(0, 1)
+
+
+async def _is_rate_limited_403(response: aiohttp.ClientResponse) -> bool:
+    """GitHub signals primary/secondary rate limits with a 403, not a 429."""
+    if response.headers.get("x-ratelimit-remaining") == "0":
+        return True
+    try:
+        body = await response.text()
+    except Exception:
+        return False
+    return "rate limit" in body.lower()
+
+
+async def _fetch_github_stars_single_async(
+    session: aiohttp.ClientSession,
+    project_id: str,
+    owner: str,
+    repo: str,
+    gh_proxy_api_key: str,
+    current_time: datetime,
+    throttle: _GhProxyThrottle,
+    semaphore: asyncio.Semaphore,
+    logger=None,
+) -> dict:
     """
     Fetch star count for a single GitHub repository using async/await.
-    
+
     TODO: REFACTOR GH-PROXY INTO DAGSTER RESOURCE
     Currently we're handling gh-proxy API calls directly in this function with hardcoded URLs
     and environment variable access. This should be refactored into a proper Dagster resource
     (similar to AirtableResource) that encapsulates:
     - API key management and validation
-    - Base URL configuration  
+    - Base URL configuration
     - Rate limiting logic and connection pooling
     - Standard error handling and retry logic
     - Consistent logging patterns
     - Reusable across other assets that need GitHub data
-    
+
     The resource should provide methods like:
     - get_repository_info(owner, repo) -> dict
-    - get_repositories_bulk(repo_list) -> list[dict] 
+    - get_repositories_bulk(repo_list) -> list[dict]
     - And handle all the aiohttp session management, auth headers, etc.
-    
+
+    Only a 200 or a 404 is authoritative. Anything else (rate limits, 5xx after
+    retries, timeouts) comes back with transient=True so the caller leaves the
+    existing Airtable values and last-updated timestamp alone.
+
     Returns:
         Dictionary with project_id and field values for Airtable update
     """
+    repo_key = f"{owner}/{repo}"
+    api_url = f"https://gh-proxy.hackclub.com/gh/repos/{owner}/{repo}"
+    transient = {"project_id": project_id, "success": False, "transient": True, "repo": repo_key}
+    error = None
+
     try:
-        # Extract owner/repo from GitHub URL
-        url_parts = github_repo_url.replace("https://github.com/", "").split("/")
-        if len(url_parts) < 2:
-            return {
-                "project_id": project_id,
-                "success": False,
-                "error": f"Invalid GitHub URL format: {github_repo_url}"
-            }
-            
-        owner, repo = url_parts[0], url_parts[1]
-        
-        # Make API request to gh-proxy
-        api_url = f"https://gh-proxy.hackclub.com/gh/repos/{owner}/{repo}"
-        
-        async with session.get(
-            api_url,
-            headers={
-                "X-API-Key": gh_proxy_api_key,
-                "Accept": "application/json"
-            },
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as response:
-            
-            if response.status != 200:
+        for attempt in range(GH_PROXY_MAX_ATTEMPTS):
+            if throttle.tripped:
+                return {**transient, "error": "skipped: gh-proxy circuit breaker open"}
+            async with semaphore:
+                await throttle.acquire()
+                if throttle.tripped:
+                    return {**transient, "error": "skipped: gh-proxy circuit breaker open"}
+                try:
+                    async with session.get(
+                        api_url,
+                        headers={
+                            "X-API-Key": gh_proxy_api_key,
+                            "Accept": "application/json"
+                        },
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as response:
+
+                        if response.status == 200:
+                            throttle.record(rate_limited=False)
+                            data = await response.json()
+                            stargazers_count = data.get("stargazers_count", 0)
+                            language = data.get("language", "")  # Extract primary language
+
+                            if logger:
+                                logger.info(f"✅ {repo_key}: {stargazers_count} stars, {language or 'Unknown'} language")
+
+                            return {
+                                "project_id": project_id,
+                                "success": True,
+                                "repo_exists": "Repo Exists",
+                                "stars": int(stargazers_count),
+                                "language": language or "",
+                                "updated_at": current_time,
+                                "repo": repo_key
+                            }
+
+                        if response.status == 404:
+                            throttle.record(rate_limited=False)
+                            if logger:
+                                logger.warning(f"❌ {repo_key}: HTTP 404")
+                            return {
+                                "project_id": project_id,
+                                "success": False,
+                                "repo_exists": "Repo 404s",
+                                "updated_at": current_time,
+                                "repo": repo_key,
+                                "error": f"gh-proxy API returned 404 for {repo_key}"
+                            }
+
+                        rate_limited = response.status == 429 or (
+                            response.status == 403 and await _is_rate_limited_403(response)
+                        )
+                        throttle.record(rate_limited)
+                        error = f"HTTP {response.status}"
+                        if not rate_limited and response.status not in GH_PROXY_RETRYABLE_STATUSES:
+                            if logger:
+                                logger.warning(f"⚠️ {repo_key}: {error}, leaving existing values untouched")
+                            return {**transient, "error": f"gh-proxy API returned {response.status} for {repo_key}"}
+
+                        wait = _gh_proxy_retry_wait(response.headers, attempt)
+                        if rate_limited:
+                            throttle.pause(wait)
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    error = f"{type(e).__name__}: {e}"
+                    wait = _gh_proxy_retry_wait({}, attempt)
+
+            if attempt < GH_PROXY_MAX_ATTEMPTS - 1:
                 if logger:
-                    logger.warning(f"❌ {owner}/{repo}: HTTP {response.status}")
-                
-                # Set repo_exists based on status code
-                if response.status == 404:
-                    repo_exists = "Repo 404s"
-                else:
-                    repo_exists = "Repo 404s"  # Other errors also indicate repo issues
-                
-                return {
-                    "project_id": project_id,
-                    "success": False,
-                    "repo_exists": repo_exists,
-                    "error": f"gh-proxy API returned {response.status} for {owner}/{repo}"
-                }
-                
-            data = await response.json()
-            stargazers_count = data.get("stargazers_count", 0)
-            language = data.get("language", "")  # Extract primary language
-            
-            if logger:
-                logger.info(f"✅ {owner}/{repo}: {stargazers_count} stars, {language or 'Unknown'} language")
-            
-            return {
-                "project_id": project_id,
-                "success": True,
-                "repo_exists": "Repo Exists",
-                "stars": int(stargazers_count),
-                "language": language or "",
-                "updated_at": current_time,
-                "repo": f"{owner}/{repo}"
-            }
-        
-    except aiohttp.ClientError as e:
-        return {
-            "project_id": project_id,
-            "success": False,
-            "repo_exists": "Repo 404s",  # Assume repo doesn't exist for client errors
-            "error": f"Request failed for GitHub URL {github_repo_url}: {e}"
-        }
-    except (KeyError, ValueError, TypeError) as e:
-        return {
-            "project_id": project_id,
-            "success": False,
-            "repo_exists": None,  # Unknown if repo exists due to parsing error
-            "error": f"Error parsing GitHub data for {github_repo_url}: {e}"
-        }
+                    logger.warning(f"⏳ {repo_key}: {error}, retrying in {wait:.1f}s (attempt {attempt + 1}/{GH_PROXY_MAX_ATTEMPTS})")
+                await asyncio.sleep(wait)
+
+        return {**transient, "error": f"gh-proxy request for {repo_key} failed after {GH_PROXY_MAX_ATTEMPTS} attempts: {error}"}
+
     except Exception as e:
-        return {
-            "project_id": project_id,
-            "success": False,
-            "repo_exists": None,  # Unknown if repo exists due to unexpected error
-            "error": f"Unexpected error processing GitHub URL {github_repo_url}: {e}"
-        }
+        return {**transient, "error": f"Unexpected error processing {repo_key}: {e}"}
 
 
-async def _fetch_github_stars_async_all(projects_data: list, gh_proxy_api_key: str, current_time: datetime, logger=None, max_rps: int = 300) -> list:
+async def _fetch_github_stars_async_all(projects_data: list, gh_proxy_api_key: str, current_time: datetime, logger=None, max_rps: float = GH_PROXY_MAX_RPS) -> tuple[list, bool]:
     """
-    Fetch GitHub star counts using async/await - Python equivalent of Promise.all.
-    Processes all requests concurrently up to specified RPS with automatic chunking.
-    
+    Fetch GitHub star counts concurrently, paced to max_rps across all requests
+    with at most GH_PROXY_MAX_CONCURRENCY in flight.
+
     Args:
-        projects_data: List of dictionaries with project_id and github_repo_url
+        projects_data: List of dictionaries with project_id, owner and repo
         gh_proxy_api_key: API key for gh-proxy
         current_time: Current timestamp for updated_at field
         logger: Optional logger for progress updates
-        max_rps: Maximum requests per second (default 300)
-    
+        max_rps: Maximum requests per second (default GH_PROXY_MAX_RPS)
+
     Returns:
-        List of results from all async API calls
+        (results, circuit_breaker_tripped)
     """
-    results = []
-    
-    # Calculate optimal chunk size and timing for the target RPS
-    # Use chunks of 100 or max_rps/3, whichever is smaller for good balance
-    chunk_size = min(100, max(1, max_rps // 3))
-    chunk_interval = chunk_size / max_rps  # Time between chunks to maintain RPS
-    
+    throttle = _GhProxyThrottle(max_rps, logger)
+    semaphore = asyncio.Semaphore(GH_PROXY_MAX_CONCURRENCY)
+
     async with aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(limit=500, limit_per_host=500),
+        connector=aiohttp.TCPConnector(limit=GH_PROXY_MAX_CONCURRENCY, limit_per_host=GH_PROXY_MAX_CONCURRENCY),
         timeout=aiohttp.ClientTimeout(total=30)
     ) as session:
-        
-        for i in range(0, len(projects_data), chunk_size):
-            chunk = projects_data[i:i + chunk_size]
-            chunk_start_time = time.time()
-            
-            # Create all async tasks for this chunk (Python equivalent of Promise.all)
-            tasks = []
-            for project_data in chunk:
-                task = _fetch_github_stars_single_async(
-                    session,
-                    project_data["project_id"],
-                    project_data["github_repo_url"],
-                    gh_proxy_api_key,
-                    current_time,
-                    logger
-                )
-                tasks.append(task)
-            
-            # Execute all requests concurrently (Promise.all equivalent)
-            chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # Process results and handle any exceptions
-            for result in chunk_results:
-                if isinstance(result, Exception):
-                    if logger:
-                        logger.error(f"Async request failed: {result}")
-                    results.append({
-                        "project_id": "unknown",
-                        "success": False,
-                        "error": str(result)
-                    })
-                else:
-                    results.append(result)
-            
-            # Rate limiting: ensure we don't exceed max_rps
-            chunk_duration = time.time() - chunk_start_time
-            if chunk_duration < chunk_interval and i + chunk_size < len(projects_data):
-                await asyncio.sleep(chunk_interval - chunk_duration)
-    
-    return results
+        tasks = [
+            _fetch_github_stars_single_async(
+                session,
+                project_data["project_id"],
+                project_data["owner"],
+                project_data["repo"],
+                gh_proxy_api_key,
+                current_time,
+                throttle,
+                semaphore,
+                logger
+            )
+            for project_data in projects_data
+        ]
+        gathered = await asyncio.gather(*tasks, return_exceptions=True)
+
+    results = []
+    for result in gathered:
+        if isinstance(result, Exception):
+            # No project id to attach it to, so it can only be skipped
+            if logger:
+                logger.error(f"Async request failed: {result}")
+            continue
+        results.append(result)
+
+    return results, throttle.tripped
 
 
-def _fetch_github_stars_parallel_wrapper(projects_data: list, gh_proxy_api_key: str, current_time: datetime, logger=None, max_rps: int = 300) -> list:
+def _fetch_github_stars_parallel_wrapper(projects_data: list, gh_proxy_api_key: str, current_time: datetime, logger=None, max_rps: float = GH_PROXY_MAX_RPS) -> tuple[list, bool]:
     """
     Synchronous wrapper for async GitHub stars fetching.
     """
@@ -316,15 +385,16 @@ def _extract_github_repo_url(code_url: str) -> str:
     """
     Extract GitHub repository URL from various GitHub URL formats.
     Skips pull request URLs, blob URLs (file-specific URLs), and tree URLs (directory-specific URLs) as they are not valid candidates for star counting.
-    
+
     Args:
         code_url: URL that may contain a GitHub repository reference
-        
+
     Returns:
         Base GitHub repository URL (e.g., 'https://github.com/owner/repo') or empty string if not a GitHub URL or is a pull request/blob/tree
-        
+
     Examples:
         https://github.com/zachlatta/sshtron -> https://github.com/zachlatta/sshtron
+        http://www.github.com/zachlatta/sshtron.git/ -> https://github.com/zachlatta/sshtron
         https://github.com/zachlatta/sshtron/pull/123 -> "" (skipped)
         https://github.com/zachlatta/sshtron/tree/main -> "" (skipped)
         https://github.com/hackclub/bakebuild/blob/main/cutters/panda.step -> "" (skipped)
@@ -332,27 +402,24 @@ def _extract_github_repo_url(code_url: str) -> str:
     """
     if not code_url:
         return ""
-    
+
     # Skip pull request URLs
     if '/pull/' in code_url or '/pulls' in code_url:
         return ""
-    
+
     # Skip blob URLs (file-specific URLs)
     if '/blob/' in code_url:
         return ""
-    
+
     # Skip tree URLs (directory-specific URLs)
     if '/tree/' in code_url:
         return ""
-    
-    # Pattern to match GitHub URLs and extract owner/repo
-    pattern = r'^https://github\.com/([^/]+)/([^/]+)(?:/.*)?$'
-    match = re.match(pattern, code_url.strip())
-    
-    if match:
-        owner, repo = match.groups()
+
+    parsed = parse_github_repo(code_url)
+    if parsed:
+        owner, repo = parsed
         return f"https://github.com/{owner}/{repo}"
-    
+
     return ""
 
 
@@ -429,8 +496,11 @@ def approved_projects_repo_stats_candidates(
             metadata={"num_projects": 0, "num_candidates": 0}
         )
     
-    # Calculate 24 hours ago threshold
-    twenty_four_hours_ago = datetime.now(timezone.utc) - timedelta(hours=24)
+    # Live repos are refreshed daily; repos that 404'd only weekly, since they
+    # rarely come back and re-polling them daily was most of our gh-proxy 404s
+    now = datetime.now(timezone.utc)
+    twenty_four_hours_ago = now - timedelta(hours=24)
+    one_week_ago = now - timedelta(weeks=1)
     
     # Filter for projects that have code_url field set
     projects_with_urls = projects_df.filter(
@@ -442,15 +512,24 @@ def approved_projects_repo_stats_candidates(
     has_updated_at_field = updated_at_field_id in projects_df.columns
     
     if has_updated_at_field:
+        if exists_field_id in projects_df.columns:
+            stale_before = (
+                pl.when(pl.col(exists_field_id) == "Repo 404s")
+                .then(pl.lit(one_week_ago.isoformat()))
+                .otherwise(pl.lit(twenty_four_hours_ago.isoformat()))
+            )
+        else:
+            stale_before = pl.lit(twenty_four_hours_ago.isoformat())
+        
         # Filter for records that need checking:
         # 1. Updated at field is null/empty, OR
-        # 2. Last updated was more than 24 hours ago
+        # 2. Last updated was more than 24 hours ago (1 week for "Repo 404s")
         processed_df = projects_with_urls.filter(
             (pl.col(updated_at_field_id).is_null()) |
             (pl.col(updated_at_field_id) == "") |
-            (pl.col(updated_at_field_id) < twenty_four_hours_ago.isoformat())
+            (pl.col(updated_at_field_id) < stale_before)
         )
-        log.info(f"Applied 24-hour freshness filter: {processed_df.height}/{projects_with_urls.height} projects need repo stats updates")
+        log.info(f"Applied freshness filter (24h, 1 week for 404s): {processed_df.height}/{projects_with_urls.height} projects need repo stats updates")
     else:
         # No existing tracking field, process all projects with code_url (first time setup)
         processed_df = projects_with_urls
@@ -495,7 +574,7 @@ def approved_projects_repo_stats(
     approved_projects_repo_stats_candidates: pl.DataFrame,
 ) -> Output[pl.DataFrame]:
     """
-    Fetches repository stats (stars, language, exists) for GitHub repositories using async/await (up to 100 requests per second).
+    Fetches repository stats (stars, language, exists) for GitHub repositories using async/await (paced to GH_PROXY_MAX_RPS).
     
     Returns:
         DataFrame with id, repo_star_count, repo_stats_last_updated_at, repo_language, and repo_exists fields
@@ -520,8 +599,8 @@ def approved_projects_repo_stats(
             metadata={"num_processed": 0, "num_successful": 0, "num_failed": 0}
         )
     
-    # Configurable RPS - easy to adjust here
-    max_rps = 100
+    # Configurable via the GH_PROXY_MAX_RPS env var (default 8)
+    max_rps = GH_PROXY_MAX_RPS
     log.info(f"Processing GitHub repository stats for {input_df.height} projects in parallel (max {max_rps} req/sec)")
     
     # Get gh-proxy API key from environment
@@ -543,9 +622,11 @@ def approved_projects_repo_stats(
         github_repo_url = _extract_github_repo_url(code_url) if code_url else ""
         
         if github_repo_url:  # Valid GitHub URL
+            owner, repo = parse_github_repo(code_url)
             github_projects.append({
                 "project_id": project_id,
-                "github_repo_url": github_repo_url
+                "owner": owner,
+                "repo": repo
             })
         else:  # Non-GitHub repo
             non_github_projects.append({
@@ -557,8 +638,9 @@ def approved_projects_repo_stats(
     
     # Get GitHub API results
     github_results = []
+    circuit_breaker_tripped = False
     if github_projects:
-        github_results = _fetch_github_stars_parallel_wrapper(github_projects, gh_proxy_api_key, current_time, log, max_rps)
+        github_results, circuit_breaker_tripped = _fetch_github_stars_parallel_wrapper(github_projects, gh_proxy_api_key, current_time, log, max_rps)
     
     # Create records for non-GitHub projects (no API calls needed)
     non_github_results = []
@@ -586,8 +668,15 @@ def approved_projects_repo_stats(
     num_repo_exists_success = 0
     num_repo_404s = 0
     num_not_a_github_repo = 0
+    num_transient_failures = 0
     
     for result in results:
+        # Rate limited / 5xx / timed out: emit nothing so the existing Airtable
+        # values stay and the unstamped timestamp gets it retried next run
+        if result.get("transient"):
+            num_transient_failures += 1
+            continue
+        
         project_id = result["project_id"]
         repo_status = result.get("repo_exists")
         
@@ -629,7 +718,9 @@ def approved_projects_repo_stats(
             exists_field_id: pl.Utf8
         })
     
-    log.info(f"Repository stats processing completed. Repo Exists: {num_repo_exists_success}, Repo 404s: {num_repo_404s}, Not GitHub: {num_not_a_github_repo}")
+    log.info(f"Repository stats processing completed. Repo Exists: {num_repo_exists_success}, Repo 404s: {num_repo_404s}, Not GitHub: {num_not_a_github_repo}, Transient failures (not written): {num_transient_failures}")
+    if circuit_breaker_tripped:
+        log.error(f"🚨 gh-proxy circuit breaker tripped: {num_transient_failures} repos were not checked and will be retried next run")
     
     # Generate preview metadata
     if output_df.height > 0:
@@ -647,6 +738,8 @@ def approved_projects_repo_stats(
             "num_repo_exists_success": num_repo_exists_success,
             "num_repo_404s": num_repo_404s,
             "num_not_a_github_repo": num_not_a_github_repo,
+            "num_transient_failures": num_transient_failures,
+            "circuit_breaker_tripped": circuit_breaker_tripped,
             "preview": preview_metadata
         }
     )
@@ -1008,6 +1101,43 @@ def approved_projects_archive_candidates(
     )
 
 
+def _archive_url(url: str, archive_api_key: str, project_id: str, log, max_attempts: int = 2) -> Optional[str]:
+    """
+    Archive one URL via archive.hackclub.com, retrying a 5xx once.
+    Returns the archive URL, or None if archiving failed.
+    """
+    for attempt in range(max_attempts):
+        try:
+            response = requests.post(
+                "https://archive.hackclub.com/api/v1/archive",
+                headers={
+                    "Authorization": f"Bearer {archive_api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={"url": url},
+                timeout=30
+            )
+            
+            if response.status_code >= 500 and attempt < max_attempts - 1:
+                log.warning(f"Archive API returned {response.status_code} for {url}, retrying")
+                time.sleep(2 + random.uniform(0, 1))
+                continue
+            
+            if response.status_code != 200:
+                log.warning(f"Archive API returned {response.status_code} for {url}: {response.text}")
+                return None
+            
+            archive_url = response.json().get("url")
+            if not archive_url:
+                log.warning(f"Archive API returned success but no URL for {url}")
+            return archive_url or None
+        
+        except Exception as e:
+            log.error(f"Failed to archive {url} for project {project_id}: {e}")
+            return None
+    return None
+
+
 @asset(
     group_name="unified_ysws_db_processing",
     description="Archives URLs using the new archive.hackclub.com API",
@@ -1054,6 +1184,7 @@ def approved_projects_archived(
     
     successful_records = []
     failed_count = 0
+    partial_count = 0
     
     for row in input_df.iter_rows(named=True):
         project_id = row.get("id")
@@ -1073,79 +1204,64 @@ def approved_projects_archived(
             continue
         
         # Archive each URL and capture the archive URLs
-        project_success = True
+        num_failed_urls = 0
         archive_code_url = None
         archive_live_url = None
         
         for url in urls_to_archive:
-            try:
-                log.debug(f"Archiving URL for project {project_id}: {url}")
-                response = requests.post(
-                    "https://archive.hackclub.com/api/v1/archive",
-                    headers={
-                        "Authorization": f"Bearer {archive_api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={"url": url},
-                    timeout=30
-                )
-                
-                if response.status_code == 200:
-                    archive_response = response.json()
-                    archive_url = archive_response.get("url")
-                    
-                    if archive_url:
-                        # Determine if this is a code URL or live URL
-                        if url == code_url:
-                            archive_code_url = archive_url
-                            log.debug(f"Got archive URL for code: {archive_url}")
-                        elif url == playable_url:
-                            archive_live_url = archive_url
-                            log.debug(f"Got archive URL for live: {archive_url}")
-                    else:
-                        log.warning(f"Archive API returned success but no URL for {url}")
-                        project_success = False
-                else:
-                    log.warning(f"Archive API returned {response.status_code} for {url}: {response.text}")
-                    project_success = False
-                    
-            except Exception as e:
-                log.error(f"Failed to archive {url} for project {project_id}: {e}")
-                project_success = False
+            log.debug(f"Archiving URL for project {project_id}: {url}")
+            archive_url = _archive_url(url, archive_api_key, project_id, log)
+            
+            if archive_url:
+                # Determine if this is a code URL or live URL
+                if url == code_url:
+                    archive_code_url = archive_url
+                    log.debug(f"Got archive URL for code: {archive_url}")
+                elif url == playable_url:
+                    archive_live_url = archive_url
+                    log.debug(f"Got archive URL for live: {archive_url}")
+            else:
+                num_failed_urls += 1
         
-        if project_success:
+        if not archive_code_url and not archive_live_url:
+            failed_count += 1
+            continue
+        
+        # Record archiving with whatever archive URLs we got
+        current_time = datetime.now(timezone.utc).isoformat()
+        record = {
+            "id": project_id,
+            archive_archived_at_col: current_time,
+        }
+        
+        # Add archive URLs if we got them
+        if archive_code_url:
+            record[archive_code_url_col] = archive_code_url
+        if archive_live_url:
+            record[archive_live_url_col] = archive_live_url
+        
+        archived_types = []
+        if archive_code_url:
+            archived_types.append("code")
+        if archive_live_url:
+            archived_types.append("live")
+        
+        if num_failed_urls == 0:
             # Calculate final hash including the new archive URLs
-            final_hash = _calculate_archive_hash(
+            record[archive_hash_col] = _calculate_archive_hash(
                 code_url, 
                 playable_url, 
                 archive_code_url or "", 
                 archive_live_url or ""
             )
-            
-            # Record successful archiving with archive URLs and updated hash
-            current_time = datetime.now(timezone.utc).isoformat()
-            record = {
-                "id": project_id,
-                archive_archived_at_col: current_time,
-                archive_hash_col: final_hash  # Use final hash that includes archive URLs
-            }
-            
-            # Add archive URLs if we got them
-            if archive_code_url:
-                record[archive_code_url_col] = archive_code_url
-            if archive_live_url:
-                record[archive_live_url_col] = archive_live_url
-                
-            successful_records.append(record)
-            
-            archived_types = []
-            if archive_code_url:
-                archived_types.append("code")
-            if archive_live_url:
-                archived_types.append("live")
             log.info(f"Successfully archived {'/'.join(archived_types)} URLs for project {project_id}")
         else:
-            failed_count += 1
+            # Partial success: keep the archive URL we got, but leave the hash
+            # stale so the project stays a candidate and the failed URL is retried
+            partial_count += 1
+            log.warning(f"Partially archived project {project_id} ({'/'.join(archived_types)} only); will retry the rest next run")
+        
+        successful_records.append(record)
     
     # Create output DataFrame
     output_schema = {
@@ -1159,13 +1275,14 @@ def approved_projects_archived(
     output_df = pl.DataFrame(successful_records, schema=output_schema) if successful_records else pl.DataFrame(schema=output_schema)
     successful_count = len(successful_records)
     
-    log.info(f"Archive processing completed. Success: {successful_count}, Failed: {failed_count}")
+    log.info(f"Archive processing completed. Success: {successful_count} ({partial_count} partial), Failed: {failed_count}")
     
     return Output(
         output_df,
         metadata={
             "num_candidates": input_df.height,
             "num_successful": successful_count,
+            "num_partial": partial_count,
             "num_failed": failed_count,
             "success_rate": round((successful_count / max(input_df.height, 1)) * 100, 2)
         }
