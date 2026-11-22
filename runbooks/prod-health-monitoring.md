@@ -621,3 +621,111 @@ database is.
 **Roll back:** copy the superuser value from the host `.env` into `PROD_DAGSTER_DB_URL`
 in the parent `.env` and the vault note, in-process, then drop the login over the
 socket with `DROP ROLE dagster_reader;`. Nothing in the app depends on the login.
+
+## 12. Direct database access logging
+
+MCP queries are logged with verified Hack Club Auth identity in `mcp_auth.audit`
+(see `runbooks/warehouse-inventory.md`). Direct Postgres logins to both the
+warehouse Postgres (including restored clusters) and the Dagster instance
+Postgres must also be logged with role, timestamp, client address, and session
+disconnects.
+
+### Required PostgreSQL settings
+
+Both databases should run with the settings in
+`warehouse-postgres-docker/logging.conf`, copied here for pasting into a custom
+config. `orpheus_engine_tests/test_postgres_access_logging.py` fails if this copy
+and the file differ.
+
+```ini
+log_destination = 'stderr'
+logging_collector = off
+log_connections = on
+log_disconnections = on
+log_line_prefix = '%m [%p] %quser=%u db=%d app=%a client=%r '
+```
+
+- `log_connections = on` records every connection attempt (`connection received`),
+  authentication (`connection authenticated`), authorization (`connection authorized`
+  with role, database, and TLS cipher), and failed authentication (`FATAL:`).
+- `log_disconnections = on` records session end and total duration.
+- `log_line_prefix` tags every session log line with timestamp (`%m`), backend PID
+  (`%p`), Postgres role (`%u`), database (`%d`), `application_name` (`%a`), and
+  peer address/port (`%r`). `%q` suppresses the session fields on non-session
+  background processes (such as checkpointer).
+- Keep `log_destination = 'stderr'` and `logging_collector = off`. Turning
+  `logging_collector` on redirects stderr into local `$PGDATA/log` files and stops
+  container stderr output, which breaks shipping to the central log store.
+
+The custom warehouse image (`ghcr.io/hackclub/warehouse-postgres:17`) bakes these
+settings into `/etc/postgresql/logging.conf` and includes them automatically on
+first init via `warehouse-postgres-docker/conf.sh`. Clusters started with a custom
+Postgres configuration (including restored warehouse clusters and the Dagster
+instance database, which uses stock `postgres:17-alpine`) must keep these settings
+in their configuration (or `include '/etc/postgresql/logging.conf'` on the custom
+image) so redeploys do not clear them. Custom-config edits in the deployment UI
+take effect on the next container restart/redeploy; all three access-logging
+parameters (`log_connections`, `log_disconnections`, `log_line_prefix`) can be
+activated immediately without a restart via `SELECT pg_reload_conf();` after
+updating the active config file or running `ALTER SYSTEM`.
+
+### Verify live settings (read-only)
+
+Run against both `WAREHOUSE_COOLIFY_URL` and `PROD_DAGSTER_DB_URL`:
+
+```sql
+SELECT name, setting, source
+FROM pg_settings
+WHERE name IN (
+  'log_destination',
+  'logging_collector',
+  'log_connections',
+  'log_disconnections',
+  'log_line_prefix'
+)
+ORDER BY name;
+```
+
+Confirm `log_connections = on`, `log_disconnections = on`, `log_destination = stderr`,
+`logging_collector = off`, and `log_line_prefix` includes `%u`, `%d`, `%a`, and `%r`.
+
+### Where logs are retained and how to check who logged in
+
+- **Durable off-host retention:** Container stderr is shipped to the warehouse's
+  central log store. See the private ops notes for query endpoints, queries,
+  retention, and recurring ingestion checks. Filter for `connection authorized`,
+  `connection authenticated`, `disconnection`, or `FATAL` to inspect logins and
+  failed auth attempts.
+- **Recent local logs on the host (ephemeral):** Recent logs can also be checked
+  directly on the host for quick triage, though local `docker logs` vanish when a
+  container is recreated:
+
+```bash
+docker logs --since 24h <postgres-container> 2>&1 | grep -E 'connection (received|authenticated|authorized)|disconnection|authentication failed'
+```
+
+Look up the warehouse and Dagster Postgres container names from the private ops
+notes or `docker ps` on the host.
+
+### Attribution limits and tracing the real source
+
+Postgres logs record the **database role (`user=`)**, the **TCP peer address
+Postgres sees (`client=`)**, and the **client-supplied `application_name`
+(`app=`)**:
+
+- **Shared roles and untrusted `app=`:** Direct database roles (`postgres`,
+  `dagster_reader`, `hc_warehouse_agent`, `hc_warehouse_mcp`, and service roles)
+  may be shared across operators or services, so a Postgres login identifies a
+  role rather than an individual person. `application_name` (`app=`, such as
+  `elevated:<reason>`) is set by the client rather than authenticated by the
+  server. If direct database access must be attributed to an individual person
+  without correlating host-side logs, per-person database logins (or an
+  authenticating proxy) remain future work.
+- **Proxied or relayed connections:** Connections arriving through a proxy or
+  relay on the host show the proxy or relay address in `client=` rather than the
+  caller's real IP. Correlate the timestamp with the host-side proxy or relay logs
+  documented in the private ops notes to identify the real remote source.
+- **Local socket logins (`client=[local]`):** `docker exec -u postgres ... psql`
+  and `bin/warehouse-admin-psql` connect over the Unix socket. Trace them to the
+  operator's SSH session via the host-side SSH and audit logs described in the
+  private ops notes.

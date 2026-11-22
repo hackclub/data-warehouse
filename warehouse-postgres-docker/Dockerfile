@@ -41,5 +41,9 @@ RUN apk add --no-cache pgbackrest && \
 # Async parallel WAL archiving (overwrites the package's stock config)
 COPY pgbackrest.conf /etc/pgbackrest/pgbackrest.conf
 
-# Configure PostgreSQL for WAL archiving on first init
+# Direct database access logging (included by conf.sh on first init, and
+# reusable via `include '/etc/postgresql/logging.conf'` in custom configs)
+COPY logging.conf /etc/postgresql/logging.conf
+
+# Configure PostgreSQL for WAL archiving and access logging on first init
 COPY conf.sh /docker-entrypoint-initdb.d/conf.sh

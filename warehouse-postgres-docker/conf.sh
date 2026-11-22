@@ -16,4 +16,7 @@ archive_mode = on
 # /etc/pgbackrest/pgbackrest.conf, since pgBackRest precedence is CLI > env > config.
 archive_command = 'pgbackrest --stanza=$PGBACKREST_STANZA --process-max=8 archive-push %p'
 archive_timeout = 60
+
+# Direct database access logging (baked into the image at /etc/postgresql/logging.conf)
+include = '/etc/postgresql/logging.conf'
 EOF

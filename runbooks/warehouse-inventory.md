@@ -123,3 +123,6 @@ FROM mcp_auth.audit
 ORDER BY recorded_at DESC
 LIMIT 50;
 ```
+
+For direct Postgres logins to the warehouse and Dagster instance databases (outside
+MCP), see `runbooks/prod-health-monitoring.md` §12.

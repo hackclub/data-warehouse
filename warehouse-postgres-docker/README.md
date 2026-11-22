@@ -81,3 +81,11 @@ systemctl enable --now pgbackrest-full.timer pgbackrest-diff.timer
 ### Monitoring
 
 On success, the backup script pings an Uptime Kuma push monitor. If no ping arrives within the expected window, Uptime Kuma sends an alert. Failed backups are also visible in `journalctl -u pgbackrest-full.service` or `journalctl -u pgbackrest-diff.service`.
+
+## Direct Database Access Logging
+
+The image bakes in `/etc/postgresql/logging.conf` (from `logging.conf` here, the source of truth for these settings), which turns on connection and disconnection logging with a `log_line_prefix` that records timestamp, PID, role, database, `application_name`, and client host/port.
+
+- **Fresh clusters:** `conf.sh` appends `include = '/etc/postgresql/logging.conf'` to `$PGDATA/postgresql.conf` on first init.
+- **Restored or custom-config clusters:** If the container starts with `-c config_file=/etc/postgresql/postgresql.conf`, add `include '/etc/postgresql/logging.conf'` to the custom configuration file (or copy the settings from `logging.conf` directly).
+- **Log shipping:** `log_destination = 'stderr'` and `logging_collector = off` are kept on purpose so PostgreSQL writes to container stderr, where the container runtime forwards logs to the central log store while keeping recent logs readable via `docker logs`. See `runbooks/prod-health-monitoring.md` §12 for inspection and verification steps.
