@@ -84,7 +84,18 @@ class AuthStore:
                 """, (digest(credential), user["subject"], resource))
             else:
                 if not (admin or user["approved"]):
-                    return False
+                    invited = await (await conn.execute("""
+                        DELETE FROM mcp_auth.email_invites WHERE email = %s RETURNING email
+                    """, (identity["email"],))).fetchone()
+                    if not invited:
+                        return False
+                    await conn.execute("""
+                        UPDATE mcp_auth.users SET approved = true WHERE subject = %s
+                    """, (user["subject"],))
+                    await self.write_audit(conn, {
+                        "event": "mcp_email_invite_redeemed",
+                        "caller_subject": user["subject"], "caller_email": identity["email"],
+                    })
                 await conn.execute("""
                     INSERT INTO mcp_auth.codes
                         (code_hash, subject, client_id, redirect_uri, challenge, resource)
@@ -133,29 +144,39 @@ class AuthStore:
                 SELECT * FROM mcp_auth.users WHERE email <> %s ORDER BY email, subject
             """, (self.superadmin_email,))).fetchall()
 
+    async def email_invites(self):
+        async with self.pool.connection() as conn:
+            return await (await conn.execute("""
+                SELECT email FROM mcp_auth.email_invites ORDER BY email
+            """)).fetchall()
+
     @staticmethod
     async def revoke_credentials(conn, subject):
         await conn.execute("DELETE FROM mcp_auth.codes WHERE subject = %s", (subject,))
         await conn.execute("DELETE FROM mcp_auth.sessions WHERE subject = %s", (subject,))
 
+    async def lock_admin(self, conn, token, resource):
+        actor = await (await conn.execute("""
+            SELECT u.subject, u.email FROM mcp_auth.users u
+            JOIN mcp_auth.sessions s USING (subject)
+            WHERE s.token_hash = %s AND s.purpose = 'admin' AND s.resource = %s
+                AND s.expires_at > now() AND u.email = %s
+            FOR UPDATE OF u
+        """, (digest(token), resource, self.superadmin_email))).fetchone()
+        if not actor:
+            return None
+        # Check again while holding the identity lock. A concurrent logout
+        # either removes the session first or waits for this change to commit.
+        session = await (await conn.execute("""
+            SELECT 1 FROM mcp_auth.sessions
+            WHERE token_hash = %s AND expires_at > clock_timestamp() FOR UPDATE
+        """, (digest(token),))).fetchone()
+        return actor if session else None
+
     async def set_access(self, token, resource, subject, approved):
         async with self.pool.connection() as conn:
-            actor = await (await conn.execute("""
-                SELECT u.subject, u.email FROM mcp_auth.users u
-                JOIN mcp_auth.sessions s USING (subject)
-                WHERE s.token_hash = %s AND s.purpose = 'admin' AND s.resource = %s
-                    AND s.expires_at > now() AND u.email = %s
-                FOR UPDATE OF u
-            """, (digest(token), resource, self.superadmin_email))).fetchone()
+            actor = await self.lock_admin(conn, token, resource)
             if not actor:
-                return False
-            # Check again while holding the identity lock. A concurrent logout
-            # either removes the session first or waits for this change to commit.
-            session = await (await conn.execute("""
-                SELECT 1 FROM mcp_auth.sessions
-                WHERE token_hash = %s AND expires_at > clock_timestamp() FOR UPDATE
-            """, (digest(token),))).fetchone()
-            if not session:
                 return False
             user = await (await conn.execute("""
                 UPDATE mcp_auth.users SET approved = %s WHERE subject = %s AND email <> %s
@@ -165,14 +186,40 @@ class AuthStore:
                 return True
             if not approved:
                 await self.revoke_credentials(conn, subject)
+            await conn.execute("DELETE FROM mcp_auth.email_invites WHERE email = %s", (user["email"],))
             record = {
                 "event": "mcp_access_changed", "caller_subject": actor["subject"],
                 "caller_email": actor["email"], "target_subject": subject,
                 "target_email": user["email"], "approved": approved,
             }
-            await conn.execute("INSERT INTO mcp_auth.audit (record) VALUES (%s)", (Jsonb(record),))
+            await self.write_audit(conn, record)
         return True
+
+    async def set_email_invite(self, token, resource, email, invited):
+        async with self.pool.connection() as conn:
+            actor = await self.lock_admin(conn, token, resource)
+            if not actor:
+                return False
+            if invited:
+                changed = await conn.execute("""
+                    INSERT INTO mcp_auth.email_invites (email)
+                    SELECT %s WHERE %s <> %s
+                        AND NOT EXISTS (SELECT 1 FROM mcp_auth.users WHERE email = %s)
+                    ON CONFLICT DO NOTHING
+                """, (email, email, self.superadmin_email, email))
+            else:
+                changed = await conn.execute("DELETE FROM mcp_auth.email_invites WHERE email = %s", (email,))
+            if changed.rowcount:
+                await self.write_audit(conn, {
+                    "event": "mcp_email_invite_changed", "caller_subject": actor["subject"],
+                    "caller_email": actor["email"], "target_email": email, "invited": invited,
+                })
+        return True
+
+    @staticmethod
+    async def write_audit(conn, record):
+        await conn.execute("INSERT INTO mcp_auth.audit (record) VALUES (%s)", (Jsonb(record),))
 
     async def audit(self, record):
         async with self.pool.connection() as conn:
-            await conn.execute("INSERT INTO mcp_auth.audit (record) VALUES (%s)", (Jsonb(record),))
+            await self.write_audit(conn, record)

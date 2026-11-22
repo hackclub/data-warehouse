@@ -52,13 +52,16 @@ data lives in one of three places:
 ## Warehouse MCP access and audit logs
 
 The MCP server issues its own bearer tokens after users verify their identity with
-Hack Club Auth. A user signs in once to appear in the access list. The superadmin
-signs in at `/admin` and approves the account. The approved user then reconnects
-from their MCP client. Revoking access invalidates that account's outstanding
+Hack Club Auth. The superadmin can pre-approve an email in `/admin` using
+**Invite by email**. The invitation is redeemed on the first MCP sign-in with
+that verified email and is then replaced by an approved account. The form
+does not send email. Pending invitations can be removed in `/admin`.
+Users can also sign in first and ask the superadmin to approve their account.
+Revoking access invalidates that account's outstanding
 authorization codes and sessions. Tool calls recheck the session before
-returning results, including when revocation occurs during a query. Previously issued shared-secret tokens require
-users to reconnect. MCP access tokens expire after eight hours and require sign-in
-again.
+returning results, including when revocation occurs during a query. Previously
+issued shared-secret tokens require users to reconnect. MCP access tokens
+expire after eight hours and require sign-in again.
 
 The `warehouse-mcp` app needs the following environment variables.
 

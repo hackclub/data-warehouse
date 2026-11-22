@@ -372,9 +372,18 @@ class OAuth:
                 response = RedirectResponse("/admin", 303, headers=NO_STORE)
                 response.delete_cookie(ADMIN_COOKIE, path="/admin")
                 return response
-            if action not in {"approve", "revoke"} or not params.get("subject"):
+            if action in {"invite_email", "remove_invite"}:
+                email = params.get("email", "").strip().lower()
+                if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+", email):
+                    return page("Invalid email", '<p>Enter an email address. <a href="/admin">Back to access</a>.</p>', 400)
+                allowed = await self.store.set_email_invite(
+                    token, self.origin, email, action == "invite_email",
+                )
+            elif action in {"approve", "revoke"} and params.get("subject"):
+                allowed = await self.store.set_access(token, self.origin, params["subject"], action == "approve")
+            else:
                 raise InvalidRequest
-            if not await self.store.set_access(token, self.origin, params["subject"], action == "approve"):
+            if not allowed:
                 return error("access_denied", 403)
             return RedirectResponse("/admin", 303, headers=NO_STORE)
         if not admin:
@@ -389,6 +398,23 @@ class OAuth:
                         f'<input type="hidden" name="subject" value="{escape(user["subject"])}">'
                         f'<button name="action" value="{action}">{action.title()}</button>'
                         "</form></li>")
-        return page("Warehouse access", '<form method="post"><button name="action" value="logout">'
-                    'Sign out</button></form>' + ("<ul>" + "".join(rows) + "</ul>" if rows
-                                                 else "<p>No other accounts have signed in yet.</p>"))
+        invitations = []
+        for invite in await self.store.email_invites():
+            email = escape(invite["email"])
+            invitations.append(
+                f'<li><form method="post">{email}'
+                f'<input type="hidden" name="email" value="{email}">'
+                '<button name="action" value="remove_invite">Remove invitation</button></form></li>'
+            )
+        return page(
+            "Warehouse access",
+            '<form method="post"><button name="action" value="logout">Sign out</button></form>'
+            '<h2>Invite by email</h2><p>Access is granted when the person signs in through their MCP '
+            'client with this verified Hack Club Auth email.</p>'
+            '<form method="post"><label>Email <input type="email" name="email" required maxlength="254"></label>'
+            '<button name="action" value="invite_email">Invite</button></form>'
+            '<h2>Pending invitations</h2>'
+            + ("<ul>" + "".join(invitations) + "</ul>" if invitations else "<p>No pending invitations.</p>")
+            + '<h2>Accounts</h2>'
+            + ("<ul>" + "".join(rows) + "</ul>" if rows else "<p>No other accounts have signed in yet.</p>"),
+        )

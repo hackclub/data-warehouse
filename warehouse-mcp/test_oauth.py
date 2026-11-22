@@ -142,6 +142,29 @@ def test_oauth_approval_token_exchange_and_audit(auth_database, monkeypatch):
         admin_page = client.get("/admin")
         assert user_email in admin_page.text
         assert admin_page.headers["Content-Security-Policy"].endswith("form-action 'self'")
+        invited_email = "invited@example.test"
+        invite = {"action": "invite_email", "email": " Invited@Example.Test "}
+        assert client.post("/admin", data=invite).status_code == 403
+        assert client.post("/admin", data={"action": "invite_email", "email": "invalid"}, headers=headers).status_code == 400
+        assert client.post("/admin", data=invite, headers=headers).status_code == 303
+        assert client.post("/admin", data=invite, headers=headers).status_code == 303
+        assert invited_email in client.get("/admin").text
+        assert finish(start(), "unverified-invite", invited_email, verified=False).status_code == 400
+        assert finish(start(), "outside", "outside@example.test").status_code == 403
+        assert finish(start(), "invited", invited_email).status_code == 303
+
+        remove = {"action": "remove_invite", "email": "cancelled@example.test"}
+        assert client.post("/admin", data={**remove, "action": "invite_email"}, headers=headers).status_code == 303
+        assert client.post("/admin", data=remove, headers=headers).status_code == 303
+        assert finish(start(), "cancelled", remove["email"]).status_code == 403
+        with psycopg.connect(auth_database) as conn:
+            assert conn.execute("SELECT count(*) FROM mcp_auth.email_invites").fetchone() == (0,)
+            assert conn.execute("SELECT approved FROM mcp_auth.users WHERE subject = 'invited'").fetchone() == (True,)
+            assert conn.execute("""
+                SELECT count(*) FROM mcp_auth.audit
+                WHERE record->>'event' = 'mcp_email_invite_changed' AND record->>'target_email' = %s
+            """, (invited_email,)).fetchone() == (1,)
+
         assert client.post("/admin", data={"action": "approve", "subject": "member"}).status_code == 403
         assert client.post("/admin", data={"action": "approve", "subject": "member"}, headers=headers).status_code == 303
 
@@ -297,11 +320,12 @@ def test_auth_migrations_adopt_existing_schema_and_are_idempotent(auth_database)
             """)
             await conn.commit()
 
-            assert await apply_auth_migrations(conn) == [migration.name]
+            expected = [migration.name, "0002_email_invites.sql"]
+            assert await apply_auth_migrations(conn) == expected
             assert await apply_auth_migrations(conn) == []
             async with conn.cursor() as cursor:
-                await cursor.execute("SELECT version FROM mcp_auth.schema_migrations")
-                assert await cursor.fetchall() == [(migration.name,)]
+                await cursor.execute("SELECT version FROM mcp_auth.schema_migrations ORDER BY version")
+                assert await cursor.fetchall() == [(name,) for name in expected]
                 await cursor.execute("SELECT record->>'event' FROM mcp_auth.audit")
                 assert await cursor.fetchall() == [("existing_audit",)]
 
