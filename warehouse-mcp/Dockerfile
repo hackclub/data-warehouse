@@ -16,7 +16,8 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 # Copy application code
-COPY auth_store.py oauth.py db.py cache.py server.py ./
+COPY auth_store.py migrate.py oauth.py db.py cache.py server.py ./
+COPY migrations/ ./migrations/
 
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

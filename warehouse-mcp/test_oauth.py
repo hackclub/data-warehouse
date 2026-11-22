@@ -22,6 +22,7 @@ from starlette.testclient import TestClient
 import oauth
 import server
 from db import Database
+from migrate import MIGRATIONS, apply_auth_migrations
 from oauth import pkce
 
 
@@ -273,6 +274,27 @@ def test_sessions_are_bound_to_purpose_resource_and_expiration(auth_database):
             assert not await store.set_access(admin_credential, resource, "member", True)
         finally:
             await store.pool.close()
+
+    asyncio.run(check())
+
+
+def test_auth_migrations_adopt_existing_schema_and_are_idempotent(auth_database):
+    async def check():
+        async with await psycopg.AsyncConnection.connect(auth_database) as conn:
+            migration = MIGRATIONS / "0001_initial.sql"
+            await conn.execute(migration.read_text())
+            await conn.execute("""
+                INSERT INTO mcp_auth.audit (record) VALUES ('{"event": "existing_audit"}')
+            """)
+            await conn.commit()
+
+            assert await apply_auth_migrations(conn) == [migration.name]
+            assert await apply_auth_migrations(conn) == []
+            async with conn.cursor() as cursor:
+                await cursor.execute("SELECT version FROM mcp_auth.schema_migrations")
+                assert await cursor.fetchall() == [(migration.name,)]
+                await cursor.execute("SELECT record->>'event' FROM mcp_auth.audit")
+                assert await cursor.fetchall() == [("existing_audit",)]
 
     asyncio.run(check())
 

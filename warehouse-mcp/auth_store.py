@@ -6,55 +6,11 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
+from migrate import apply_auth_migrations
+
 
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
-
-
-SCHEMA = """
-CREATE SCHEMA IF NOT EXISTS mcp_auth;
-CREATE TABLE IF NOT EXISTS mcp_auth.users (
-    subject text PRIMARY KEY,
-    email text NOT NULL,
-    first_name text NOT NULL,
-    last_name text NOT NULL,
-    approved boolean NOT NULL DEFAULT false
-);
-CREATE TABLE IF NOT EXISTS mcp_auth.clients (
-    id text PRIMARY KEY,
-    redirect_uris text[] NOT NULL
-);
-CREATE TABLE IF NOT EXISTS mcp_auth.flows (
-    state_hash text PRIMARY KEY,
-    browser_hash text NOT NULL,
-    details jsonb NOT NULL,
-    expires_at timestamptz NOT NULL DEFAULT now() + interval '10 minutes'
-);
-CREATE TABLE IF NOT EXISTS mcp_auth.codes (
-    code_hash text PRIMARY KEY,
-    subject text NOT NULL REFERENCES mcp_auth.users,
-    client_id text NOT NULL REFERENCES mcp_auth.clients,
-    redirect_uri text NOT NULL,
-    challenge text NOT NULL,
-    resource text NOT NULL,
-    expires_at timestamptz NOT NULL DEFAULT now() + interval '5 minutes'
-);
-CREATE TABLE IF NOT EXISTS mcp_auth.sessions (
-    token_hash text PRIMARY KEY,
-    subject text NOT NULL REFERENCES mcp_auth.users,
-    purpose text NOT NULL CHECK (purpose IN ('admin', 'mcp')),
-    resource text NOT NULL,
-    expires_at timestamptz NOT NULL DEFAULT now() + interval '8 hours'
-);
-CREATE TABLE IF NOT EXISTS mcp_auth.audit (
-    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    recorded_at timestamptz NOT NULL DEFAULT now(),
-    record jsonb NOT NULL
-);
-CREATE INDEX IF NOT EXISTS mcp_audit_recorded_at ON mcp_auth.audit (recorded_at);
-CREATE INDEX IF NOT EXISTS mcp_codes_subject ON mcp_auth.codes (subject);
-CREATE INDEX IF NOT EXISTS mcp_sessions_subject ON mcp_auth.sessions (subject);
-"""
 
 
 class AuthStore:
@@ -68,8 +24,7 @@ class AuthStore:
     async def open(self):
         await self.pool.open(wait=True, timeout=10)
         async with self.pool.connection() as conn:
-            await conn.execute("SELECT pg_advisory_xact_lock(5740523001)")
-            await conn.execute(SCHEMA)
+            await apply_auth_migrations(conn)
 
     async def fetch(self, sql, params=()):
         async with self.pool.connection() as conn:

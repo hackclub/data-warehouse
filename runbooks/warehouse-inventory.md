@@ -71,9 +71,30 @@ The `warehouse-mcp` app needs the following environment variables.
 | `WAREHOUSE_COOLIFY_URL` | Existing read-only warehouse DSN for the MCP service. |
 
 Use a dedicated auth database and app role so the read-only warehouse connection
-cannot query session or audit tables. The service creates the schema on startup
-and refuses to serve if the warehouse connection sees the auth schema in its
-database. Apply ingress rate limits to the public OAuth endpoints, especially
+cannot query session or audit tables. On a new Postgres server, connect as the
+Postgres administrator with `psql` and provision the role and database.
+The password prompt keeps the password out of the command history.
+
+```sql
+CREATE ROLE warehouse_mcp_auth LOGIN;
+\password warehouse_mcp_auth
+CREATE DATABASE warehouse_mcp_auth OWNER warehouse_mcp_auth;
+```
+
+Set `MCP_AUTH_DATABASE_URL` for that role and database. Apply the versioned
+migrations from the repo root before swapping traffic to the new release.
+
+```sh
+uv run --project warehouse-mcp python warehouse-mcp/migrate.py
+```
+
+In the Docker image, the equivalent command is `uv run python migrate.py`.
+The MCP also applies pending migrations on startup. Successful migrations are
+recorded in `mcp_auth.schema_migrations`, so repeated runs skip them and existing
+sessions and audit records are preserved. Startup refuses to serve if the
+warehouse connection sees the auth schema in its database.
+
+Apply ingress rate limits to the public OAuth endpoints, especially
 `/register`, which stores client registrations.
 When deploying behind a proxy, preserve the public Host header and omit OAuth
 query strings from proxy access logs. The Docker app listens on port 8000 and the
