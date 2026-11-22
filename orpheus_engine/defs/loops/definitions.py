@@ -26,6 +26,7 @@ from orpheus_engine.defs.shared.daily_backups import (
     dataframe_to_parquet_bytes,
     write_daily_parquet_backup,
 )
+from orpheus_engine.defs.shared.loops_session import loops_session_request
 
 # Import the Loops resource and error
 from orpheus_engine.defs.loops.resources import LoopsResource, LoopsApiError 
@@ -77,7 +78,6 @@ def loops_raw_audience(context) -> pl.DataFrame:
     """
     log: DagsterLogManager = context.log
     session_token = context.resources.loops_session_token.get_value()
-    cookies = {'__Secure-next-auth.session-token': session_token}
     headers = COMMON_HEADERS.copy()
 
     # --- Cache Check (Upfront) ---
@@ -142,12 +142,14 @@ def loops_raw_audience(context) -> pl.DataFrame:
     job_id = None
     try:
         log.info("Initiating Loops contact export job...")
-        response_create = requests.post(
+        response_create = loops_session_request(
+            "POST",
             create_export_url,
+            session_token,
+            context_label="lists.exportContacts",
             headers=headers,
-            cookies=cookies,
             json=create_payload,
-            timeout=30
+            timeout=30,
         )
         response_create.raise_for_status()
         create_data = response_create.json()
@@ -177,12 +179,14 @@ def loops_raw_audience(context) -> pl.DataFrame:
         poll_count += 1
         log.info(f"Polling job status ({poll_count}/{max_polls})...")
         try:
-            response_status = requests.get(
+            response_status = loops_session_request(
+                "GET",
                 status_url_template,
+                session_token,
+                context_label="audienceDownload.getAudienceDownload",
                 headers=headers, # Some APIs might require headers even for GET
-                cookies=cookies,
                 params=status_params,
-                timeout=15 # Shorter timeout for status checks
+                timeout=15, # Shorter timeout for status checks
             )
             response_status.raise_for_status()
             status_data = response_status.json()
@@ -215,12 +219,14 @@ def loops_raw_audience(context) -> pl.DataFrame:
     filename = None
     try:
         log.info("Fetching presigned URL for download...")
-        response_sign = requests.post(
+        response_sign = loops_session_request(
+            "POST",
             sign_url,
+            session_token,
+            context_label="audienceDownload.signs3Url",
             headers=headers,
-            cookies=cookies,
             json=sign_payload,
-            timeout=30
+            timeout=30,
         )
         response_sign.raise_for_status()
         sign_data = response_sign.json()

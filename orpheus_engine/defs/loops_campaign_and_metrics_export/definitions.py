@@ -15,6 +15,11 @@ from dagster import asset, AssetExecutionContext, Output, MetadataValue
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
 
+from orpheus_engine.defs.shared.loops_session import (
+    LoopsAuthError,
+    loops_session_request,
+)
+
 # --- Pydantic Models for AI Response Schema ---
 
 class PIIRedaction(BaseModel):
@@ -115,11 +120,18 @@ def loops_campaign_names_and_ids(context: AssetExecutionContext) -> pl.DataFrame
     url = f"{LOOPS_BASE_URL}{LOOPS_TITLES_ENDPOINT}"
     params = {"input": json.dumps({"json": {}})}
     headers = COMMON_HEADERS.copy()
-    cookies = {'__Secure-next-auth.session-token': session_token}
     
     try:
         log.info("Fetching campaign titles from Loops tRPC API...")
-        response = requests.get(url, params=params, headers=headers, cookies=cookies, timeout=30)
+        response = loops_session_request(
+            "GET",
+            url,
+            session_token,
+            context_label="campaigns list API",
+            params=params,
+            headers=headers,
+            timeout=30,
+        )
         response.raise_for_status()
         data = response.json()
         
@@ -200,11 +212,18 @@ def loops_mailing_lists(context: AssetExecutionContext) -> pl.DataFrame:
     url = f"{LOOPS_BASE_URL}{LOOPS_MAILING_LISTS_ENDPOINT}"
     params = {"input": json.dumps({"json": {}})}
     headers = COMMON_HEADERS.copy()
-    cookies = {'__Secure-next-auth.session-token': session_token}
     
     try:
         log.info("Fetching mailing lists from Loops tRPC API...")
-        response = requests.get(url, params=params, headers=headers, cookies=cookies, timeout=30)
+        response = loops_session_request(
+            "GET",
+            url,
+            session_token,
+            context_label="mailing lists API",
+            params=params,
+            headers=headers,
+            timeout=30,
+        )
         response.raise_for_status()
         data = response.json()
         
@@ -307,9 +326,18 @@ def _http_get_html(path: str, session_token: str, querystring: Optional[str] = N
         "sec-fetch-site": "same-origin",
         "upgrade-insecure-requests": "1",
     }
-    cookies = {"__Secure-next-auth.session-token": session_token}
-    
-    resp = requests.get(url, headers=headers, cookies=cookies, timeout=30)
+    resp = loops_session_request(
+        "GET",
+        url,
+        session_token,
+        context_label=path,
+        headers=headers,
+        timeout=30,
+    )
+    if resp.status_code in (401, 403):
+        raise LoopsAuthError(
+            f"HTTP {resp.status_code} for {path}; LOOPS_SESSION_TOKEN has likely expired"
+        )
     if resp.status_code != 200:
         raise RuntimeError(f"HTTP {resp.status_code} for {path}: {resp.text[:500]}")
     return resp.text
@@ -377,9 +405,15 @@ def _fetch_email_message_by_id(session_token: str, email_message_id: str) -> Dic
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-origin",
     })
-    cookies = {"__Secure-next-auth.session-token": session_token}
-    
-    resp = requests.get(url, params=params, headers=headers, cookies=cookies, timeout=30)
+    resp = loops_session_request(
+        "GET",
+        url,
+        session_token,
+        context_label="email message API",
+        params=params,
+        headers=headers,
+        timeout=30,
+    )
     if resp.status_code != 200:
         raise RuntimeError(f"HTTP {resp.status_code} for email message API: {resp.text[:500]}")
     try:
@@ -403,9 +437,15 @@ def _fetch_email_html(session_token: str, email_message_id: str) -> Optional[str
         "sec-fetch-site": "same-origin",
         "user-agent": COMMON_HEADERS["user-agent"],
     }
-    cookies = {"__Secure-next-auth.session-token": session_token}
-    
-    resp = requests.get(url, params=params, headers=headers, cookies=cookies, timeout=30)
+    resp = loops_session_request(
+        "GET",
+        url,
+        session_token,
+        context_label="email HTML API",
+        params=params,
+        headers=headers,
+        timeout=30,
+    )
     if resp.status_code != 200:
         raise RuntimeError(f"HTTP {resp.status_code} for email HTML API: {resp.text[:500]}")
     try:
@@ -1280,6 +1320,8 @@ def loops_campaign_email_contents(
             # Rate limiting
             time.sleep(1)
             
+        except LoopsAuthError:
+            raise
         except Exception as e:
             log.error(f"Failed to fetch content for campaign {campaign_name} ({campaign_id}): {e}")
             error_count += 1
@@ -2046,9 +2088,6 @@ def loops_campaign_publishable_content_to_warehouse(
 
 # --- Campaign Metrics Assets ---
 
-class LoopsAuthError(RuntimeError):
-    """LOOPS_SESSION_TOKEN was rejected. Every later request will fail too."""
-
 
 def _fetch_campaign_metrics_page(
     session_token: str,
@@ -2073,9 +2112,16 @@ def _fetch_campaign_metrics_page(
     }
     
     headers = COMMON_HEADERS.copy()
-    cookies = {"__Secure-next-auth.session-token": session_token}
     
-    resp = requests.get(url, params=params, headers=headers, cookies=cookies, timeout=30)
+    resp = loops_session_request(
+        "GET",
+        url,
+        session_token,
+        context_label="metrics API",
+        params=params,
+        headers=headers,
+        timeout=30,
+    )
     if resp.status_code in (401, 403):
         raise LoopsAuthError(
             f"HTTP {resp.status_code} for metrics API; LOOPS_SESSION_TOKEN has likely expired: "
