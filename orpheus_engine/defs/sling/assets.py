@@ -13,6 +13,7 @@ from ._helpers import (
     _drop_invalid_indexes,
     _ensure_target_indexes,
     _ensure_incremental_target_indexes,
+    _sling_connection_url,
 )
 
 _logger = logging.getLogger(__name__)
@@ -129,7 +130,7 @@ hcb_db_connection = SlingConnectionResource(
 warehouse_db_connection = SlingConnectionResource(
     name="WAREHOUSE_DB",  # This name MUST match the 'target' key in replication_config
     type="postgres",
-    connection_string=EnvVar("WAREHOUSE_COOLIFY_URL"),
+    connection_string=_sling_connection_url("WAREHOUSE_COOLIFY_URL"),
 )
 
 

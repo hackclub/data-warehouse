@@ -298,6 +298,11 @@ DETAIL_COLUMNS = [
     "raw", "_synced_at",
 ]
 
+DETAIL_VALUE_TEMPLATE = (
+    "(%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, "
+    "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)"
+)
+
 
 def _detail_row(p: dict, meeting_uuid: str, run_ts: datetime) -> tuple:
     # See _participant_row: `id` is empty for guests. The dashboard/metrics endpoints
@@ -417,7 +422,7 @@ def zoom_meeting_participant_details(
             try:
                 upsert_rows(conn, "meeting_participant_details", DETAIL_COLUMNS, batch,
                             "detail_id", [c for c in DETAIL_COLUMNS if c != "detail_id"],
-                            "(%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)")
+                            DETAIL_VALUE_TEMPLATE)
             finally:
                 conn.close()
             total += len(batch)
@@ -431,7 +436,7 @@ def zoom_meeting_participant_details(
         try:
             upsert_rows(conn, "meeting_participant_details", DETAIL_COLUMNS, batch,
                         "detail_id", [c for c in DETAIL_COLUMNS if c != "detail_id"],
-                        "(" + ", ".join(["%s"] * 23 + ["%s::jsonb", "%s"]) + ")")
+                        DETAIL_VALUE_TEMPLATE)
         finally:
             conn.close()
         total += len(batch)

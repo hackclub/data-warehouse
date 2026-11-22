@@ -136,6 +136,8 @@ Interpretation guide:
 | `review_warehouse_mirror` connection refused | Source Postgres is gone (app moved to third-party MySQL, May 2026) | Asset deregistered; see comment in `defs/sling/assets.py` |
 | Zoom `Exhausted 15 retries` | Zoom report endpoints' daily quota | Benign; next scheduled run picks up |
 | Zenventory `Remote end closed connection without response` | Flaky Zenventory web API | Session retries + image fetch degrades to no-image |
+| Sling: `pq: unrecognized configuration parameter "channel_binding"` on every mirror | The warehouse URL carries `channel_binding=require`; libpq clients (psycopg2, dbt, dlt) support it, but Sling's Go driver sends it to the server as a setting | `_sling_connection_url` strips `channel_binding` for Sling only; Python clients keep it (2026-11-22) |
+| Zoom `TypeError: not all arguments converted during string formatting` in `zoom_meeting_participant_details` | The final partial-batch flush used a shorter placeholder template than the row width | Both flushes share `DETAIL_VALUE_TEMPLATE` (2026-11-22) |
 
 ## 5. Storage growth
 

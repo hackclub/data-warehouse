@@ -9,10 +9,12 @@ from psycopg2 import sql
 
 def _sling_connection_url(env_var_name: str) -> EnvVar:
     """
-    Sling's Postgres driver treats sslrootcert=system as a literal file path,
-    while libpq/psycopg use it to mean the OS trust store. When that value is
-    present, expose a process-local derived env var with the parameter removed;
-    Sling will still use system roots by default for sslmode=verify-full.
+    Sling's Postgres driver (lib/pq) treats sslrootcert=system as a literal file
+    path and passes channel_binding through as a server GUC parameter, while
+    libpq/psycopg support both natively. When either is present, expose a
+    process-local derived env var with those parameters removed; Sling still
+    uses TLS (and system roots for sslmode=verify-full) while psycopg2/dbt/dlt
+    keep the original env var untouched.
     """
     raw_url = os.getenv(env_var_name)
     if not raw_url:
@@ -23,7 +25,10 @@ def _sling_connection_url(env_var_name: str) -> EnvVar:
     cleaned_query_pairs = [
         (key, value)
         for key, value in query_pairs
-        if not (key == "sslrootcert" and value == "system")
+        if not (
+            (key == "sslrootcert" and value == "system")
+            or key == "channel_binding"
+        )
     ]
     if len(cleaned_query_pairs) == len(query_pairs):
         return EnvVar(env_var_name)

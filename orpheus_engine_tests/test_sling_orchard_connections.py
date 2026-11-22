@@ -1,5 +1,6 @@
 import importlib
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -73,6 +74,34 @@ def test_orchard_connection(monkeypatch, program, configured):
         # Do not leave a derived test env reference in the imported module.
         monkeypatch.delenv(env, raising=False)
         importlib.reload(module)
+
+
+def test_warehouse_connection_strips_channel_binding(monkeypatch):
+    raw_url = (
+        "postgresql://reader:fake@db.example.com:5432/test"
+        "?sslmode=require&channel_binding=require"
+    )
+    monkeypatch.setenv("WAREHOUSE_COOLIFY_URL", raw_url)
+    monkeypatch.delenv("WAREHOUSE_COOLIFY_URL_SLING", raising=False)
+    monkeypatch.delenv("AUTH_SSH_PRIVATE_KEY_B64", raising=False)
+    monkeypatch.delenv("HCB_SSH_PRIVATE_KEY_B64", raising=False)
+    assets_mod = importlib.import_module("orpheus_engine.defs.sling.assets")
+    try:
+        importlib.reload(assets_mod)
+        initialized = SlingResource(
+            connections=[assets_mod.warehouse_db_connection]
+        ).process_config_and_initialize()
+        resolved = initialized.connections[0]
+        assert resolved.connection_string == (
+            "postgresql://reader:fake@db.example.com:5432/test"
+            "?sslmode=require"
+        )
+        # Original env var must remain untouched for psycopg2/dbt/dlt.
+        assert os.environ["WAREHOUSE_COOLIFY_URL"] == raw_url
+    finally:
+        monkeypatch.delenv("WAREHOUSE_COOLIFY_URL", raising=False)
+        monkeypatch.delenv("WAREHOUSE_COOLIFY_URL_SLING", raising=False)
+        importlib.reload(assets_mod)
 
 
 def _synthetic_catalog_for_program(program: str) -> dict[str, list[str]]:
