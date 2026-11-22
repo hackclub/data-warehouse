@@ -58,7 +58,11 @@ def valid_redirect(uri):
     return parts is not None and reserved.isdisjoint(dict(parse_qsl(parts.query)))
 
 
-def page(title, content, status=200):
+def page(title, content, status=200, *, starts_login=False):
+    form_action = "form-action 'self'"
+    if starts_login:
+        # Some browsers apply form-action to the POST's redirect as well.
+        form_action += f" {ISSUER}"
     return HTMLResponse(
         f'<!doctype html><html lang="en"><meta charset="utf-8"><title>{title}</title>'
         f'<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -67,7 +71,7 @@ def page(title, content, status=200):
         headers={
             **NO_STORE,
             "Referrer-Policy": "same-origin",
-            "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; form-action 'self'",
+            "Content-Security-Policy": f"default-src 'none'; frame-ancestors 'none'; {form_action}",
         },
     )
 
@@ -222,7 +226,8 @@ class OAuth:
                     f"<p>Allow the client at <strong>{escape(redirect_uri)}</strong> to run "
                     "read-only queries under your Hack Club account? Tool requests are logged.</p>"
                     '<form method="post" action="/authorize">'
-                    f"{fields}<button>Continue with Hack Club</button></form>")
+                    f"{fields}<button>Continue with Hack Club</button></form>",
+                    starts_login=True)
 
     async def start_login(self, flow):
         state, browser, nonce, verifier = (secrets.token_urlsafe(32) for _ in range(4))
@@ -374,7 +379,7 @@ class OAuth:
             return RedirectResponse("/admin", 303, headers=NO_STORE)
         if not admin:
             return page("Warehouse administration", '<form method="post"><button name="action" '
-                        'value="login">Sign in with Hack Club</button></form>')
+                        'value="login">Sign in with Hack Club</button></form>', starts_login=True)
         rows = []
         for user in await self.store.users():
             action = "revoke" if user["approved"] else "approve"

@@ -112,6 +112,9 @@ def test_oauth_approval_token_exchange_and_audit(auth_database, monkeypatch):
             consent = client.get("/authorize", params=params)
             assert consent.status_code == 200
             assert callback in consent.text
+            assert consent.headers["Content-Security-Policy"].endswith(
+                f"form-action 'self' {oauth.ISSUER}"
+            )
             return client.post("/authorize", data=params, headers=headers)
 
         def finish(login, subject, email, verified=True):
@@ -127,12 +130,18 @@ def test_oauth_approval_token_exchange_and_audit(auth_database, monkeypatch):
 
         assert finish(start(), "member", user_email).status_code == 403
         def admin_login():
+            login_page = client.get("/admin")
+            assert login_page.headers["Content-Security-Policy"].endswith(
+                f"form-action 'self' {oauth.ISSUER}"
+            )
             return client.post("/admin", data={"action": "login"}, headers=headers)
 
         assert finish(admin_login(), "fake-admin", admin_email, verified=False).status_code == 400
         assert finish(admin_login(), "member", user_email).status_code == 403
         assert finish(admin_login(), "admin", admin_email).status_code == 303
-        assert user_email in client.get("/admin").text
+        admin_page = client.get("/admin")
+        assert user_email in admin_page.text
+        assert admin_page.headers["Content-Security-Policy"].endswith("form-action 'self'")
         assert client.post("/admin", data={"action": "approve", "subject": "member"}).status_code == 403
         assert client.post("/admin", data={"action": "approve", "subject": "member"}, headers=headers).status_code == 303
 
