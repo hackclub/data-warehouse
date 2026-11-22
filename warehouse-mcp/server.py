@@ -9,74 +9,63 @@ Provides tools for:
 - describe_schema: Get schema documentation with sample data
 """
 
+import asyncio
 import contextlib
-import base64
 import contextvars
 from datetime import datetime, timezone
-import hashlib
 import json
 import logging
 import os
-import secrets
+from pathlib import Path
 import time
-import urllib.parse
 from typing import Any
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from mcp.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import Tool, TextContent
+from psycopg_pool import PoolTimeout
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+from auth_store import digest
+from oauth import OAuth
 
 import psycopg
 from db import get_database, init_database, close_database, SQLValidationError
 from cache import get_cache
 
 # Load environment variables
-load_dotenv()
+load_dotenv(Path(__file__).with_name(".env"))
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def get_auth_token() -> str:
-    """Get the AUTH_TOKEN from environment."""
-    token = os.environ.get("AUTH_TOKEN")
-    
-    if not token:
-        # Generate a temporary token
-        token = secrets.token_urlsafe(32)
-        logger.warning("=" * 60)
-        logger.warning("No AUTH_TOKEN environment variable set.")
-        logger.warning("Generated temporary token (will change on restart):")
-        logger.warning(f"  AUTH_TOKEN: {token}")
-        logger.warning("")
-        logger.warning("Set AUTH_TOKEN in your environment for persistent auth.")
-        logger.warning("=" * 60)
-    else:
-        logger.info("Using AUTH_TOKEN from environment")
-    
-    return token
-
-
-# Auth token for authentication
-AUTH_TOKEN = get_auth_token()
-
-# OAuth state storage (in-memory for simplicity)
-# Maps authorization codes to their metadata
-_oauth_codes: dict[str, dict] = {}
-# Maps pending auth requests (before user enters token)
-_pending_auth: dict[str, dict] = {}
 # Current user context (firstname, lastname) for SQL query attribution
 _current_user: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar('current_user', default=None)
 # Short SHA-256 prefix of the authenticated bearer token (never the token itself)
 _current_token_fp: contextvars.ContextVar[str | None] = contextvars.ContextVar('current_token_fp', default=None)
 
+_current_identity: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "current_identity", default=None
+)
+_current_auth: contextvars.ContextVar[OAuth | None] = contextvars.ContextVar(
+    "current_auth", default=None
+)
+_current_session_hash: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_session_hash", default=None
+)
+
 AUDIT_SQL_MAX_CHARS = 4000
 
 
 def _token_fingerprint(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+    return digest(token)[:12]
 
 
 def _format_caller(user_info: tuple[str, str] | None) -> str:
@@ -86,7 +75,7 @@ def _format_caller(user_info: tuple[str, str] | None) -> str:
     return " ".join(parts) if parts else "unknown"
 
 
-def _emit_audit_log(
+async def _emit_audit_log(
     *,
     tool: str,
     arguments: dict[str, Any],
@@ -97,9 +86,11 @@ def _emit_audit_log(
     row_count: int | None = None,
     query_id: str | None = None,
     error: str | None = None,
+    event: str = "mcp_tool_call",
+    request_id: str | None = None,
 ) -> None:
     record: dict[str, Any] = {
-        "event": "mcp_tool_call",
+        "event": event,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "tool": tool,
         "caller": _format_caller(user_info),
@@ -107,131 +98,50 @@ def _emit_audit_log(
         "outcome": outcome,
         "duration_ms": duration_ms,
     }
+    identity = _current_identity.get()
+    if request_id:
+        record["request_id"] = request_id
+    if identity:
+        record["caller_subject"] = identity["subject"]
+        record["caller_email"] = identity["email"]
     if tool == "query" and isinstance(arguments.get("sql"), str):
         sql = arguments["sql"]
         record["sql"] = sql[:AUDIT_SQL_MAX_CHARS]
         if len(sql) > AUDIT_SQL_MAX_CHARS:
             record["sql_truncated"] = True
-    if "schema_name" in arguments:
-        record["schema"] = arguments["schema_name"]
-    if "table_name" in arguments:
-        record["table"] = arguments["table_name"]
+    for key in ("offset", "limit", "preview_rows"):
+        if isinstance(arguments.get(key), int):
+            record[key] = arguments[key]
+    if tool == "grep_rows" and isinstance(arguments.get("pattern"), str):
+        record["pattern"] = arguments["pattern"][:AUDIT_SQL_MAX_CHARS]
+    for argument, field in (("schema_name", "schema"), ("table_name", "table")):
+        if isinstance(arguments.get(argument), str):
+            record[field] = arguments[argument][:500]
     if query_id is not None:
         record["query_id"] = query_id
-    elif "query_id" in arguments:
-        record["query_id"] = arguments["query_id"]
+    elif isinstance(arguments.get("query_id"), str):
+        record["query_id"] = arguments["query_id"][:500]
     if row_count is not None:
         record["row_count"] = row_count
     if error is not None:
         record["error"] = error[:500]
-    logger.info("mcp_audit %s", json.dumps(record, separators=(",", ":")))
-
-
-def generate_pending_auth(client_id: str, redirect_uri: str, code_challenge: str, state: str) -> str:
-    """Store a pending auth request and return a session ID."""
-    session_id = secrets.token_urlsafe(16)
-    _pending_auth[session_id] = {
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "code_challenge": code_challenge,
-        "state": state,
-        "created_at": time.time(),
+    # PostgreSQL JSONB cannot store NUL or unpaired surrogate code points.
+    record = {
+        key: value.replace("\x00", "\ufffd").encode("utf-8", "replace").decode()
+        if isinstance(value, str) else value
+        for key, value in record.items()
     }
-    return session_id
+    if event == "mcp_tool_call":
+        logger.info("mcp_audit %s", json.dumps(record, separators=(",", ":")))
 
+    auth = _current_auth.get()
+    if auth:
+        try:
+            await auth.store.audit(record)
+        except (psycopg.Error, PoolTimeout):
+            logger.error("Could not write the MCP audit record to Postgres")
+            raise RuntimeError("Request audit is temporarily unavailable") from None
 
-def complete_auth(session_id: str, provided_token: str, firstname: str, lastname: str) -> tuple[str, str, str] | None:
-    """
-    Complete auth after user provides token and name.
-    Returns (code, redirect_uri, state) if valid, None otherwise.
-    """
-    pending = _pending_auth.pop(session_id, None)
-    if not pending:
-        return None
-
-    # Check session hasn't expired (10 minute validity)
-    if time.time() - pending["created_at"] > 600:
-        return None
-
-    # Validate provided token matches AUTH_TOKEN
-    if not secrets.compare_digest(provided_token, AUTH_TOKEN):
-        # Put back in pending so user can retry
-        _pending_auth[session_id] = pending
-        return None
-
-    # Generate authorization code
-    code = secrets.token_urlsafe(32)
-    _oauth_codes[code] = {
-        "client_id": pending["client_id"],
-        "redirect_uri": pending["redirect_uri"],
-        "code_challenge": pending["code_challenge"],
-        "created_at": time.time(),
-        "firstname": firstname,
-        "lastname": lastname,
-    }
-
-    return code, pending["redirect_uri"], pending["state"]
-
-
-def exchange_code_for_token(code: str, code_verifier: str, client_id: str) -> str | None:
-    """Exchange an authorization code for an access token."""
-    code_data = _oauth_codes.pop(code, None)
-    if not code_data:
-        return None
-    
-    # Verify code hasn't expired (5 minute validity)
-    if time.time() - code_data["created_at"] > 300:
-        return None
-    
-    # Verify client_id matches
-    if code_data["client_id"] != client_id:
-        return None
-    
-    # Verify PKCE code_challenge
-    # code_challenge = base64url(sha256(code_verifier))
-    challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(code_verifier.encode()).digest()
-    ).decode().rstrip("=")
-    
-    if challenge != code_data["code_challenge"]:
-        logger.warning(f"PKCE verification failed: expected {code_data['code_challenge']}, got {challenge}")
-        return None
-
-    # Encode AUTH_TOKEN with user info: base64("{AUTH_TOKEN}:{firstname}:{lastname}")
-    firstname = code_data.get("firstname", "")
-    lastname = code_data.get("lastname", "")
-    token_data = f"{AUTH_TOKEN}:{firstname}:{lastname}"
-    encoded_token = base64.b64encode(token_data.encode('utf-8')).decode('utf-8')
-    return encoded_token
-
-
-def decode_access_token(token: str) -> tuple[bool, str | None, str | None]:
-    """
-    Decode and validate an access token.
-
-    Token format: base64("{AUTH_TOKEN}:{firstname}:{lastname}")
-
-    Returns:
-        (is_valid, firstname, lastname) or (False, None, None) if invalid
-    """
-    try:
-        decoded = base64.b64decode(token).decode('utf-8')
-        parts = decoded.split(':', 2)
-        if len(parts) != 3:
-            return (False, None, None)
-
-        auth_token, firstname, lastname = parts
-        if secrets.compare_digest(auth_token, AUTH_TOKEN):
-            return (True, firstname, lastname)
-        return (False, None, None)
-    except Exception:
-        return (False, None, None)
-
-
-def validate_access_token(token: str) -> bool:
-    """Validate an access token."""
-    is_valid, _, _ = decode_access_token(token)
-    return is_valid
 
 # Create MCP server
 mcp = Server("warehouse-mcp")
@@ -447,11 +357,22 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     cache = get_cache()
     user_info = _current_user.get()
     token_fp = _current_token_fp.get()
+    identity = _current_identity.get()
+    subject = identity["subject"] if identity else None
     started = time.monotonic()
     outcome = "ok"
     row_count: int | None = None
     query_id_out: str | None = None
     error_out: str | None = None
+    request_id = uuid4().hex
+    auth = _current_auth.get()
+    session_hash = _current_session_hash.get()
+
+    if auth:
+        await _emit_audit_log(
+            tool=name, arguments=arguments, user_info=user_info, token_fp=token_fp,
+            outcome="started", duration_ms=0, event="mcp_tool_started", request_id=request_id,
+        )
 
     try:
         if name == "query":
@@ -462,7 +383,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             rows, columns = await db.execute_query(sql, user_info=user_info)
             
             # Cache results
-            entry = cache.store(sql, rows, columns)
+            entry = cache.store(sql, rows, columns, subject=subject)
             row_count = entry.row_count
             query_id_out = entry.query_id
             
@@ -487,7 +408,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             offset = arguments.get("offset", 0)
             limit = arguments.get("limit", 50)
             
-            result = cache.get_rows(query_id, offset, limit)
+            result = cache.get_rows(query_id, offset, limit, subject=subject)
             if result is None:
                 outcome = "not_found"
                 return [TextContent(
@@ -497,7 +418,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             
             rows, total = result
             row_count = len(rows)
-            entry = cache.get(query_id)
+            entry = cache.get(query_id, subject=subject)
             columns = entry.columns if entry else []
             
             table = format_rows_for_display(rows, columns)
@@ -516,7 +437,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             pattern = arguments["pattern"]
             limit = arguments.get("limit", 100)
             
-            result = cache.grep_rows(query_id, pattern, limit)
+            result = cache.grep_rows(query_id, pattern, limit, subject=subject)
             if result is None:
                 outcome = "not_found"
                 return [TextContent(
@@ -526,7 +447,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             
             rows, total_matches = result
             row_count = len(rows)
-            entry = cache.get(query_id)
+            entry = cache.get(query_id, subject=subject)
             columns = entry.columns if entry else []
             
             table = format_rows_for_display(rows, columns)
@@ -596,6 +517,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             outcome = "unknown_tool"
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
     
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
     except SQLValidationError as e:
         outcome = "validation_error"
         error_out = str(e)
@@ -620,7 +544,16 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         # Return generic message to avoid leaking internal information
         return [TextContent(type="text", text="An internal error occurred. Please try again or contact support if the issue persists.")]
     finally:
-        _emit_audit_log(
+        session_error = None
+        if auth and session_hash and outcome != "cancelled":
+            try:
+                if not await auth.store.session_user_by_hash(session_hash, "mcp", auth.origin):
+                    outcome = "access_expired_or_revoked"
+                    session_error = "Warehouse authorization expired or was revoked"
+            except (psycopg.Error, PoolTimeout):
+                outcome = "authorization_unavailable"
+                session_error = "Warehouse authorization is temporarily unavailable"
+        await _emit_audit_log(
             tool=name,
             arguments=arguments,
             user_info=user_info,
@@ -630,608 +563,99 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             row_count=row_count,
             query_id=query_id_out,
             error=error_out,
+            request_id=request_id,
         )
+        if session_error:
+            raise RuntimeError(session_error)
 
-
-def validate_auth(scope) -> bool:
-    """
-    Validate auth from Authorization header.
-    
-    Supports Bearer token: "Authorization: Bearer <AUTH_TOKEN>"
-    """
-    headers = dict(scope.get("headers", []))
-    auth = headers.get(b"authorization", b"").decode()
-    
-    if auth.startswith("Bearer "):
-        token = auth[7:]
-        return validate_access_token(token)
-    
-    return False
-
-
-async def send_error(send, status: int, message: str):
-    """Send an error response."""
-    body = json.dumps({"error": message}).encode()
-    await send({
-        "type": "http.response.start",
-        "status": status,
-        "headers": [[b"content-type", b"application/json"]],
-    })
-    await send({
-        "type": "http.response.body",
-        "body": body,
-    })
-
-
-async def read_body(receive) -> bytes:
-    """Read the full request body."""
-    body = b""
-    while True:
-        message = await receive()
-        body += message.get("body", b"")
-        if not message.get("more_body", False):
-            break
-    return body
-
-
-def get_server_url(scope) -> str:
-    """Get the server URL from the request scope."""
-    headers = dict(scope.get("headers", []))
-    host = headers.get(b"host", b"localhost:8000").decode()
-    # Check for forwarded proto (behind reverse proxy)
-    proto = headers.get(b"x-forwarded-proto", b"http").decode()
-    return f"{proto}://{host}"
 
 
 async def app(scope, receive, send):
-    """Pure ASGI application with OAuth 2.1 authentication."""
     if scope["type"] != "http":
         return
-    
-    path = scope["path"]
-    method = scope["method"]
-    query_string = scope.get("query_string", b"").decode()
-    query_params = dict(urllib.parse.parse_qsl(query_string))
-    server_url = get_server_url(scope)
-    
-    # Log incoming request details for debugging (without revealing tokens)
-    headers = dict(scope.get("headers", []))
-    auth_header = headers.get(b"authorization", b"").decode()
-    # Only log auth presence, never the token value
-    if auth_header.startswith("Bearer "):
-        auth_display = "Bearer <redacted>"
-    elif auth_header:
-        auth_display = "<redacted>"
-    else:
-        auth_display = "(none)"
-    logger.info(f"Request: {method} {path} | Auth: {auth_display}")
-    
-    # Health check - no auth required
+    request = Request(scope, receive, send)
+    path, method = scope["path"], scope["method"]
     if path == "/health" and method == "GET":
-        body = json.dumps({"status": "ok", "service": "warehouse-mcp"}).encode()
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [[b"content-type", b"application/json"]],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": body,
-        })
-        return
-    
-    # OAuth 2.1 Discovery - no auth required
-    if path == "/.well-known/oauth-authorization-server" and method == "GET":
-        metadata = {
-            "issuer": server_url,
-            "authorization_endpoint": f"{server_url}/authorize",
-            "token_endpoint": f"{server_url}/token",
-            "registration_endpoint": f"{server_url}/register",
-            "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code"],
-            "code_challenge_methods_supported": ["S256"],
-            "token_endpoint_auth_methods_supported": ["none"],
-            "scopes_supported": [],
-        }
-        body = json.dumps(metadata).encode()
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [[b"content-type", b"application/json"]],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": body,
-        })
-        return
-    
-    # Dynamic Client Registration endpoint (required by some OAuth clients)
-    if path == "/register" and method == "POST":
-        body = await read_body(receive)
-        try:
-            client_data = json.loads(body.decode()) if body else {}
-        except json.JSONDecodeError:
-            client_data = {}
-        
-        # Generate a client_id for this registration
-        client_id = f"client-{secrets.token_hex(8)}"
-        
-        response = {
-            "client_id": client_id,
-            "client_secret": "",  # Public client, no secret needed
-            "redirect_uris": client_data.get("redirect_uris", []),
-            "grant_types": ["authorization_code"],
-            "response_types": ["code"],
-            "token_endpoint_auth_method": "none",
-        }
-        
-        response_body = json.dumps(response).encode()
-        await send({
-            "type": "http.response.start",
-            "status": 201,
-            "headers": [[b"content-type", b"application/json"]],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": response_body,
-        })
-        return
-    
-    # OAuth Protected Resource Metadata - no auth required
-    if path == "/.well-known/oauth-protected-resource" and method == "GET":
-        metadata = {
-            "resource": server_url,
-            "authorization_servers": [server_url],
-        }
-        body = json.dumps(metadata).encode()
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [[b"content-type", b"application/json"]],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": body,
-        })
-        return
-    
-    # OAuth Authorization endpoint - show login form
-    if path == "/authorize" and method == "GET":
-        client_id = query_params.get("client_id", "")
-        redirect_uri = query_params.get("redirect_uri", "")
-        code_challenge = query_params.get("code_challenge", "")
-        state = query_params.get("state", "")
-        
-        logger.info(f"OAuth authorize: client_id={client_id}, redirect_uri={redirect_uri}")
-        
-        # Create pending auth session
-        session_id = generate_pending_auth(client_id, redirect_uri, code_challenge, state)
-        
-        # Show login form
-        html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>Warehouse MCP - Authentication</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        * {{ box-sizing: border-box; }}
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0;
-            padding: 20px;
-        }}
-        .container {{
-            background: rgba(255, 255, 255, 0.95);
-            padding: 40px;
-            border-radius: 16px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
-            max-width: 400px;
-            width: 100%;
-        }}
-        h1 {{
-            margin: 0 0 8px 0;
-            color: #1a1a2e;
-            font-size: 24px;
-            font-weight: 600;
-        }}
-        .subtitle {{
-            color: #666;
-            margin-bottom: 32px;
-            font-size: 14px;
-        }}
-        label {{
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 500;
-            color: #333;
-        }}
-        .form-group {{
-            margin-bottom: 16px;
-        }}
-        .name-row {{
-            display: flex;
-            gap: 12px;
-        }}
-        .name-row .form-group {{
-            flex: 1;
-        }}
-        input[type="text"],
-        input[type="password"] {{
-            width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.2s;
-        }}
-        input[type="text"]:focus,
-        input[type="password"]:focus {{
-            outline: none;
-            border-color: #4f46e5;
-        }}
-        button {{
-            width: 100%;
-            padding: 14px;
-            background: #4f46e5;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            margin-top: 16px;
-            transition: background 0.2s;
-        }}
-        button:hover {{
-            background: #4338ca;
-        }}
-        .error {{
-            background: #fef2f2;
-            color: #dc2626;
-            padding: 12px;
-            border-radius: 8px;
-            margin-bottom: 16px;
-            font-size: 14px;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🏭 Warehouse MCP</h1>
-        <p class="subtitle">Enter your name and API key to connect</p>
-        <form method="POST" action="/authorize">
-            <input type="hidden" name="session_id" value="{session_id}">
-            <div class="name-row">
-                <div class="form-group">
-                    <label for="firstname">First Name</label>
-                    <input type="text" id="firstname" name="firstname" placeholder="First name" required autofocus>
-                </div>
-                <div class="form-group">
-                    <label for="lastname">Last Name</label>
-                    <input type="text" id="lastname" name="lastname" placeholder="Last name" required>
-                </div>
-            </div>
-            <div class="form-group">
-                <label for="token">API Key</label>
-                <input type="password" id="token" name="token" placeholder="Enter API key" required>
-            </div>
-            <button type="submit">Authenticate</button>
-        </form>
-    </div>
-</body>
-</html>"""
-
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [[b"content-type", b"text/html"]],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": html.encode(),
-        })
-        return
-    
-    # OAuth Authorization POST - handle token submission
-    if path == "/authorize" and method == "POST":
-        body = await read_body(receive)
-        form_data = dict(urllib.parse.parse_qsl(body.decode()))
-
-        session_id = form_data.get("session_id", "")
-        provided_token = form_data.get("token", "")
-        firstname = form_data.get("firstname", "")
-        lastname = form_data.get("lastname", "")
-
-        result = complete_auth(session_id, provided_token, firstname, lastname)
-        
-        if not result:
-            # Show error and let user retry
-            pending = _pending_auth.get(session_id)
-            if not pending:
-                await send_error(send, 400, "Session expired. Please try again.")
-                return
-            
-            html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>Warehouse MCP - Authentication</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        * {{ box-sizing: border-box; }}
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0;
-            padding: 20px;
-        }}
-        .container {{
-            background: rgba(255, 255, 255, 0.95);
-            padding: 40px;
-            border-radius: 16px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
-            max-width: 400px;
-            width: 100%;
-        }}
-        h1 {{
-            margin: 0 0 8px 0;
-            color: #1a1a2e;
-            font-size: 24px;
-            font-weight: 600;
-        }}
-        .subtitle {{
-            color: #666;
-            margin-bottom: 32px;
-            font-size: 14px;
-        }}
-        label {{
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 500;
-            color: #333;
-        }}
-        .form-group {{
-            margin-bottom: 16px;
-        }}
-        .name-row {{
-            display: flex;
-            gap: 12px;
-        }}
-        .name-row .form-group {{
-            flex: 1;
-        }}
-        input[type="text"],
-        input[type="password"] {{
-            width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.2s;
-        }}
-        input[type="text"]:focus,
-        input[type="password"]:focus {{
-            outline: none;
-            border-color: #4f46e5;
-        }}
-        button {{
-            width: 100%;
-            padding: 14px;
-            background: #4f46e5;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            margin-top: 16px;
-            transition: background 0.2s;
-        }}
-        button:hover {{
-            background: #4338ca;
-        }}
-        .error {{
-            background: #fef2f2;
-            color: #dc2626;
-            padding: 12px;
-            border-radius: 8px;
-            margin-bottom: 16px;
-            font-size: 14px;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🏭 Warehouse MCP</h1>
-        <p class="subtitle">Enter your name and API key to connect</p>
-        <div class="error">Invalid API key. Please try again.</div>
-        <form method="POST" action="/authorize">
-            <input type="hidden" name="session_id" value="{session_id}">
-            <div class="name-row">
-                <div class="form-group">
-                    <label for="firstname">First Name</label>
-                    <input type="text" id="firstname" name="firstname" placeholder="First name" value="{firstname}" required autofocus>
-                </div>
-                <div class="form-group">
-                    <label for="lastname">Last Name</label>
-                    <input type="text" id="lastname" name="lastname" placeholder="Last name" value="{lastname}" required>
-                </div>
-            </div>
-            <div class="form-group">
-                <label for="token">API Key</label>
-                <input type="password" id="token" name="token" placeholder="Enter API key" required>
-            </div>
-            <button type="submit">Authenticate</button>
-        </form>
-    </div>
-</body>
-</html>"""
-
-            await send({
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [[b"content-type", b"text/html"]],
-            })
-            await send({
-                "type": "http.response.body",
-                "body": html.encode(),
-            })
-            return
-        
-        code, redirect_uri, state = result
-        redirect_url = f"{redirect_uri}?code={code}&state={state}"
-        
-        await send({
-            "type": "http.response.start",
-            "status": 302,
-            "headers": [
-                [b"location", redirect_url.encode()],
-                [b"content-type", b"text/html"],
-            ],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": b"Redirecting...",
-        })
-        return
-    
-    # OAuth Token endpoint - no auth required (uses PKCE)
-    if path == "/token" and method == "POST":
-        body = await read_body(receive)
-        token_params = dict(urllib.parse.parse_qsl(body.decode()))
-        
-        grant_type = token_params.get("grant_type", "")
-        code = token_params.get("code", "")
-        code_verifier = token_params.get("code_verifier", "")
-        client_id = token_params.get("client_id", "")
-        
-        logger.info(f"OAuth token exchange: grant_type={grant_type}, client_id={client_id}")
-        
-        if grant_type != "authorization_code":
-            await send_error(send, 400, "unsupported_grant_type")
-            return
-        
-        access_token = exchange_code_for_token(code, code_verifier, client_id)
-        
-        if not access_token:
-            await send_error(send, 400, "invalid_grant")
-            return
-        
-        token_response = {
-            "access_token": access_token,
-            "token_type": "Bearer",
-        }
-        
-        response_body = json.dumps(token_response).encode()
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [[b"content-type", b"application/json"]],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": response_body,
-        })
-        return
-    
-    # All other endpoints require authentication
-    if not validate_auth(scope):
-        # Return 401 with WWW-Authenticate header to trigger OAuth flow
-        body = json.dumps({"error": "Unauthorized"}).encode()
-        await send({
-            "type": "http.response.start",
-            "status": 401,
-            "headers": [
-                [b"content-type", b"application/json"],
-                [b"www-authenticate", f'Bearer resource_metadata="{server_url}/.well-known/oauth-protected-resource"'.encode()],
-            ],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": body,
-        })
+        await JSONResponse({"status": "ok", "service": "warehouse-mcp"})(scope, receive, send)
         return
 
-    # Extract user context and token fingerprint for SQL attribution and audit logging
-    headers = dict(scope.get("headers", []))
-    auth_header = headers.get(b"authorization", b"").decode()
-    user_ctx_token = None
-    fp_ctx_token = None
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        is_valid, firstname, lastname = decode_access_token(token)
-        if is_valid:
-            fp_ctx_token = _current_token_fp.set(_token_fingerprint(token))
-            if (firstname and firstname.strip()) or (lastname and lastname.strip()):
-                user_ctx_token = _current_user.set((firstname or "", lastname or ""))
-
+    auth = request.state.auth
+    if request.headers.get("host") != auth.host:
+        await JSONResponse({"error": "Invalid host"}, 421)(scope, receive, send)
+        return
     try:
-        # MCP endpoint at root path (/) for Streamable HTTP transport
-        if path == "/" and method in ("GET", "POST", "DELETE"):
-            await session_manager.handle_request(scope, receive, send)
+        response = await auth.route(request)
+        if response is not None:
+            await response(scope, receive, send)
             return
+        if path != "/" or method not in {"GET", "POST", "DELETE"}:
+            await JSONResponse({"error": "Not found"}, 404)(scope, receive, send)
+            return
+        if request.headers.get("origin", auth.origin) != auth.origin:
+            await JSONResponse({"error": "Invalid origin"}, 403)(scope, receive, send)
+            return
+        scheme, _, token = request.headers.get("authorization", "").partition(" ")
+        identity = None
+        if scheme.lower() == "bearer" and len(token) == 43:
+            identity = await auth.store.session_user(token, "mcp", auth.origin)
+    except (psycopg.Error, PoolTimeout):
+        logger.error("MCP authentication database unavailable")
+        await JSONResponse({"error": "Service unavailable"}, 503)(scope, receive, send)
+        return
 
-        # 404 for unknown routes
-        await send_error(send, 404, "Not found")
+    if not identity:
+        response = JSONResponse({"error": "Unauthorized"}, 401, headers={
+            "WWW-Authenticate": f'Bearer resource_metadata="{auth.origin}/.well-known/oauth-protected-resource"',
+        })
+        await response(scope, receive, send)
+        return
+
+    user_ctx = _current_user.set((identity["first_name"], identity["last_name"]))
+    fp_ctx = _current_token_fp.set(_token_fingerprint(token))
+    identity_ctx = _current_identity.set(identity)
+    auth_ctx = _current_auth.set(auth)
+    session_ctx = _current_session_hash.set(digest(token))
+    try:
+        await session_manager.handle_request(scope, receive, send)
     finally:
-        if user_ctx_token is not None:
-            _current_user.reset(user_ctx_token)
-        if fp_ctx_token is not None:
-            _current_token_fp.reset(fp_ctx_token)
+        _current_session_hash.reset(session_ctx)
+        _current_auth.reset(auth_ctx)
+        _current_identity.reset(identity_ctx)
+        _current_token_fp.reset(fp_ctx)
+        _current_user.reset(user_ctx)
 
 
 @contextlib.asynccontextmanager
 async def lifespan(app):
-    """Manage the session manager and database pool lifecycle."""
-    await init_database()
-    logger.info("Database connection pool opened")
-    async with session_manager.run():
-        logger.info("StreamableHTTP session manager started")
-        yield
-    await close_database()
-    logger.info("StreamableHTTP session manager stopped")
+    auth = OAuth()
+    async with auth.http, contextlib.AsyncExitStack() as stack:
+        stack.push_async_callback(auth.store.pool.close)
+        await auth.store.open()
+        stack.push_async_callback(close_database)
+        warehouse = await init_database()
+        await warehouse.check_auth_database_isolation()
+        await stack.enter_async_context(session_manager.run())
+        yield {"auth": auth}
 
 
 def create_app():
-    """Create the ASGI app with lifespan support."""
-    from starlette.applications import Starlette
-    from starlette.routing import Route, Mount
-    
-    # Create a Starlette app that wraps our ASGI handler
-    async def handle_all(request):
-        # This won't be used - we handle everything in the ASGI middleware
-        pass
-    
-    starlette_app = Starlette(
-        lifespan=lifespan,
-        routes=[]
-    )
-    
-    # Wrap to use our custom ASGI handler
-    original_app = starlette_app
-    
+    starlette_app = Starlette(lifespan=lifespan)
+
     async def wrapped_app(scope, receive, send):
         if scope["type"] == "lifespan":
-            await original_app(scope, receive, send)
+            await starlette_app(scope, receive, send)
         else:
             await app(scope, receive, send)
-    
+
     return wrapped_app
 
 
 if __name__ == "__main__":
     import uvicorn
-    
-    port = int(os.environ.get("PORT", 8000))
+
+    port = int(os.environ.get("PORT", 3000))
     host = os.environ.get("HOST", "0.0.0.0")
-    
-    logger.info(f"Starting warehouse-mcp server on {host}:{port}")
-    uvicorn.run(create_app(), host=host, port=port)
+
+    logger.info("Starting warehouse-mcp server on %s:%s", host, port)
+    # Request URLs can contain OAuth callback codes and state.
+    uvicorn.run(create_app(), host=host, port=port, access_log=False)

@@ -18,6 +18,7 @@ class CachedQuery:
     columns: List[str]
     created_at: float
     row_count: int
+    subject: str | None = None
     
     def is_expired(self, ttl_seconds: int) -> bool:
         """Check if this cache entry has expired."""
@@ -54,7 +55,9 @@ class QueryCache:
         self,
         sql: str,
         rows: List[Dict[str, Any]],
-        columns: List[str]
+        columns: List[str],
+        *,
+        subject: str | None = None,
     ) -> CachedQuery:
         """
         Store query results in the cache.
@@ -77,12 +80,13 @@ class QueryCache:
             rows=rows,
             columns=columns,
             created_at=time.time(),
-            row_count=len(rows)
+            row_count=len(rows),
+            subject=subject,
         )
         self._cache[query_id] = entry
         return entry
     
-    def get(self, query_id: str) -> Optional[CachedQuery]:
+    def get(self, query_id: str, *, subject: str | None = None) -> Optional[CachedQuery]:
         """
         Get a cached query by ID.
         
@@ -93,7 +97,7 @@ class QueryCache:
             CachedQuery if found and not expired, None otherwise
         """
         entry = self._cache.get(query_id)
-        if entry is None:
+        if entry is None or entry.subject != subject:
             return None
         
         if entry.is_expired(self.ttl_seconds):
@@ -106,7 +110,9 @@ class QueryCache:
         self,
         query_id: str,
         offset: int = 0,
-        limit: int = 50
+        limit: int = 50,
+        *,
+        subject: str | None = None,
     ) -> Optional[tuple[List[Dict[str, Any]], int]]:
         """
         Get paginated rows from a cached query.
@@ -119,7 +125,7 @@ class QueryCache:
         Returns:
             Tuple of (rows, total_count) if found, None if not found
         """
-        entry = self.get(query_id)
+        entry = self.get(query_id, subject=subject)
         if entry is None:
             return None
         
@@ -130,7 +136,9 @@ class QueryCache:
         self,
         query_id: str,
         pattern: str,
-        limit: int = 100
+        limit: int = 100,
+        *,
+        subject: str | None = None,
     ) -> Optional[tuple[List[Dict[str, Any]], int]]:
         """
         Search for rows matching a regex pattern across all columns.
@@ -143,7 +151,7 @@ class QueryCache:
         Returns:
             Tuple of (matching_rows, total_matches) if found, None if query not found
         """
-        entry = self.get(query_id)
+        entry = self.get(query_id, subject=subject)
         if entry is None:
             return None
         

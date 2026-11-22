@@ -7,9 +7,9 @@ import logging
 import os
 import re
 import unicodedata
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from typing import List, Dict, Any, Optional
 import psycopg
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
@@ -304,24 +304,11 @@ def get_connection_url() -> str:
 
 
 def make_readonly_url(url: str) -> str:
-    """Add read-only transaction option to PostgreSQL URL."""
-    parsed = urlparse(url)
-
-    # Check if read-only option already present
-    if 'default_transaction_read_only' in url:
-        return url
-
-    # Add options parameter with read-only setting
-    # Use %20 for space and %3D for = to avoid URL encoding issues
-    readonly_option = "options=-c%20default_transaction_read_only%3Don"
-
-    if parsed.query:
-        new_query = f"{parsed.query}&{readonly_option}"
-    else:
-        new_query = readonly_option
-
-    new_parsed = parsed._replace(query=new_query)
-    return urlunparse(new_parsed)
+    """Enable read-only by default while preserving existing connection settings."""
+    settings = conninfo_to_dict(url)
+    options = settings.get("options", "")
+    settings["options"] = f"{options} -c default_transaction_read_only=on".lstrip()
+    return make_conninfo(**settings)
 
 
 class Database:
@@ -362,6 +349,17 @@ class Database:
         if self._pool is not None:
             await self._pool.close()
             self._pool = None
+
+    async def check_auth_database_isolation(self) -> None:
+        """Require the warehouse connection to use a different database."""
+        if self._pool is None:
+            raise RuntimeError("Warehouse connection pool is unavailable")
+        async with self._pool.connection(timeout=10) as conn:
+            row = await (await conn.execute("""
+                SELECT pg_catalog.to_regnamespace('mcp_auth') IS NOT NULL AS has_auth_schema
+            """)).fetchone()
+        if row["has_auth_schema"]:
+            raise RuntimeError("Warehouse queries and MCP auth require separate Postgres databases")
 
     async def execute_query(
         self,

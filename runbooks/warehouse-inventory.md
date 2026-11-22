@@ -49,13 +49,53 @@ data lives in one of three places:
      `flavorless`) land in `airtable_raw_all_bases` and `ari` (for review
      workflows) plus `airtable_unified_ysws_projects_db.approved_projects`.
 
-## Access & Audit Logging
+## Warehouse MCP access and audit logs
 
-- **`warehouse-mcp` (`warehouse-mcp/server.py`):** Emits a structured JSON
-  `mcp_audit` log line to stdout for every tool call (`query`, `get_rows`,
-  `grep_rows`, `list_schemas`, `describe_schema`, `list_columns`) containing
-  `timestamp`, `tool`, `caller`, `token_fingerprint` (12-char SHA-256 prefix,
-  never the token), `outcome`, `duration_ms`, `sql` (truncated at 4,000 chars),
-  target `schema`/`table`/`query_id`, `row_count`, and `error` on failure.
-- Logs are collected from container stdout by the host log shipper (`alloy` /
-  `coolify-log-drain`).
+The MCP server issues its own bearer tokens after users verify their identity with
+Hack Club Auth. A user signs in once to appear in the access list. The superadmin
+signs in at `/admin` and approves the account. The approved user then reconnects
+from their MCP client. Revoking access invalidates that account's outstanding
+authorization codes and sessions. Tool calls recheck the session before
+returning results, including when revocation occurs during a query. Previously issued shared-secret tokens require
+users to reconnect. MCP access tokens expire after eight hours and require sign-in
+again.
+
+The `warehouse-mcp` app needs the following environment variables.
+
+| Variable | Configuration |
+| --- | --- |
+| `MCP_PUBLIC_URL` | Public origin, such as `https://warehouse-mcp.example.org`. Defaults to `http://localhost:3000` for local use. |
+| `HACKCLUB_CLIENT_ID`, `HACKCLUB_CLIENT_SECRET` | Credentials for the MCP app in Hack Club Auth. Register the exact callback at `<MCP_PUBLIC_URL>/oauth/callback`. |
+| `MCP_SUPERADMIN_EMAIL` | Verified Hack Club Auth email for the superadmin. |
+| `MCP_AUTH_DATABASE_URL` | DSN for the MCP auth and audit Postgres database. Give its app role permission to create and own the `mcp_auth` schema and its tables. |
+| `WAREHOUSE_COOLIFY_URL` | Existing read-only warehouse DSN for the MCP service. |
+
+Use a dedicated auth database and app role so the read-only warehouse connection
+cannot query session or audit tables. The service creates the schema on startup
+and refuses to serve if the warehouse connection sees the auth schema in its
+database. Apply ingress rate limits to the public OAuth endpoints, especially
+`/register`, which stores client registrations.
+When deploying behind a proxy, preserve the public Host header and omit OAuth
+query strings from proxy access logs. The Docker app listens on port 8000 and the
+local Python entry point defaults to port 3000. For local development, set the
+variables in the ignored `warehouse-mcp/.env` file and run
+`uv run --project warehouse-mcp python warehouse-mcp/server.py` from the repo root.
+
+Tool calls get a start record in `mcp_auth.audit` before execution. They share
+a request ID with the completion record, which is also emitted as a structured
+`mcp_audit` line to stdout. Records include the verified caller subject and
+email, tool, outcome, duration, and relevant inputs such as SQL (up to 4,000
+characters), schema, table, or cached query ID. Records include a short token
+fingerprint, and stored authorization codes and session tokens are hashed.
+Access changes are also recorded in Postgres. Tool results are returned only
+after audit persistence succeeds. Treat the audit database and log exports as
+sensitive because they contain caller emails and query text.
+
+To view recent entries using the auth database connection, run:
+
+```sql
+SELECT recorded_at, record
+FROM mcp_auth.audit
+ORDER BY recorded_at DESC
+LIMIT 50;
+```

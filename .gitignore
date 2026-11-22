@@ -3,6 +3,7 @@ __pycache__
 .tmp*
 .cache/
 .env
+.env.bak-*
 *.egg-info
 .venv/
 
