@@ -1,6 +1,7 @@
 """Exercise the authorization bridge through the MCP HTTP endpoint."""
 
 import asyncio
+from html import escape
 import json
 import os
 import time
@@ -112,15 +113,22 @@ def test_oauth_approval_token_exchange_and_audit(auth_database, monkeypatch):
             consent = client.get("/authorize", params=params)
             assert consent.status_code == 200
             assert callback in consent.text
-            assert consent.headers["Content-Security-Policy"].endswith(
-                f"form-action 'self' {oauth.ISSUER}"
-            )
+            assert consent.headers["Content-Security-Policy"].endswith("form-action 'self'")
             return client.post("/authorize", data=params, headers=headers)
 
         def finish(login, subject, email, verified=True):
-            assert login.status_code == 303
-            target = urlsplit(login.headers["location"])
-            assert target.hostname == "auth.hackclub.com"
+            # The POST must finish on the MCP origin. The browser then starts a
+            # separate navigation (or the user follows the fallback link).
+            assert login.status_code == 200
+            assert "location" not in login.headers
+            assert login.headers["Cache-Control"] == "no-store"
+            assert login.headers["Content-Security-Policy"].endswith("form-action 'self'")
+            prefix, target_url = login.headers["Refresh"].split("url=", 1)
+            assert prefix == "0; "
+            assert f'href="{escape(target_url)}"' in login.text
+            target = urlsplit(target_url)
+            assert f"{target.scheme}://{target.netloc}" == oauth.ISSUER
+            assert target.path == "/oauth/authorize"
             fields = parse_qs(target.query)
             code = uuid4().hex
             upstream_grants[code] = (
@@ -131,9 +139,7 @@ def test_oauth_approval_token_exchange_and_audit(auth_database, monkeypatch):
         assert finish(start(), "member", user_email).status_code == 403
         def admin_login():
             login_page = client.get("/admin")
-            assert login_page.headers["Content-Security-Policy"].endswith(
-                f"form-action 'self' {oauth.ISSUER}"
-            )
+            assert login_page.headers["Content-Security-Policy"].endswith("form-action 'self'")
             return client.post("/admin", data={"action": "login"}, headers=headers)
 
         assert finish(admin_login(), "fake-admin", admin_email, verified=False).status_code == 400
