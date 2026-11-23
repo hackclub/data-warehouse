@@ -58,11 +58,7 @@ def valid_redirect(uri):
     return parts is not None and reserved.isdisjoint(dict(parse_qsl(parts.query)))
 
 
-def page(title, content, status=200, *, starts_login=False):
-    form_action = "form-action 'self'"
-    if starts_login:
-        # Some browsers apply form-action to the POST's redirect as well.
-        form_action += f" {ISSUER}"
+def page(title, content, status=200):
     return HTMLResponse(
         f'<!doctype html><html lang="en"><meta charset="utf-8"><title>{title}</title>'
         f'<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -71,7 +67,7 @@ def page(title, content, status=200, *, starts_login=False):
         headers={
             **NO_STORE,
             "Referrer-Policy": "same-origin",
-            "Content-Security-Policy": f"default-src 'none'; frame-ancestors 'none'; {form_action}",
+            "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; form-action 'self'",
         },
     )
 
@@ -226,8 +222,7 @@ class OAuth:
                     f"<p>Allow the client at <strong>{escape(redirect_uri)}</strong> to run "
                     "read-only queries under your Hack Club account? Tool requests are logged.</p>"
                     '<form method="post" action="/authorize">'
-                    f"{fields}<button>Continue with Hack Club</button></form>",
-                    starts_login=True)
+                    f"{fields}<button>Continue with Hack Club</button></form>")
 
     async def start_login(self, flow):
         state, browser, nonce, verifier = (secrets.token_urlsafe(32) for _ in range(4))
@@ -237,7 +232,15 @@ class OAuth:
             "response_type": "code", "scope": "openid profile email", "state": state,
             "nonce": nonce, "code_challenge": pkce(verifier), "code_challenge_method": "S256",
         })
-        response = RedirectResponse(f"{ISSUER}/oauth/authorize?{query}", 303, headers=NO_STORE)
+        target = f"{ISSUER}/oauth/authorize?{query}"
+        # Finish the same-origin form submission before navigating to the issuer.
+        # Otherwise some browsers apply form-action to the entire redirect chain,
+        # including the OAuth client's callback when the user is already signed in.
+        response = page(
+            "Continue to Hack Club Auth",
+            f'<p><a href="{escape(target)}">Continue to Hack Club Auth</a></p>',
+        )
+        response.headers["Refresh"] = f"0; url={target}"
         response.set_cookie(FLOW_COOKIE, browser, max_age=600, path="/oauth/callback",
                             secure=self.secure, httponly=True, samesite="lax")
         return response
@@ -388,7 +391,7 @@ class OAuth:
             return RedirectResponse("/admin", 303, headers=NO_STORE)
         if not admin:
             return page("Warehouse administration", '<form method="post"><button name="action" '
-                        'value="login">Sign in with Hack Club</button></form>', starts_login=True)
+                        'value="login">Sign in with Hack Club</button></form>')
         rows = []
         for user in await self.store.users():
             action = "revoke" if user["approved"] else "approve"
