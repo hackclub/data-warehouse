@@ -565,6 +565,28 @@ The syncs are not affected either way.
 belongs only in Coolify's store, the host `.env` and the app container. The app does
 not use this variable, so nothing here touches it.
 
+### Reaching the database (public port closed since 2026-11-22)
+
+The Dagster instance database has no public port. It accepts the reader only over
+the host's local socket or over TLS from the Docker bridge gateway, so reach it
+through the host (the SSH route is in the skill `warehouse-dagster-prod-health`):
+
+- **Ad-hoc SQL:** `docker exec <dagster-db-container> psql -U dagster_reader -d postgres -c "..."`
+  on the host. The socket maps the container's `root` to `dagster_reader`.
+- **Scripts that read `PROD_DAGSTER_DB_URL`:** look up the container's address on the
+  `coolify` network (it changes when the container is recreated), open an SSH local
+  forward to it through the host, and wait until it answers before you connect:
+
+  ```sh
+  docker inspect -f '{{(index .NetworkSettings.Networks "coolify").IPAddress}}' <dagster-db-container>
+  ssh -f -o ExitOnForwardFailure=yes -L 127.0.0.1:15432:<internal-ip>:5432 <warehouse-host> sleep 60
+  until pg_isready -h 127.0.0.1 -p 15432 -t 2; do sleep 1; done
+  ```
+
+  Then point the URL's host and port at `127.0.0.1:15432` with `sslmode=require`.
+  `provision` logs in at the URL's address, so give it `--url-host 127.0.0.1
+  --url-port 15432` while the forward is open.
+
 | Action | How |
 | --- | --- |
 | §1, §2, §5 queries, freshness checks, `scripts/ysws_true_spend_preview.py` | `PROD_DAGSTER_DB_URL` |
