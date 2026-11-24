@@ -353,19 +353,19 @@ class OAuth:
                 params.get("redirect_uri", ""), pkce(verifier), self.origin,
                 access_token, refresh_token,
             )
-            if not issued:
-                return error("invalid_grant")
         else:
             client_id = params.get("client_id", "")
             presented = params.get("refresh_token", "")
             if not PUBLIC_CLIENT_ID.fullmatch(client_id) or not presented:
                 return error("invalid_grant")
-            result = await self.store.exchange_refresh_token(
+            # Grants carry no scopes, so any requested scope would exceed the original grant.
+            if params.get("scope"):
+                return error("invalid_scope")
+            issued = await self.store.exchange_refresh_token(
                 presented, client_id, self.origin, access_token, refresh_token,
-                requested_scope=params.get("scope"),
             )
-            if result != "ok":
-                return error(result)
+        if not issued:
+            return error("invalid_grant")
         return JSONResponse({
             "access_token": access_token,
             "token_type": "Bearer",

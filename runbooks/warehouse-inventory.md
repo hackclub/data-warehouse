@@ -57,8 +57,8 @@ Hack Club Auth. The superadmin can pre-approve an email in `/admin` using
 that verified email and is then replaced by an approved account. The form
 does not send email. Pending invitations can be removed in `/admin`.
 Users can also sign in first and ask the superadmin to approve their account.
-Revoking access invalidates that account's outstanding
-authorization codes, sessions, and refresh tokens. Tool calls recheck the session before
+Revoking access invalidates that account's outstanding authorization codes,
+sessions, and refresh tokens. Tool calls recheck the session before
 returning results, including when revocation occurs during a query. Previously
 issued shared-secret tokens require users to reconnect. MCP access tokens
 expire after eight hours and can be renewed with rotating refresh tokens

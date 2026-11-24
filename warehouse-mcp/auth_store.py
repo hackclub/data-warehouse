@@ -108,9 +108,7 @@ class AuthStore:
                       flow["redirect_uri"], flow["challenge"], resource))
         return True
 
-    async def exchange_code(
-        self, code, client_id, redirect_uri, challenge, resource, token, refresh_token=None
-    ):
+    async def exchange_code(self, code, client_id, redirect_uri, challenge, resource, token, refresh_token):
         async with self.pool.connection() as conn:
             # Acquire the user lock first so approval changes and token issuance serialize.
             user = await (await conn.execute("""
@@ -127,28 +125,28 @@ class AuthStore:
             """, (digest(code), client_id, redirect_uri, challenge, resource))).fetchone()
             if not consumed:
                 return False
-            family_id = uuid4() if refresh_token else None
-            await conn.execute("""
-                INSERT INTO mcp_auth.sessions (token_hash, subject, purpose, resource, family_id)
-                VALUES (%s, %s, 'mcp', %s, %s)
-            """, (digest(token), user["subject"], resource, family_id))
-            if refresh_token:
-                await conn.execute("""
-                    INSERT INTO mcp_auth.refresh_tokens
-                        (token_hash, family_id, subject, client_id, resource)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (digest(refresh_token), family_id, user["subject"], client_id, resource))
+            await self.issue_mcp_tokens(
+                conn, uuid4(), user["subject"], client_id, resource, token, refresh_token,
+            )
         return True
 
-    async def exchange_refresh_token(
-        self, refresh_token, client_id, resource, token, new_refresh_token, requested_scope=None
-    ):
+    @staticmethod
+    async def issue_mcp_tokens(conn, family_id, subject, client_id, resource, token, refresh_token):
+        await conn.execute("""
+            INSERT INTO mcp_auth.sessions (token_hash, subject, purpose, resource, family_id)
+            VALUES (%s, %s, 'mcp', %s, %s)
+        """, (digest(token), subject, resource, family_id))
+        await conn.execute("""
+            INSERT INTO mcp_auth.refresh_tokens (token_hash, family_id, subject, client_id, resource)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (digest(refresh_token), family_id, subject, client_id, resource))
+
+    async def exchange_refresh_token(self, refresh_token, client_id, resource, token, new_refresh_token):
         token_hash = digest(refresh_token)
         async with self.pool.connection() as conn:
             # Acquire the user lock first so approval changes and refresh rotation serialize.
             row = await (await conn.execute("""
-                SELECT rt.family_id, rt.subject, rt.client_id, rt.resource, rt.scope,
-                       rt.consumed_at,
+                SELECT rt.family_id, rt.subject, rt.client_id, rt.resource, rt.consumed_at,
                        (rt.consumed_at > now() - make_interval(secs => %s)) AS within_grace,
                        (rt.expires_at > now()) AS active,
                        u.email, u.approved
@@ -158,7 +156,7 @@ class AuthStore:
                 FOR UPDATE OF u, rt
             """, (REFRESH_REUSE_GRACE_SECONDS, token_hash))).fetchone()
             if not row or row["client_id"] != client_id or row["resource"] != resource:
-                return "invalid_grant"
+                return False
             if row["consumed_at"] is not None and not row["within_grace"]:
                 # Reuse of a rotated refresh token past the grace window revokes the token family.
                 await conn.execute(
@@ -175,32 +173,17 @@ class AuthStore:
                     "caller_email": row["email"],
                     "client_id": client_id,
                 })
-                return "invalid_grant"
+                return False
             if not row["active"] or not (row["approved"] or row["email"] == self.superadmin_email):
-                return "invalid_grant"
-            if requested_scope is not None and requested_scope != "":
-                granted = set(row["scope"].split())
-                requested = requested_scope.split()
-                if not set(requested).issubset(granted):
-                    return "invalid_scope"
-                effective_scope = " ".join(dict.fromkeys(requested))
-            else:
-                effective_scope = row["scope"]
+                return False
             if row["consumed_at"] is None:
                 await conn.execute(
                     "UPDATE mcp_auth.refresh_tokens SET consumed_at = now() WHERE token_hash = %s",
                     (token_hash,),
                 )
-            await conn.execute("""
-                INSERT INTO mcp_auth.refresh_tokens
-                    (token_hash, family_id, subject, client_id, resource, scope)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (digest(new_refresh_token), row["family_id"], row["subject"],
-                  client_id, resource, effective_scope))
-            await conn.execute("""
-                INSERT INTO mcp_auth.sessions (token_hash, subject, purpose, resource, family_id)
-                VALUES (%s, %s, 'mcp', %s, %s)
-            """, (digest(token), row["subject"], resource, row["family_id"]))
+            await self.issue_mcp_tokens(
+                conn, row["family_id"], row["subject"], client_id, resource, token, new_refresh_token,
+            )
             await self.write_audit(conn, {
                 "event": "mcp_token_refreshed",
                 "caller_subject": row["subject"],
@@ -208,7 +191,7 @@ class AuthStore:
                 "client_id": client_id,
                 "token_fingerprint": digest(token)[:12],
             })
-        return "ok"
+        return True
 
     async def session_user(self, token, purpose, resource):
         return await self.session_user_by_hash(digest(token), purpose, resource)

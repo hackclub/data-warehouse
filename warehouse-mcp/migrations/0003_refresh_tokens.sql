@@ -4,7 +4,6 @@ CREATE TABLE mcp_auth.refresh_tokens (
     subject text NOT NULL REFERENCES mcp_auth.users,
     client_id text NOT NULL REFERENCES mcp_auth.clients,
     resource text NOT NULL,
-    scope text NOT NULL DEFAULT '',
     consumed_at timestamptz,
     expires_at timestamptz NOT NULL DEFAULT now() + interval '30 days'
 );

@@ -309,6 +309,7 @@ def test_sessions_are_bound_to_purpose_resource_and_expiration(auth_database):
             }, authorization_code, resource)
             assert await store.exchange_code(
                 authorization_code, client_id, redirect_uri, challenge, resource, mcp_credential,
+                uuid4().hex,
             )
             assert await store.session_user(admin_credential, "admin", resource)
             assert await store.session_user(mcp_credential, "mcp", resource)
