@@ -93,12 +93,16 @@ def test_oauth_approval_token_exchange_and_audit(auth_database, monkeypatch):
     with TestClient(server.create_app(), base_url=origin, follow_redirects=False) as client:
         warehouse.check_auth_database_isolation.assert_awaited_once()
         assert client.get("/health").status_code == 200
+        metadata = client.get("/.well-known/oauth-authorization-server")
+        assert metadata.status_code == 200
+        assert metadata.json()["grant_types_supported"] == ["authorization_code", "refresh_token"]
         unauthorized = client.get("/")
         assert unauthorized.status_code == 401
         assert origin in unauthorized.headers["www-authenticate"]
         assert client.post("/register", json={"redirect_uris": ["http://example.test/"]}).status_code == 400
         registered = client.post("/register", json={"redirect_uris": [callback]})
         assert registered.status_code == 201
+        assert registered.json()["grant_types"] == ["authorization_code", "refresh_token"]
         client_id = registered.json()["client_id"]
         verifier = "a" * 43
         params = {
@@ -190,6 +194,8 @@ def test_oauth_approval_token_exchange_and_audit(auth_database, monkeypatch):
         issued = client.post("/token", data=exchange)
         assert issued.status_code == 200
         token = issued.json()["access_token"]
+        refresh_token = issued.json()["refresh_token"]
+        assert len(refresh_token) == 43
         assert client.post("/token", data=exchange).status_code == 400
 
         auth = {"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream"}
@@ -249,6 +255,11 @@ def test_oauth_approval_token_exchange_and_audit(auth_database, monkeypatch):
                 WHERE record->>'outcome' = 'access_expired_or_revoked'
             """).fetchone() == (1,)
         assert client.get("/", headers=auth).status_code == 401
+        revoked_refresh = client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": refresh_token, "client_id": client_id,
+        })
+        assert revoked_refresh.status_code == 400
+        assert revoked_refresh.json() == {"error": "invalid_grant"}
 
         original_admin_token = client.cookies.get(oauth.ADMIN_COOKIE)
         assert finish(start(), "admin", "updated@example.test").status_code == 403
@@ -326,7 +337,7 @@ def test_auth_migrations_adopt_existing_schema_and_are_idempotent(auth_database)
             """)
             await conn.commit()
 
-            expected = [migration.name, "0002_email_invites.sql"]
+            expected = [migration.name, "0002_email_invites.sql", "0003_refresh_tokens.sql"]
             assert await apply_auth_migrations(conn) == expected
             assert await apply_auth_migrations(conn) == []
             async with conn.cursor() as cursor:
@@ -344,3 +355,188 @@ def test_cache_results_are_scoped_to_identity():
     assert cache.get_rows(cached.query_id, subject="member") == ([{"value": 1}], 1)
     assert cache.get_rows(cached.query_id, subject="another-member") is None
     assert cache.grep_rows(cached.query_id, "1", subject="another-member") is None
+
+
+def test_refresh_token_rotation_binding_scope_expiry_and_reuse_detection(auth_database, monkeypatch):
+    origin = "http://localhost:3000"
+    headers = {"Origin": origin}
+    callback = "http://127.0.0.1:6543/callback"
+    admin_email = "admin@example.test"
+    monkeypatch.setenv("MCP_PUBLIC_URL", origin)
+    monkeypatch.setenv("HACKCLUB_CLIENT_ID", "test-client")
+    monkeypatch.setenv("HACKCLUB_CLIENT_SECRET", "test-secret")
+    monkeypatch.setenv("MCP_SUPERADMIN_EMAIL", admin_email)
+    monkeypatch.setenv("MCP_AUTH_DATABASE_URL", auth_database)
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
+    jwk["kid"] = "oidc-refresh-key"
+    upstream_grants = {}
+
+    def hca(request):
+        if request.url.path == "/oauth/discovery/keys":
+            return httpx.Response(200, json={"keys": [jwk]})
+        fields = parse_qs(request.content.decode())
+        challenge, nonce, subject, email = upstream_grants.pop(fields["code"][0])
+        assert pkce(fields["code_verifier"][0]) == challenge
+        now = int(time.time())
+        id_token = jwt.encode({
+            "iss": oauth.ISSUER, "aud": "test-client", "iat": now, "exp": now + 60,
+            "nonce": nonce, "sub": subject, "email": email, "email_verified": True,
+            "given_name": "Admin", "family_name": "User",
+        }, private_key, algorithm="RS256", headers={"kid": jwk["kid"]})
+        return httpx.Response(200, json={"id_token": id_token})
+
+    async_client = httpx.AsyncClient
+    monkeypatch.setattr(oauth.httpx, "AsyncClient", lambda **kw: async_client(
+        **kw, transport=httpx.MockTransport(hca),
+    ))
+    warehouse = MagicMock()
+    warehouse.check_auth_database_isolation = AsyncMock()
+    monkeypatch.setattr(server, "init_database", AsyncMock(return_value=warehouse))
+    monkeypatch.setattr(server, "close_database", AsyncMock())
+    monkeypatch.setattr(server, "session_manager", server.StreamableHTTPSessionManager(
+        app=server.mcp, stateless=True, json_response=True,
+    ))
+    db = MagicMock()
+    db.execute_query = AsyncMock(return_value=([{"n": 1}], ["n"]))
+    monkeypatch.setattr(server, "get_database", lambda: db)
+
+    with TestClient(server.create_app(), base_url=origin, follow_redirects=False) as client:
+        client_id = client.post("/register", json={"redirect_uris": [callback]}).json()["client_id"]
+        other_client_id = client.post("/register", json={"redirect_uris": [callback]}).json()["client_id"]
+        verifier = "v" * 43
+
+        def issue_tokens(subject="admin", email=admin_email):
+            params = {
+                "client_id": client_id, "redirect_uri": callback,
+                "code_challenge": pkce(verifier), "code_challenge_method": "S256",
+                "response_type": "code", "resource": origin,
+            }
+            login = client.post("/authorize", data=params, headers=headers)
+            _, target_url = login.headers["Refresh"].split("url=", 1)
+            fields = parse_qs(urlsplit(target_url).query)
+            code = uuid4().hex
+            upstream_grants[code] = (fields["code_challenge"][0], fields["nonce"][0], subject, email)
+            cb = client.get("/oauth/callback", params={"state": fields["state"][0], "code": code})
+            assert cb.status_code == 303
+            auth_code = parse_qs(urlsplit(cb.headers["location"]).query)["code"][0]
+            resp = client.post("/token", data={
+                "grant_type": "authorization_code", "code": auth_code,
+                "code_verifier": verifier, "client_id": client_id, "redirect_uri": callback,
+            })
+            assert resp.status_code == 200
+            return resp.json()
+
+        first = issue_tokens()
+        rt1 = first["refresh_token"]
+        at1 = first["access_token"]
+        assert first["expires_in"] == 28800
+
+        # Refresh token is stored hashed, never plaintext.
+        with psycopg.connect(auth_database) as conn:
+            assert conn.execute(
+                "SELECT token_hash FROM mcp_auth.refresh_tokens WHERE subject = 'admin'"
+            ).fetchone() == (oauth.digest(rt1),)
+
+        # Missing client_id, wrong client_id, wrong resource, and scope escalation
+        # must all fail WITHOUT consuming or revoking rt1.
+        assert client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt1,
+        }).json() == {"error": "invalid_grant"}
+        assert client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt1, "client_id": other_client_id,
+        }).json() == {"error": "invalid_grant"}
+        assert client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt1,
+            "client_id": client_id, "resource": "https://elsewhere.test",
+        }).json() == {"error": "invalid_target"}
+        bad_scope = client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt1,
+            "client_id": client_id, "scope": "admin",
+        })
+        assert bad_scope.status_code == 400
+        assert bad_scope.json() == {"error": "invalid_scope"}
+
+        # Valid refresh (without resource, matching standard OAuth2 clients) rotates tokens.
+        refreshed = client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt1, "client_id": client_id,
+        })
+        assert refreshed.status_code == 200
+        second = refreshed.json()
+        at2 = second["access_token"]
+        rt2 = second["refresh_token"]
+        assert at2 != at1
+        assert rt2 != rt1
+        assert second["token_type"] == "Bearer"
+        assert second["expires_in"] == 28800
+
+        # New access token works on the MCP endpoint.
+        auth2 = {"Authorization": f"Bearer {at2}", "Accept": "application/json, text/event-stream"}
+        tool_resp = client.post("/", headers=auth2, json={
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "query", "arguments": {"sql": "SELECT 1 AS n"}},
+        })
+        assert tool_resp.status_code == 200
+        assert "Query ID:" in tool_resp.json()["result"]["content"][0]["text"]
+
+        # Refresh audit event is recorded without raw refresh tokens.
+        with psycopg.connect(auth_database) as conn:
+            audit_row = conn.execute("""
+                SELECT record FROM mcp_auth.audit WHERE record->>'event' = 'mcp_token_refreshed'
+            """).fetchone()[0]
+            assert audit_row["caller_subject"] == "admin"
+            assert audit_row["client_id"] == client_id
+            assert rt1 not in json.dumps(audit_row)
+            assert rt2 not in json.dumps(audit_row)
+            assert at2 not in json.dumps(audit_row)
+
+        # Replaying the rotated token rt1 triggers reuse detection and revokes the whole family.
+        replayed = client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt1, "client_id": client_id,
+        })
+        assert replayed.status_code == 400
+        assert replayed.json() == {"error": "invalid_grant"}
+
+        # Both the newest refresh token (rt2) and the family's access token (at2) are now revoked.
+        assert client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt2, "client_id": client_id,
+        }).status_code == 400
+        assert client.get("/", headers=auth2).status_code == 401
+        with psycopg.connect(auth_database) as conn:
+            assert conn.execute("""
+                SELECT count(*) FROM mcp_auth.audit
+                WHERE record->>'event' = 'mcp_refresh_token_reuse_detected'
+            """).fetchone() == (1,)
+
+        # Expired refresh tokens are rejected.
+        third = issue_tokens()
+        rt3 = third["refresh_token"]
+        with psycopg.connect(auth_database, autocommit=True) as conn:
+            conn.execute(
+                "UPDATE mcp_auth.refresh_tokens SET expires_at = now() - interval '1 second' WHERE token_hash = %s",
+                (oauth.digest(rt3),),
+            )
+        expired_resp = client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt3, "client_id": client_id,
+        })
+        assert expired_resp.status_code == 400
+        assert expired_resp.json() == {"error": "invalid_grant"}
+
+        # Email change revokes outstanding refresh tokens for that subject.
+        fourth = issue_tokens()
+        rt4 = fourth["refresh_token"]
+        params = {
+            "client_id": client_id, "redirect_uri": callback,
+            "code_challenge": pkce(verifier), "code_challenge_method": "S256",
+            "response_type": "code", "resource": origin,
+        }
+        login = client.post("/authorize", data=params, headers=headers)
+        _, target_url = login.headers["Refresh"].split("url=", 1)
+        fields = parse_qs(urlsplit(target_url).query)
+        code = uuid4().hex
+        upstream_grants[code] = (fields["code_challenge"][0], fields["nonce"][0], "admin", "changed@example.test")
+        assert client.get("/oauth/callback", params={"state": fields["state"][0], "code": code}).status_code == 403
+        assert client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt4, "client_id": client_id,
+        }).status_code == 400
