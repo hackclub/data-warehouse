@@ -338,7 +338,12 @@ def test_auth_migrations_adopt_existing_schema_and_are_idempotent(auth_database)
             """)
             await conn.commit()
 
-            expected = [migration.name, "0002_email_invites.sql", "0003_refresh_tokens.sql"]
+            expected = [
+                migration.name,
+                "0002_email_invites.sql",
+                "0003_refresh_tokens.sql",
+                "0004_refresh_token_ttl_90d.sql",
+            ]
             assert await apply_auth_migrations(conn) == expected
             assert await apply_auth_migrations(conn) == []
             async with conn.cursor() as cursor:
@@ -434,11 +439,14 @@ def test_refresh_token_rotation_binding_scope_expiry_and_reuse_detection(auth_da
         at1 = first["access_token"]
         assert first["expires_in"] == 28800
 
-        # Refresh token is stored hashed, never plaintext.
+        # Refresh token is stored hashed, never plaintext, with a 90-day TTL.
         with psycopg.connect(auth_database) as conn:
-            assert conn.execute(
-                "SELECT token_hash FROM mcp_auth.refresh_tokens WHERE subject = 'admin'"
-            ).fetchone() == (oauth.digest(rt1),)
+            token_hash, ttl_seconds = conn.execute(
+                "SELECT token_hash, extract(epoch FROM expires_at - now()) "
+                "FROM mcp_auth.refresh_tokens WHERE subject = 'admin'"
+            ).fetchone()
+            assert token_hash == oauth.digest(rt1)
+            assert 90 * 86400 - 60 <= ttl_seconds <= 90 * 86400 + 60
 
         # Missing client_id, wrong client_id, wrong resource, and scope escalation
         # must all fail WITHOUT consuming or revoking rt1.
@@ -481,8 +489,14 @@ def test_refresh_token_rotation_binding_scope_expiry_and_reuse_detection(auth_da
         assert tool_resp.status_code == 200
         assert "Query ID:" in tool_resp.json()["result"]["content"][0]["text"]
 
-        # Refresh audit event is recorded without raw refresh tokens.
+        # Refresh audit event is recorded without raw refresh tokens, and rotated token gets 90-day TTL.
         with psycopg.connect(auth_database) as conn:
+            rt2_ttl_seconds = conn.execute(
+                "SELECT extract(epoch FROM expires_at - now()) "
+                "FROM mcp_auth.refresh_tokens WHERE token_hash = %s",
+                (oauth.digest(rt2),),
+            ).fetchone()[0]
+            assert 90 * 86400 - 60 <= rt2_ttl_seconds <= 90 * 86400 + 60
             audit_row = conn.execute("""
                 SELECT record FROM mcp_auth.audit WHERE record->>'event' = 'mcp_token_refreshed'
             """).fetchone()[0]
