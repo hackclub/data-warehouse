@@ -62,8 +62,10 @@ authorization codes, sessions, and refresh tokens. Tool calls recheck the sessio
 returning results, including when revocation occurs during a query. Previously
 issued shared-secret tokens require users to reconnect. MCP access tokens
 expire after eight hours and can be renewed with rotating refresh tokens
-(valid for 30 days of inactivity). Reusing a rotated refresh token revokes
-that token family and its sessions.
+(valid for 30 days of inactivity). A 90-second grace window after rotation
+allows retries after lost responses or concurrent client refreshes without
+forcing re-authentication; reusing a rotated refresh token after the grace
+window revokes that token family and its sessions.
 
 The `warehouse-mcp` app needs the following environment variables.
 

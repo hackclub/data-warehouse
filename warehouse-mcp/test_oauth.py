@@ -491,18 +491,78 @@ def test_refresh_token_rotation_binding_scope_expiry_and_reuse_detection(auth_da
             assert rt2 not in json.dumps(audit_row)
             assert at2 not in json.dumps(audit_row)
 
-        # Replaying the rotated token rt1 triggers reuse detection and revokes the whole family.
+        # Retry after a lost response within the grace window succeeds without revoking the family.
+        lost_retry = client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt1, "client_id": client_id,
+        })
+        assert lost_retry.status_code == 200
+        rt_retry = lost_retry.json()["refresh_token"]
+        at_retry = lost_retry.json()["access_token"]
+        assert rt_retry not in {rt1, rt2}
+        # Both the original winner (at2/rt2) and the retry (at_retry/rt_retry) still work.
+        assert client.post("/", headers=auth2, json={
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "query", "arguments": {"sql": "SELECT 1 AS n"}},
+        }).status_code == 200
+        auth_retry = {"Authorization": f"Bearer {at_retry}", "Accept": "application/json, text/event-stream"}
+        assert client.post("/", headers=auth_retry, json={
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "query", "arguments": {"sql": "SELECT 1 AS n"}},
+        }).status_code == 200
+        # Successor token rt_retry can continue refreshing.
+        after_retry = client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt_retry, "client_id": client_id,
+        })
+        assert after_retry.status_code == 200
+        rt_latest = after_retry.json()["refresh_token"]
+        at_latest = after_retry.json()["access_token"]
+        auth_latest = {"Authorization": f"Bearer {at_latest}", "Accept": "application/json, text/event-stream"}
+
+        # Two concurrent refreshes with the same token both succeed and keep the family alive.
+        concurrent_grant = issue_tokens()
+        rt_shared = concurrent_grant["refresh_token"]
+        race_a = client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt_shared, "client_id": client_id,
+        })
+        race_b = client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": rt_shared, "client_id": client_id,
+        })
+        assert race_a.status_code == 200
+        assert race_b.status_code == 200
+        for idx, winner in enumerate((race_a.json(), race_b.json()), start=10):
+            winner_auth = {
+                "Authorization": f'Bearer {winner["access_token"]}',
+                "Accept": "application/json, text/event-stream",
+            }
+            assert client.post("/", headers=winner_auth, json={
+                "jsonrpc": "2.0", "id": idx, "method": "tools/call",
+                "params": {"name": "query", "arguments": {"sql": "SELECT 1 AS n"}},
+            }).status_code == 200
+            next_refresh = client.post("/token", data={
+                "grant_type": "refresh_token", "refresh_token": winner["refresh_token"],
+                "client_id": client_id,
+            })
+            assert next_refresh.status_code == 200
+
+        # Replaying rt1 AFTER the grace window triggers reuse detection and revokes the whole family.
+        with psycopg.connect(auth_database, autocommit=True) as conn:
+            conn.execute(
+                "UPDATE mcp_auth.refresh_tokens SET consumed_at = now() - interval '91 seconds' "
+                "WHERE token_hash = %s",
+                (oauth.digest(rt1),),
+            )
         replayed = client.post("/token", data={
             "grant_type": "refresh_token", "refresh_token": rt1, "client_id": client_id,
         })
         assert replayed.status_code == 400
         assert replayed.json() == {"error": "invalid_grant"}
 
-        # Both the newest refresh token (rt2) and the family's access token (at2) are now revoked.
+        # Both the newest refresh token (rt_latest) and the family's access tokens (at2, at_latest) are revoked.
         assert client.post("/token", data={
-            "grant_type": "refresh_token", "refresh_token": rt2, "client_id": client_id,
+            "grant_type": "refresh_token", "refresh_token": rt_latest, "client_id": client_id,
         }).status_code == 400
         assert client.get("/", headers=auth2).status_code == 401
+        assert client.get("/", headers=auth_latest).status_code == 401
         with psycopg.connect(auth_database) as conn:
             assert conn.execute("""
                 SELECT count(*) FROM mcp_auth.audit

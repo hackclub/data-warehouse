@@ -9,6 +9,8 @@ from psycopg_pool import AsyncConnectionPool
 
 from migrate import apply_auth_migrations
 
+REFRESH_REUSE_GRACE_SECONDS = 90
+
 
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
@@ -146,17 +148,19 @@ class AuthStore:
             # Acquire the user lock first so approval changes and refresh rotation serialize.
             row = await (await conn.execute("""
                 SELECT rt.family_id, rt.subject, rt.client_id, rt.resource, rt.scope,
-                       rt.consumed_at, (rt.expires_at > now()) AS active,
+                       rt.consumed_at,
+                       (rt.consumed_at > now() - make_interval(secs => %s)) AS within_grace,
+                       (rt.expires_at > now()) AS active,
                        u.email, u.approved
                 FROM mcp_auth.refresh_tokens rt
                 JOIN mcp_auth.users u USING (subject)
                 WHERE rt.token_hash = %s
                 FOR UPDATE OF u, rt
-            """, (token_hash,))).fetchone()
+            """, (REFRESH_REUSE_GRACE_SECONDS, token_hash))).fetchone()
             if not row or row["client_id"] != client_id or row["resource"] != resource:
                 return "invalid_grant"
-            if row["consumed_at"] is not None:
-                # Reuse of a rotated refresh token revokes the entire token family.
+            if row["consumed_at"] is not None and not row["within_grace"]:
+                # Reuse of a rotated refresh token past the grace window revokes the token family.
                 await conn.execute(
                     "DELETE FROM mcp_auth.refresh_tokens WHERE family_id = %s",
                     (row["family_id"],),
@@ -182,10 +186,11 @@ class AuthStore:
                 effective_scope = " ".join(dict.fromkeys(requested))
             else:
                 effective_scope = row["scope"]
-            await conn.execute(
-                "UPDATE mcp_auth.refresh_tokens SET consumed_at = now() WHERE token_hash = %s",
-                (token_hash,),
-            )
+            if row["consumed_at"] is None:
+                await conn.execute(
+                    "UPDATE mcp_auth.refresh_tokens SET consumed_at = now() WHERE token_hash = %s",
+                    (token_hash,),
+                )
             await conn.execute("""
                 INSERT INTO mcp_auth.refresh_tokens
                     (token_hash, family_id, subject, client_id, resource, scope)
