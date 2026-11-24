@@ -1,12 +1,15 @@
 """Postgres storage for MCP access control, OAuth grants, and audit records."""
 
 import hashlib
+from uuid import uuid4
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from migrate import apply_auth_migrations
+
+REFRESH_REUSE_GRACE_SECONDS = 90
 
 
 def digest(value: str) -> str:
@@ -41,7 +44,8 @@ class AuthStore:
             await conn.execute("""
                 DELETE FROM mcp_auth.flows WHERE expires_at <= now();
                 DELETE FROM mcp_auth.codes WHERE expires_at <= now();
-                DELETE FROM mcp_auth.sessions WHERE expires_at <= now()
+                DELETE FROM mcp_auth.sessions WHERE expires_at <= now();
+                DELETE FROM mcp_auth.refresh_tokens WHERE expires_at <= now()
             """)
             await conn.execute(
                 "INSERT INTO mcp_auth.flows (state_hash, browser_hash, details) VALUES (%s, %s, %s)",
@@ -104,7 +108,7 @@ class AuthStore:
                       flow["redirect_uri"], flow["challenge"], resource))
         return True
 
-    async def exchange_code(self, code, client_id, redirect_uri, challenge, resource, token):
+    async def exchange_code(self, code, client_id, redirect_uri, challenge, resource, token, refresh_token):
         async with self.pool.connection() as conn:
             # Acquire the user lock first so approval changes and token issuance serialize.
             user = await (await conn.execute("""
@@ -121,10 +125,72 @@ class AuthStore:
             """, (digest(code), client_id, redirect_uri, challenge, resource))).fetchone()
             if not consumed:
                 return False
-            await conn.execute("""
-                INSERT INTO mcp_auth.sessions (token_hash, subject, purpose, resource)
-                VALUES (%s, %s, 'mcp', %s)
-            """, (digest(token), user["subject"], resource))
+            await self.issue_mcp_tokens(
+                conn, uuid4(), user["subject"], client_id, resource, token, refresh_token,
+            )
+        return True
+
+    @staticmethod
+    async def issue_mcp_tokens(conn, family_id, subject, client_id, resource, token, refresh_token):
+        await conn.execute("""
+            INSERT INTO mcp_auth.sessions (token_hash, subject, purpose, resource, family_id)
+            VALUES (%s, %s, 'mcp', %s, %s)
+        """, (digest(token), subject, resource, family_id))
+        await conn.execute("""
+            INSERT INTO mcp_auth.refresh_tokens (token_hash, family_id, subject, client_id, resource)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (digest(refresh_token), family_id, subject, client_id, resource))
+
+    async def exchange_refresh_token(self, refresh_token, client_id, resource, token, new_refresh_token):
+        token_hash = digest(refresh_token)
+        async with self.pool.connection() as conn:
+            # Acquire the user lock first so approval changes and refresh rotation serialize.
+            row = await (await conn.execute("""
+                SELECT rt.family_id, rt.subject, rt.client_id, rt.resource, rt.consumed_at,
+                       (rt.consumed_at > now() - make_interval(secs => %s)) AS within_grace,
+                       (rt.expires_at > now()) AS active,
+                       u.email, u.approved
+                FROM mcp_auth.refresh_tokens rt
+                JOIN mcp_auth.users u USING (subject)
+                WHERE rt.token_hash = %s
+                FOR UPDATE OF u, rt
+            """, (REFRESH_REUSE_GRACE_SECONDS, token_hash))).fetchone()
+            if not row or row["client_id"] != client_id or row["resource"] != resource:
+                return False
+            if row["consumed_at"] is not None and not row["within_grace"]:
+                # Reuse of a rotated refresh token past the grace window revokes the token family.
+                await conn.execute(
+                    "DELETE FROM mcp_auth.refresh_tokens WHERE family_id = %s",
+                    (row["family_id"],),
+                )
+                await conn.execute(
+                    "DELETE FROM mcp_auth.sessions WHERE family_id = %s",
+                    (row["family_id"],),
+                )
+                await self.write_audit(conn, {
+                    "event": "mcp_refresh_token_reuse_detected",
+                    "caller_subject": row["subject"],
+                    "caller_email": row["email"],
+                    "client_id": client_id,
+                })
+                return False
+            if not row["active"] or not (row["approved"] or row["email"] == self.superadmin_email):
+                return False
+            if row["consumed_at"] is None:
+                await conn.execute(
+                    "UPDATE mcp_auth.refresh_tokens SET consumed_at = now() WHERE token_hash = %s",
+                    (token_hash,),
+                )
+            await self.issue_mcp_tokens(
+                conn, row["family_id"], row["subject"], client_id, resource, token, new_refresh_token,
+            )
+            await self.write_audit(conn, {
+                "event": "mcp_token_refreshed",
+                "caller_subject": row["subject"],
+                "caller_email": row["email"],
+                "client_id": client_id,
+                "token_fingerprint": digest(token)[:12],
+            })
         return True
 
     async def session_user(self, token, purpose, resource):
@@ -154,6 +220,7 @@ class AuthStore:
     async def revoke_credentials(conn, subject):
         await conn.execute("DELETE FROM mcp_auth.codes WHERE subject = %s", (subject,))
         await conn.execute("DELETE FROM mcp_auth.sessions WHERE subject = %s", (subject,))
+        await conn.execute("DELETE FROM mcp_auth.refresh_tokens WHERE subject = %s", (subject,))
 
     async def lock_admin(self, conn, token, resource):
         actor = await (await conn.execute("""

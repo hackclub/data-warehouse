@@ -138,7 +138,7 @@ class OAuth:
                     "token_endpoint": f"{self.origin}/token",
                     "registration_endpoint": f"{self.origin}/register",
                     "response_types_supported": ["code"],
-                    "grant_types_supported": ["authorization_code"],
+                    "grant_types_supported": ["authorization_code", "refresh_token"],
                     "code_challenge_methods_supported": ["S256"],
                     "token_endpoint_auth_methods_supported": ["none"],
                 })
@@ -178,7 +178,7 @@ class OAuth:
         await self.store.register(client_id, redirects)
         return JSONResponse({
             "client_id": client_id, "redirect_uris": redirects,
-            "response_types": ["code"], "grant_types": ["authorization_code"],
+            "response_types": ["code"], "grant_types": ["authorization_code", "refresh_token"],
             "token_endpoint_auth_method": "none",
         }, 201, headers=NO_STORE)
 
@@ -337,22 +337,40 @@ class OAuth:
 
     async def token(self, request):
         params = await form(request)
-        if params.get("grant_type") != "authorization_code":
+        grant_type = params.get("grant_type")
+        if grant_type not in {"authorization_code", "refresh_token"}:
             return error("unsupported_grant_type")
         if not self.valid_resource(params):
             return error("invalid_target")
-        verifier = params.get("code_verifier", "")
-        if not VERIFIER.fullmatch(verifier):
-            return error("invalid_grant")
-        token = secrets.token_urlsafe(32)
-        issued = await self.store.exchange_code(
-            params.get("code", ""), params.get("client_id", ""),
-            params.get("redirect_uri", ""), pkce(verifier), self.origin, token,
-        )
+        access_token = secrets.token_urlsafe(32)
+        refresh_token = secrets.token_urlsafe(32)
+        if grant_type == "authorization_code":
+            verifier = params.get("code_verifier", "")
+            if not VERIFIER.fullmatch(verifier):
+                return error("invalid_grant")
+            issued = await self.store.exchange_code(
+                params.get("code", ""), params.get("client_id", ""),
+                params.get("redirect_uri", ""), pkce(verifier), self.origin,
+                access_token, refresh_token,
+            )
+        else:
+            client_id = params.get("client_id", "")
+            presented = params.get("refresh_token", "")
+            if not PUBLIC_CLIENT_ID.fullmatch(client_id) or not presented:
+                return error("invalid_grant")
+            # Grants carry no scopes, so any requested scope would exceed the original grant.
+            if params.get("scope"):
+                return error("invalid_scope")
+            issued = await self.store.exchange_refresh_token(
+                presented, client_id, self.origin, access_token, refresh_token,
+            )
         if not issued:
             return error("invalid_grant")
         return JSONResponse({
-            "access_token": token, "token_type": "Bearer", "expires_in": 28800,
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "expires_in": 28800,
+            "refresh_token": refresh_token,
         }, headers={**NO_STORE, "Pragma": "no-cache"})
 
     async def admin(self, request):
