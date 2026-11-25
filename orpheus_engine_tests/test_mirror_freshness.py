@@ -148,3 +148,12 @@ def test_mirror_freshness_view_computes_live_staleness_and_is_readable_by_agent_
         assert by_schema["canvas"] == ("never_synced", True, 360, 720)
         # Stale/never_synced rows sort ahead of fresh rows
         assert rows[-1][0] == "stardance"
+
+
+def test_flavortown_post_ship_events_uses_full_refresh():
+    """Keep the small post_ship_events table on full-refresh so hard deletes propagate."""
+    from orpheus_engine.defs.sling.programs.flavortown import flavortown_replication_config
+
+    assert flavortown_replication_config["defaults"]["mode"] == "full-refresh"
+    stream_cfg = flavortown_replication_config["streams"].get("public.post_ship_events")
+    assert stream_cfg is None or stream_cfg.get("mode") == "full-refresh"

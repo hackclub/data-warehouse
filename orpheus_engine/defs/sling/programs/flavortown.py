@@ -89,11 +89,8 @@ flavortown_replication_config = {
             "primary_key": ["id"],
             "update_key": "updated_at",
         },
-        "public.post_ship_events": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
+        # public.post_ship_events is small, so it stays on the default full-refresh so
+        # hard-deletes propagate to the warehouse instead of leaving stale rows.
         "public.posts": {
             "mode": "incremental",
             "primary_key": ["id"],
