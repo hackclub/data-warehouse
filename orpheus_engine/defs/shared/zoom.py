@@ -16,6 +16,33 @@ import dagster as dg
 REPORT_PAGE_SIZE = 300
 METRICS_PAGE_SIZE = 300
 PAGE_DELAY = 3.5  # report endpoints are 10-20 req/min
+MAX_RETRY_AFTER_SECONDS = 300
+
+
+class ZoomDailyQuotaError(requests.exceptions.HTTPError):
+    """Raised when Zoom returns a 429 whose Retry-After exceeds our retry budget (daily quota)."""
+
+
+def _parse_retry_after_seconds(
+    value: Optional[str], *, now: Optional[datetime] = None
+) -> Optional[float]:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(int(raw)))
+    except ValueError:
+        pass
+    try:
+        reset_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if reset_at.tzinfo is None:
+        reset_at = reset_at.replace(tzinfo=timezone.utc)
+    ref = now if now is not None else datetime.now(timezone.utc)
+    return max(0.0, (reset_at - ref).total_seconds())
 
 
 class ZoomResource(dg.ConfigurableResource):
@@ -86,12 +113,19 @@ class ZoomResource(dg.ConfigurableResource):
             self._ensure_token()
             resp = self._get_session().request(method, url, params=params)
             if resp.status_code == 429:
-                retry_after = None
-                try:
-                    retry_after = int(resp.headers.get("Retry-After", ""))
-                except (ValueError, TypeError):
-                    pass
-                wait = (retry_after if retry_after else min(30 * (2 ** attempt), 300)) + random.uniform(0, 5)
+                retry_after_raw = resp.headers.get("Retry-After", "")
+                retry_after = _parse_retry_after_seconds(retry_after_raw)
+                if retry_after is not None and retry_after > MAX_RETRY_AFTER_SECONDS:
+                    msg = (
+                        f"Zoom daily rate limit exceeded on {url} "
+                        f"(Retry-After: {retry_after_raw}; {retry_after:.0f}s away)"
+                    )
+                    if log:
+                        log.warning(msg)
+                    raise ZoomDailyQuotaError(msg, response=resp)
+                wait = (
+                    retry_after if retry_after is not None else min(30 * (2 ** attempt), 300)
+                ) + random.uniform(0, 5)
                 if log:
                     log.warning(f"Rate limited on {path}, waiting {wait:.1f}s (attempt {attempt + 1}/{max_attempts})")
                 time.sleep(wait)

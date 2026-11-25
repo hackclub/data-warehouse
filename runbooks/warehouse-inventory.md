@@ -42,12 +42,14 @@ data lives in one of three places:
      `airtable_campfire`, `airtable_campfire_flagship`.
 3. **Shared Airtable / Review Platform** (`airtable_raw_all_bases` and/or `ari`):
    - Lightweight or Airtable-native programs without a standalone Postgres app
-     (e.g. `8-pin-grant`, `ASIC`, `Bashed`, `CQ`, `Crossroads`, `Dayoneof`,
-     `Fellows`, `Fjording it`, `Folktale`, `Genesis Reborn`, `Goship`,
-     `Hackcraft Mod Edition`, `Hacklet`, `Hackrail`, `Haggle`, `Molten`,
-     `Re-Dream`, `Storyboard V3`, `Survive`, `Torque`, `Twisted`, `Wonders`,
-     `flavorless`) land in `airtable_raw_all_bases` and `ari` (for review
-     workflows) plus `airtable_unified_ysws_projects_db.approved_projects`.
+     (e.g. `8-pin-grant`, `ASIC`, `BakeBuild`, `Bashed`, `Boba Drops`, `CQ`,
+     `Crossroads`, `Dayoneof`, `Fellows`, `Fjording it`, `Folktale`, `FuseRing`,
+     `Genesis Reborn`, `Goship`, `Hackcraft Mod Edition`, `Hacklet`, `Hackrail`,
+     `Haggle`, `Harvest`, `Molten`, `Re-Dream`, `Sprig`, `Storyboard V3`,
+     `Survive`, `Swirl`, `TTY`, `Tickets`, `Toppings`, `Torque`, `Twisted`,
+     `Vibes`, `Wonders`, `flavorless`) land in `airtable_raw_all_bases` and
+     `ari` (for review workflows) plus
+     `airtable_unified_ysws_projects_db.approved_projects`.
 
 ## Warehouse MCP access and audit logs
 

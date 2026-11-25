@@ -2,8 +2,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import dagster as dg
+import requests
 
-from orpheus_engine.defs.shared.zoom import ZoomResource
+from orpheus_engine.defs.shared.zoom import ZoomDailyQuotaError, ZoomResource
 from orpheus_engine.defs.zoom.db import SCHEMA_NAME, ensure_table, get_db_connection, upsert_rows
 
 
@@ -63,6 +64,8 @@ def zoom_daily_usage(
                 row = _row(day, run_ts)
                 seen[row[0]] = row
             log.info(f"Fetched {len(days)} days for {year}-{month:02d}")
+        except (ZoomDailyQuotaError, requests.exceptions.HTTPError):
+            raise
         except Exception as e:
             log.warning(f"Could not fetch {year}-{month:02d}: {e}")
     rows = list(seen.values())
