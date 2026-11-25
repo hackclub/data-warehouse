@@ -613,7 +613,7 @@ class Database:
             block_size = len(table_block.encode('utf-8'))
             if current_size + block_size > max_output_bytes:
                 remaining_tables = len(tables) - len(output_parts) + 1
-                output_parts.append(f"\n... and {remaining_tables} more tables (output limit reached)\n")
+                output_parts.append(f"\n... and {remaining_tables} more tables/views (output limit reached)\n")
                 budget_exceeded = True
                 break
 
