@@ -311,6 +311,19 @@ def make_readonly_url(url: str) -> str:
     return make_conninfo(**settings)
 
 
+def _format_attribution_comment(firstname: str, lastname: str) -> str:
+    """Build a single-line SQL block comment for caller attribution.
+
+    Uses ``/* ... */`` without a newline so PostgreSQL logs the caller comment
+    and the SQL statement on the same prefixed log line instead of splitting
+    the statement onto an unprefixed ``\\t`` continuation line.
+    """
+    raw = f"{firstname} {lastname}"
+    cleaned = re.sub(r"[\r\n]+", " ", raw).replace("/*", "").replace("*/", "")
+    cleaned = " ".join(cleaned.split())
+    return f"/* warehouse-mcp {cleaned} */" if cleaned else "/* warehouse-mcp */"
+
+
 class Database:
     """PostgreSQL database connection pool with read-only enforcement."""
 
@@ -384,10 +397,11 @@ class Database:
         # Validate SQL before execution
         validate_sql(sql)
 
-        # Prefix SQL with user attribution comment
+        # Prefix SQL with single-line user attribution comment so Postgres
+        # logs user=, client=, the caller comment, and the SQL on one line.
         if user_info:
             firstname, lastname = user_info
-            sql = f"-- warehouse-mcp {firstname} {lastname}\n{sql}"
+            sql = f"{_format_attribution_comment(firstname, lastname)} {sql}"
 
         return await self._run(sql, None, max_rows)
 

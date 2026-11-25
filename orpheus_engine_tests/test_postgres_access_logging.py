@@ -17,11 +17,14 @@ DOCKERFILE = PG_DOCKER_DIR / "Dockerfile"
 CONF_SH = PG_DOCKER_DIR / "conf.sh"
 RUNBOOK = REPO_ROOT / "runbooks" / "prod-health-monitoring.md"
 SCRIPTS_DIR = REPO_ROOT / "scripts"
+MCP_DIR = REPO_ROOT / "warehouse-mcp"
 
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import postgres_audit_logging as pal  # noqa: E402
+import provision_warehouse_agent_login as pwal  # noqa: E402
+import provision_warehouse_reader as pwr  # noqa: E402
 
 
 def _parse_pg_conf(text: str) -> dict[str, str]:
@@ -96,13 +99,14 @@ def test_conf_sh_includes_logging_conf(tmp_path):
     assert generated.get("archive_mode") == "on"
 
 
-def test_runbook_settings_match_logging_conf_for_pg17_and_pg18():
+def test_runbook_settings_match_logging_conf_and_document_limits():
     # Operators paste the runbook's copies into Coolify for the Dagster DB (PG 17)
     # and MCP auth DB (PG 18), so both blocks must stay in sync with logging.conf.
     text = RUNBOOK.read_text(encoding="utf-8")
     section = text.split("## 12. Direct database access logging", 1)
     assert len(section) == 2, "runbook §12 heading not found"
-    blocks = re.findall(r"```ini\n(.*?)```", section[1], flags=re.DOTALL)
+    body = section[1]
+    blocks = re.findall(r"```ini\n(.*?)```", body, flags=re.DOTALL)
     assert len(blocks) >= 2, "runbook §12 must contain PG 17 and PG 18 ini blocks"
 
     pg17_expected = pal.expected_settings(17)
@@ -112,19 +116,28 @@ def test_runbook_settings_match_logging_conf_for_pg17_and_pg18():
     assert _parse_pg_conf(blocks[1]) == pg18_expected
     assert pg18_expected["log_connections"] == "all"
 
-    # Approved per-role exclusion for warehouse sync bulk loads must be documented.
-    assert "hc_warehouse_dagster" in section[1]
-    assert "log_statement = 'ddl'" in section[1]
+    # Proposed exclusions must not be falsely labeled already approved.
+    assert "Approved per-role exclusions" not in body
+    assert "Proposed per-role exclusions" in body
+    assert "hc_warehouse_dagster" in body
+    assert "dagster_app" in body
+    assert "fivetran" in body
+    # Extended protocol, superuser bypass limit, and multi-line limit documented.
+    assert "execute <name>:" in body
+    assert "PGOPTIONS" in body
+    assert "auditd" in body
+    assert "Multi-line SQL statements" in body
 
 
-def test_render_apply_sql_pg17_with_role_exclusion():
+def test_render_apply_sql_pg17_places_role_exclusion_before_cluster_reload():
     sql = pal.render_apply_sql(17, role_exclusions=[("hc_warehouse_dagster", "ddl")])
+    alter_role_pos = sql.index('ALTER ROLE "hc_warehouse_dagster" SET log_statement = \'ddl\';')
+    alter_sys_pos = sql.index("ALTER SYSTEM SET log_statement = 'all';")
+    assert alter_role_pos < alter_sys_pos
     assert "ALTER SYSTEM SET log_connections = 'on';" in sql
     assert "ALTER SYSTEM SET log_disconnections = 'on';" in sql
-    assert "ALTER SYSTEM SET log_statement = 'all';" in sql
     assert "ALTER SYSTEM SET log_parameter_max_length = '0';" in sql
     assert "ALTER SYSTEM SET log_parameter_max_length_on_error = '0';" in sql
-    assert 'ALTER ROLE "hc_warehouse_dagster" SET log_statement = \'ddl\';' in sql
     assert sql.rstrip().endswith("SELECT pg_reload_conf();")
 
 
@@ -160,7 +173,7 @@ def test_parse_role_exclusions_rejects_bad_inputs():
         pal.parse_role_exclusions(["hc_warehouse_dagster=ddl", "hc_warehouse_dagster=mod"])
 
 
-def test_evaluate_settings_detects_drift_and_unexpected_role_overrides():
+def test_evaluate_settings_detects_drift_unexpected_overrides_and_file_errors():
     pg17 = pal.expected_settings(17)
     assert (
         pal.evaluate_settings(
@@ -178,7 +191,44 @@ def test_evaluate_settings_detects_drift_and_unexpected_role_overrides():
         pg_major=17,
         live_role_overrides={"rogue_role": {"log_statement": "none"}},
         expected_exclusions=[("hc_warehouse_dagster", "ddl")],
+        file_errors=["/etc/postgresql/postgresql.conf:99 (bad_param): syntax error"],
     )
     assert any("log_statement" in e for e in errors)
     assert any("hc_warehouse_dagster" in e for e in errors)
     assert any("rogue_role" in e for e in errors)
+    assert any("pg_file_settings error" in e for e in errors)
+
+
+def test_cli_check_subcommand_exists_and_handles_missing_env():
+    rc = pal.main(["check", "--dsn-env", "NONEXISTENT_TEST_DSN_VAR_AE7057C6", "--pg-major", "17"])
+    assert rc == 2
+
+
+def test_provisioning_scripts_suppress_statement_logging_for_scram_ddl():
+    verifier = pwr._scram_sha256_verifier("dummy-test-password-only")
+
+    for login in pwal.LOGINS.values():
+        agent_sql = pwal.render_setup_sql(login, verifier)
+        assert "SET LOCAL log_statement = 'none';" in agent_sql
+        assert "SET LOCAL log_min_duration_statement = -1;" in agent_sql
+        assert agent_sql.index("SET LOCAL log_statement = 'none';") < agent_sql.index(verifier)
+
+    reader_sql = pwr._render_reader_setup_sql(
+        role_name="hc_warehouse_reader",
+        db_name="app_db",
+        scram_verifier=verifier,
+        grants={"public.items": None},
+        conn_limit=4,
+    )
+    assert "SET LOCAL log_statement = 'none';" in reader_sql
+    assert "SET LOCAL log_min_duration_statement = -1;" in reader_sql
+    assert reader_sql.index("SET LOCAL log_statement = 'none';") < reader_sql.index(verifier)
+
+
+def test_warehouse_mcp_attribution_comment_is_single_line():
+    # Static check so root pytest verifies B2 even when psycopg_pool isn't installed.
+    db_src = (MCP_DIR / "db.py").read_text(encoding="utf-8")
+    assert "-- warehouse-mcp" not in db_src, (
+        "warehouse-mcp/db.py must not use '-- warehouse-mcp ...\\n' which splits SQL onto an unprefixed log line"
+    )
+    assert "/* warehouse-mcp " in db_src

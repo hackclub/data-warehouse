@@ -677,21 +677,28 @@ Why these settings:
 - `log_disconnections = on` records session end and total duration.
 - `log_statement = 'all'` at the cluster level records every read and write
   statement for **every existing and future login role**, including `postgres`
-  over the local Unix socket. Because `log_statement` has PostgreSQL context
-  `superuser`, non-superuser logins cannot disable or bypass it with
-  `SET log_statement = 'none'` (PostgreSQL refuses with `permission denied`).
-  It takes effect on `SELECT pg_reload_conf();` with **no restart** (unlike
-  `pgaudit`, which requires installing an extension, setting
-  `shared_preload_libraries`, and restarting every database).
-- `log_parameter_max_length = 0` and `log_parameter_max_length_on_error = 0`
+  over the local Unix socket. Simple-protocol queries log as `statement: ...`;
+  extended-protocol parameterized queries (`psycopg` v3, JDBC, etc.) log as
+  `execute <name>: ...` (for example `execute <unnamed>: ...`). Because
+  `log_statement` has PostgreSQL context `superuser`, non-superuser logins
+  cannot disable or bypass it with `SET log_statement = 'none'` (PostgreSQL
+  refuses with `permission denied`). It takes effect on
+  `SELECT pg_reload_conf();` with **no restart** (unlike `pgaudit`, which
+  requires installing an extension, setting `shared_preload_libraries`, and
+  restarting every database).
+- **Proposed exception (pending approval) — omitting bind parameter values:**
+  `log_parameter_max_length = 0` and `log_parameter_max_length_on_error = 0`
   suppress `DETAIL: parameters: ...` on extended-protocol parameterized queries
-  (such as `psycopg` v3 in `warehouse-mcp` and JDBC/Metabase), keeping bind
+  (such as `psycopg` v3 in `warehouse-mcp` and JDBC/Metabase). This keeps bind
   values (user emails, token hashes, JSON payloads) out of the central log store
-  while still recording the SQL statement text. Inline literals in simple-protocol
-  queries are still logged; password-provisioning scripts
-  (`scripts/dagster_db_reader.py`, `scripts/provision_warehouse_agent_login.py`)
-  send only SCRAM-SHA-256 verifiers and suppress logging for the role DDL
-  transaction.
+  while recording the SQL template (`SELECT ... WHERE ... = $1`), meaning the
+  exact bound values read or written by a parameterized query are not logged.
+  Inline literals in simple-protocol queries (including SQLAlchemy + `psycopg2`)
+  are still logged verbatim; password-provisioning scripts
+  (`scripts/dagster_db_reader.py`, `scripts/provision_warehouse_agent_login.py`,
+  and `scripts/provision_warehouse_reader.py`) send only SCRAM-SHA-256 verifiers
+  and suppress statement logging (`SET [LOCAL] log_statement = 'none'`) for the
+  role DDL transaction.
 - `log_line_prefix` tags every session log line with timestamp (`%m`), backend PID
   (`%p`), Postgres role (`%u`), database (`%d`), `application_name` (`%a`), and
   peer address/port (`%r`). `%q` suppresses the session fields on non-session
@@ -700,54 +707,73 @@ Why these settings:
   `logging_collector` on redirects stderr into local `$PGDATA/log` files and stops
   container stderr output, which breaks shipping to the central log store.
 
-### Approved per-role exclusions
+### Proposed per-role exclusions (pending approval)
 
 Cluster-level `log_statement = 'all'` applies to every role unless an explicit
-exception is approved and documented here:
+exception is approved and documented here. The following exclusions are
+**proposed, pending approval**:
 
-| Database | Role | Setting | Rationale |
+| Database | Role | Proposed Setting | Scope & Rationale |
 | --- | --- | --- | --- |
-| Warehouse Postgres | `hc_warehouse_dagster` | `ALTER ROLE hc_warehouse_dagster SET log_statement = 'ddl';` | Sync jobs (Sling, dlt, dbt) run high-volume batched `INSERT`s and `COPY` loads; `'all'` would log raw row-level PII from inline `INSERT` literals and spike sync-window log volume, while `'ddl'` still records all schema/table changes (`CREATE`, `ALTER`, `DROP`). |
+| Warehouse Postgres | `hc_warehouse_dagster` | `ALTER ROLE hc_warehouse_dagster SET log_statement = 'ddl';` | Applies to **all** sessions of `hc_warehouse_dagster`: scheduled syncs (Sling, dlt, dbt — both writes and reads) and human/agent `bin/warehouse-dbt --elevated` runs (§10). Prevents batched inline `INSERT` literals from shipping row-level PII to the central log store and avoids sync-window log spikes, while still logging all DDL (`CREATE`, `ALTER`, `DROP`). Note: `fivetran` is **not** excluded and remains at `log_statement = 'all'`. |
+| Dagster instance Postgres | `dagster_app` (dedicated non-superuser app role) | `ALTER ROLE dagster_app SET log_statement = 'ddl';` | Dagster writes through SQLAlchemy + `psycopg2`, which interpolates values client-side into SQL literals (`log_parameter_max_length = 0` does not strip them). `event_logs` and `asset_keys.last_materialization` include multi-megabyte JSON payloads (containing emails and tokens) that exceed central log-store per-line and per-stream limits. Moving the Dagster app onto a dedicated non-superuser `dagster_app` role excluded at `'ddl'` keeps `postgres` (socket-only) and `dagster_reader` at `log_statement = 'all'` while preventing event payloads from ever entering the log store. |
 
-No role exclusion is configured on the Dagster instance DB (its `postgres` role
-is shared by the Dagster app and local socket administration, so excluding it
-would leave socket admin statements unlogged) or on the MCP auth DB (low query
-volume; all queries from `warehouse_mcp_auth` are parameterized).
+No role exclusion is proposed on the MCP auth DB (low query volume; all queries
+from `warehouse_mcp_auth` use extended-protocol bind parameters).
 
 ### Configuration durability, rollout, and rollback
 
 The custom warehouse image (`ghcr.io/hackclub/warehouse-postgres:17`) bakes the
 PG 17 settings into `/etc/postgresql/logging.conf` and includes them automatically
-on first init via `warehouse-postgres-docker/conf.sh`. Clusters started with a
-custom Postgres configuration (including restored warehouse clusters and the
-Dagster instance database, which uses stock `postgres:17-alpine`) must keep these
-settings in their configuration (or `include '/etc/postgresql/logging.conf'` on
-the custom image) so redeploys do not clear them. The MCP auth database runs
-stock `postgres:18-alpine` with a persistent data volume, so `ALTER SYSTEM`
-writes to `postgresql.auto.conf` on that volume and survives container restarts
-and redeploys.
+on first init via `warehouse-postgres-docker/conf.sh` (with **no per-role
+exclusion** baked in; fresh clusters log all roles until an approved override is
+applied). Clusters started with a custom Postgres configuration (including
+restored warehouse clusters and the Dagster instance database, which uses stock
+`postgres:17-alpine`) must keep these settings in their configuration (or
+`include '/etc/postgresql/logging.conf'` on the custom image) so redeploys do
+not clear them. The MCP auth database runs stock `postgres:18-alpine` with a
+persistent data volume, so `ALTER SYSTEM` writes to `postgresql.auto.conf` on
+that volume and survives container restarts and redeploys.
 
 All logging parameters above (`log_connections`, `log_disconnections`,
 `log_statement`, `log_parameter_max_length`, `log_parameter_max_length_on_error`,
 `log_line_prefix`) activate immediately via `SELECT pg_reload_conf();` with **no
-restart**. Use `scripts/postgres_audit_logging.py` to render the exact idempotent
-apply or rollback SQL:
+database restart**.
+
+**Mandatory ordering for role exclusions:** `ALTER ROLE ... SET log_statement`
+applies only to **new** sessions, whereas cluster-wide `log_statement = 'all'`
+applies immediately on reload to **existing** sessions. Always:
+
+1. Apply the approved `ALTER ROLE ... SET log_statement = 'ddl'` (and for the
+   Dagster DB, cut the Dagster app over to `dagster_app`) **first**.
+2. Wait until **zero** pre-existing sessions of that role (or old Dagster app
+   TCP sessions as `postgres`) remain in `pg_stat_activity`.
+3. Update the config file idempotently, confirm
+   `SELECT sourcefile, sourceline, name, setting, error FROM pg_file_settings WHERE error IS NOT NULL;`
+   returns zero rows, and **only then** run `SELECT pg_reload_conf();`.
+
+Use `scripts/postgres_audit_logging.py` to render idempotent apply/rollback SQL
+or run a read-only settings check:
 
 ```bash
 # Render reload-only apply SQL (pg17 for warehouse/dagster, pg18 for mcp-auth)
 .venv/bin/python scripts/postgres_audit_logging.py render --pg-major 17 --exclude-role hc_warehouse_dagster=ddl
-.venv/bin/python scripts/postgres_audit_logging.py render --pg-major 17
+.venv/bin/python scripts/postgres_audit_logging.py render --pg-major 17 --exclude-role dagster_app=ddl
 .venv/bin/python scripts/postgres_audit_logging.py render --pg-major 18
 
 # Render exact rollback SQL
 .venv/bin/python scripts/postgres_audit_logging.py render --pg-major 17 --exclude-role hc_warehouse_dagster=ddl --rollback
 .venv/bin/python scripts/postgres_audit_logging.py render --pg-major 18 --rollback
+
+# Read-only live settings and role-override drift check
+.venv/bin/python scripts/postgres_audit_logging.py check --dsn-env WAREHOUSE_COOLIFY_URL --pg-major 17 --exclude-role hc_warehouse_dagster=ddl
 ```
 
 ### Verify live settings (read-only)
 
-Run against all three databases (warehouse Postgres, Dagster instance Postgres,
-and MCP auth Postgres):
+Run `scripts/postgres_audit_logging.py check` or execute directly against all
+three databases (warehouse Postgres, Dagster instance Postgres, and MCP auth
+Postgres):
 
 ```sql
 SELECT name, setting, source
@@ -783,37 +809,59 @@ Confirm:
 - Only documented approved role overrides appear in `pg_db_role_setting`.
 
 To verify end-to-end log shipping, run a marked read-only query such as
-`SELECT /* audit_check_<id> */ 1;` on each database through each active access
-path (MCP, direct/tailnet login, relay, and local socket) and confirm the
-`statement:` line appears in the central log store with `user=`, `db=`, `app=`,
-and `client=`.
+`SELECT /* audit_check_<id> */ 1;` on each database through each testable access
+path (MCP, direct/tailnet login, SSH forward, and local socket; for external
+source-restricted relays such as Metabase and Fivetran, inspect live traffic in
+the central log store) and confirm the `statement:` or `execute ` line appears
+in the central log store with `user=`, `db=`, `app=`, and `client=`.
 
 ### Where logs are retained and how to check who logged in
 
 - **Durable off-host retention:** Container stderr is shipped to the warehouse's
   central log store. See the private ops notes for query endpoints, queries,
   retention, and recurring ingestion checks. Filter for `connection authorized`,
-  `connection authenticated`, `disconnection`, `statement:`, or `FATAL` to
-  inspect logins, statements, and failed auth attempts.
+  `connection authenticated`, `disconnection`, `statement:`, `execute `, or
+  `FATAL` (e.g. `|~ "statement:|execute "`) to inspect logins, statements, and
+  failed auth attempts.
 - **Recent local logs on the host (ephemeral):** Recent logs can also be checked
   directly on the host for quick triage, though local `docker logs` vanish when a
   container is recreated:
 
 ```bash
-docker logs --since 24h <postgres-container> 2>&1 | grep -E 'connection (received|authenticated|authorized)|disconnection|statement:|authentication failed'
+docker logs --since 24h <postgres-container> 2>&1 | grep -E 'connection (received|authenticated|authorized)|disconnection|statement:|execute |authentication failed'
 ```
 
 Look up the warehouse, Dagster, and MCP auth Postgres container names from the
 private ops notes or `docker ps` on the host.
 
-### Attribution limits and tracing the real source
+### Attribution limits, bypass limits, and tracing the real source
 
 Postgres logs record the **database role (`user=`)**, the **TCP peer address
 Postgres sees (`client=`)**, and the **client-supplied `application_name`
 (`app=`)**:
 
+- **Superuser bypass limit (cannot be prevented inside PostgreSQL):** No
+  PostgreSQL setting can stop a cluster superuser (`postgres`) from disabling
+  statement logging in its own session — via `SET log_statement = 'none'` (which
+  logs only the `SET` command) or at connect time via
+  `PGOPTIONS='-c log_statement=none'` (which logs connection/disconnection lines
+  but **zero** statement lines). `postgres` is restricted to the local Unix
+  socket on the warehouse DB and MCP auth DB (and becomes socket-only on the
+  Dagster DB once `dagster_app` is deployed). **Compensating control:** host
+  Linux `auditd` (`EXECVE`) and SSH auth logs shipped to the central log store
+  record SSH logins and `docker exec` command arguments (including `-e PGOPTIONS`
+  or `-c` SQL flags). **Limit:** `auditd` captures command-line arguments, not
+  SQL piped over stdin to `psql`.
+- **Multi-line SQL statements (known limit):** PostgreSQL writes continuation
+  lines of multi-line SQL with a leading tab (`\t`) and no `log_line_prefix`,
+  and the container log driver ships each line as a separate record. Single-line
+  queries (including `warehouse-mcp`, which uses a single-line
+  `/* warehouse-mcp <caller> */` comment prefix) keep `user=`, `db=`, `app=`,
+  `client=`, and the full statement in one record; multi-line SQL records carry
+  `user=`/`client=` on the first line only. Stitching continuation lines requires
+  multiline filtering in the Coolify-managed log drain (future follow-up).
 - **Shared roles and untrusted `app=`:** Direct database roles (`postgres`,
-  `dagster_reader`, `hc_warehouse_agent`, `hc_warehouse_mcp`,
+  `dagster_reader`, `dagster_app`, `hc_warehouse_agent`, `hc_warehouse_mcp`,
   `warehouse_mcp_auth`, and service roles) may be shared across operators or
   services, so a Postgres login identifies a role rather than an individual
   person. `application_name` (`app=`, such as `elevated:<reason>`) is set by the
@@ -830,10 +878,12 @@ Postgres sees (`client=`)**, and the **client-supplied `application_name`
   for the Dagster instance DB and MCP auth DB are disabled, blocked at the host
   firewall, and rejected in `pg_hba.conf`. Non-container access arrives only over
   the local Unix socket (`docker exec`) or an SSH port forward from the host
-  bridge gateway; in both cases, the real remote source IP is recorded in the
-  host SSH auth and audit logs shipped to the central log store. If a TCP proxy
-  were ever re-enabled for either database, it must log the real client address
-  and ship those logs to the central log store before accepting traffic.
+  bridge gateway. Host SSH auth logs (`sshd` at `LogLevel INFO`) record the jump
+  host's egress IP on `Accepted publickey` and correlate to database logins by
+  timestamp (exact 1:1 port-forward mapping is not logged at `LogLevel INFO`).
+  If a TCP proxy were ever re-enabled for either database, it must log the real
+  client address and ship those logs to the central log store before accepting
+  traffic.
 - **Local socket logins (`client=[local]`):** `docker exec -u postgres ... psql`
   and `bin/warehouse-admin-psql` connect over the Unix socket. Trace them to the
   operator's SSH session via the host-side SSH and audit logs described in the

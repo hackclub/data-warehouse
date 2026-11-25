@@ -217,3 +217,28 @@ def test_terminated_query_is_silently_run_again(server, monkeypatch, caplog):
 )
 def test_only_a_lost_connection_counts(error, lost):
     assert warehouse_db.is_connection_lost(error) is lost
+
+
+def test_attribution_comment_stays_single_line_and_safe():
+    comment = warehouse_db._format_attribution_comment("Ada", "Lovelace")
+    assert comment == "/* warehouse-mcp Ada Lovelace */"
+    assert "\n" not in comment
+
+    sanitized = warehouse_db._format_attribution_comment("Ada\n*/DROP", "/*Lovelace\r")
+    assert "\n" not in sanitized
+    assert "\r" not in sanitized
+    assert sanitized.startswith("/* warehouse-mcp ")
+    assert sanitized.endswith(" */")
+    assert "*/" not in sanitized[2:-2]
+    assert "/*" not in sanitized[2:-2]
+
+
+def test_execute_query_with_user_info_keeps_single_line(server, monkeypatch):
+    async def use(database):
+        rows, _ = await database.execute_query(
+            "SELECT /* marker_mcp_single_line */ 1 AS ok",
+            user_info=("Test", "Caller"),
+        )
+        return rows[0]
+
+    assert _on_database(server.mcp_url(), monkeypatch, use) == {"ok": 1}

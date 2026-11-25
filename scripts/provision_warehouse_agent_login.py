@@ -97,6 +97,8 @@ def render_setup_sql(login: Login, scram_verifier: str) -> str:
     role = _quote_ident(login.role)
     lines = [
         "BEGIN;",
+        "SET LOCAL log_statement = 'none';",
+        "SET LOCAL log_min_duration_statement = -1;",
         "DO $$ BEGIN",
         f"  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = {_quote_literal(login.role)}) THEN",
         f"    CREATE ROLE {role};",
