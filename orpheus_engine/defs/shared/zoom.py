@@ -114,16 +114,24 @@ class ZoomResource(dg.ConfigurableResource):
     def _request(self, method: str, path: str, *, params=None, max_attempts: int = 15, log=None) -> dict:
         url = f"https://api.zoom.us/v2{path}"
         retried_401 = False
+        saw_429 = False
+        last_429_resp = None
         for attempt in range(max_attempts):
             self._ensure_token()
             resp = self._get_session().request(method, url, params=params)
             if resp.status_code == 429:
+                saw_429 = True
+                last_429_resp = resp
+                rate_limit_type = (resp.headers.get("X-RateLimit-Type") or "").strip().lower()
                 retry_after_raw = resp.headers.get("Retry-After", "")
                 retry_after = _parse_retry_after_seconds(retry_after_raw)
-                if retry_after is not None and retry_after > MAX_RETRY_AFTER_SECONDS:
+                if rate_limit_type == "daily-limit" or (
+                    retry_after is not None and retry_after > MAX_RETRY_AFTER_SECONDS
+                ):
                     msg = (
                         f"Zoom daily rate limit exceeded on {url} "
-                        f"(Retry-After: {retry_after_raw}; {retry_after:.0f}s away)"
+                        f"(X-RateLimit-Type: {resp.headers.get('X-RateLimit-Type', '')}, "
+                        f"Retry-After: {retry_after_raw})"
                     )
                     if log:
                         log.warning(msg)
@@ -149,6 +157,11 @@ class ZoomResource(dg.ConfigurableResource):
                     log.error(f"{resp.status_code} on {path}: {resp.text[:500]}")
                 resp.raise_for_status()
             return resp.json()
+        if saw_429:
+            raise ZoomDailyQuotaError(
+                f"Exhausted {max_attempts} rate-limit retries on {url}",
+                response=last_429_resp,
+            )
         raise requests.exceptions.HTTPError(f"Exhausted {max_attempts} retries on {url}")
 
     def _get(self, path: str, *, params=None, log=None) -> dict:

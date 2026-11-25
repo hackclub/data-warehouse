@@ -50,9 +50,9 @@ data lives in one of three places:
      `Storyboard V3`, `Survive` (also in `ari`), `Swirl`, `TTY`, `Tickets`,
      `Toppings`, `Torque`, `Twisted` (also in `ari`), `Vibes`, `Wonders`,
      `flavorless`.
-   - Programs with dedicated Sling mirrors that also use `ari` for review
-     workflows: `3am`, `Coral`, `Embassy`, `Grandma`, `Half Life`, `Phantom`,
-     `Terra`, `thirdspace`.
+   - Programs with dedicated mirrors that also use `ari` for review
+     workflows: `3am`, `Embassy`, `Grandma`, `Half Life`, `Phantom`,
+     `Snowglobe` (`airtable_snowglobe`), `Terra`, `thirdspace`.
 4. **Unified YSWS Registry Only (operational source not yet shared with warehouse)**:
    - Newly launched programs currently tracked in
      `airtable_unified_ysws_projects_db` (`ysws_programs` / `approved_projects`)

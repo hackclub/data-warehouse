@@ -49,6 +49,45 @@ def test_zoom_request_fails_fast_on_daily_quota_iso_retry_after(monkeypatch):
     assert slept == []
 
 
+def test_zoom_request_fails_fast_on_x_ratelimit_type_daily_limit_without_retry_after(monkeypatch):
+    resp = MagicMock(status_code=429, headers={"X-RateLimit-Type": "Daily-limit"}, ok=False)
+    session = MagicMock()
+    session.request.return_value = resp
+
+    res = ZoomResource(account_id="a", client_id="c", client_secret="s")
+    res._session = session
+    res._token = "tok"
+    res._token_expires_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
+
+    slept = []
+    monkeypatch.setattr(zoom_mod.time, "sleep", lambda sec: slept.append(sec))
+
+    with pytest.raises(ZoomDailyQuotaError):
+        res._request("GET", "/report/daily")
+
+    assert session.request.call_count == 1
+    assert slept == []
+
+
+def test_zoom_request_raises_daily_quota_error_when_429_retries_exhausted(monkeypatch):
+    resp = MagicMock(status_code=429, headers={}, ok=False)
+    session = MagicMock()
+    session.request.return_value = resp
+
+    res = ZoomResource(account_id="a", client_id="c", client_secret="s")
+    res._session = session
+    res._token = "tok"
+    res._token_expires_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(zoom_mod.time, "sleep", lambda sec: None)
+    monkeypatch.setattr(zoom_mod.random, "uniform", lambda a, b: 0.0)
+
+    with pytest.raises(ZoomDailyQuotaError):
+        res._request("GET", "/report/daily", max_attempts=3)
+
+    assert session.request.call_count == 3
+
+
 def test_zoom_request_raises_auth_error_on_repeated_401(monkeypatch):
     resp = MagicMock(status_code=401, headers={}, ok=False)
     session = MagicMock()
