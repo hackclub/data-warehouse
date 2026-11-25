@@ -5,10 +5,13 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
+
+from scripts import postgres_audit_logging as pal
+from scripts import provision_warehouse_agent_login as pwal
+from scripts import provision_warehouse_reader as pwr
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PG_DOCKER_DIR = REPO_ROOT / "warehouse-postgres-docker"
@@ -16,15 +19,10 @@ LOGGING_CONF = PG_DOCKER_DIR / "logging.conf"
 DOCKERFILE = PG_DOCKER_DIR / "Dockerfile"
 CONF_SH = PG_DOCKER_DIR / "conf.sh"
 RUNBOOK = REPO_ROOT / "runbooks" / "prod-health-monitoring.md"
-SCRIPTS_DIR = REPO_ROOT / "scripts"
 MCP_DIR = REPO_ROOT / "warehouse-mcp"
 
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
-
-import postgres_audit_logging as pal  # noqa: E402
-import provision_warehouse_agent_login as pwal  # noqa: E402
-import provision_warehouse_reader as pwr  # noqa: E402
+# Postmaster-context settings that need a restart; the reload-only apply SQL skips them.
+RESTART_ONLY_KEYS = {"logging_collector"}
 
 
 def _parse_pg_conf(text: str) -> dict[str, str]:
@@ -145,6 +143,16 @@ def test_render_apply_sql_pg17_places_role_exclusion_before_cluster_reload():
     assert "ALTER SYSTEM SET log_parameter_max_length = '0';" in sql
     assert "ALTER SYSTEM SET log_parameter_max_length_on_error = '0';" in sql
     assert sql.rstrip().endswith("SELECT pg_reload_conf();")
+
+
+def test_apply_sql_covers_every_reloadable_logging_conf_setting():
+    # A setting added to logging.conf must reach live clusters through the
+    # reload-only apply SQL too, not only through `check`.
+    conf_keys = set(pal.parse_pg_conf(LOGGING_CONF.read_text(encoding="utf-8")))
+    assert set(pal.RELOADABLE_KEYS) == conf_keys - RESTART_ONLY_KEYS
+    sql = pal.render_apply_sql(17)
+    applied = set(re.findall(r"^ALTER SYSTEM SET (\w+) = ", sql, flags=re.MULTILINE))
+    assert applied == conf_keys - RESTART_ONLY_KEYS
 
 
 def test_render_apply_sql_pg18_uses_all_for_log_connections():

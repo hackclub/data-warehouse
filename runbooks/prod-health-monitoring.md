@@ -772,7 +772,8 @@ cluster-wide `log_statement = 'all'` applies immediately on reload to
 
 - **Apply order:**
   1. Apply the approved `ALTER ROLE ... SET log_statement = 'ddl'` (and
-     `SET log_min_error_statement = 'panic'`) first; for the Dagster DB, transfer
+     `SET log_min_error_statement = 'panic'`, `SET log_error_verbosity = 'terse'`)
+     first; for the Dagster DB, transfer
      ownership of the `public` tables **only** (owned sequences follow
      automatically) one table at a time with `SET lock_timeout = '5s'` in a quiet
      window after confirming no `pg_dump` or long transaction is running, then
@@ -787,9 +788,11 @@ cluster-wide `log_statement = 'all'` applies immediately on reload to
 - **Rollback order (cluster-first):**
   1. Reset cluster-level `log_statement` (via `ALTER SYSTEM RESET` or restoring
      the backed-up config file) and run `SELECT pg_reload_conf();` **first**.
-  2. Confirm `SHOW log_statement;` returns `none`.
+  2. Confirm `log_statement` is `none` and its `pg_settings.source` is `default`
+     or `configuration file`, not a role, database or session override (the
+     rendered rollback SQL checks both and aborts otherwise).
   3. **Only then** reset per-role overrides (`ALTER ROLE ... RESET log_statement`
-     / `RESET log_min_error_statement`), so no new session of an excluded role
+     / `RESET log_min_error_statement` / `RESET log_error_verbosity`), so no new session of an excluded role
      can ever inherit `log_statement = 'all'` during the rollback window.
 
 Use `scripts/postgres_audit_logging.py` to render idempotent apply/rollback SQL

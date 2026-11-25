@@ -10,7 +10,14 @@ rollback, and provides a read-only ``check`` subcommand to verify live
 
 This script contains no hostnames, container IDs, or credentials. Operators
 pipe rendered SQL into ``psql`` over an authorized admin channel, or run
-``check --dsn-env <VAR>`` (or ``--dsn`` for local/throwaway tests).
+``check --dsn-env <VAR>`` (or ``--dsn`` for local/throwaway tests):
+
+    .venv/bin/python scripts/postgres_audit_logging.py render --pg-major <17|18> \\
+        [--exclude-role ROLE=LEVEL] [--suppress-error-role ROLE] [--rollback]
+    .venv/bin/python scripts/postgres_audit_logging.py check --dsn-env <VAR> \\
+        --pg-major <17|18> [--exclude-role ROLE=LEVEL] [--suppress-error-role ROLE]
+
+See runbooks/prod-health-monitoring.md §12.
 """
 
 from __future__ import annotations

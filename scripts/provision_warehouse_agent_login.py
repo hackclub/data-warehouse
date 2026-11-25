@@ -13,7 +13,8 @@ Create one, or give it a new password (running this again does that):
     bin/warehouse-admin-psql --reason "create <agent|mcp> login" -f <scratch.sql>
 
 The plaintext password goes only to --write-env-file, with mode 0600. The SQL holds
-a SCRAM verifier, so log_statement=ddl never logs the password. Delete the SQL file
+only a SCRAM verifier, and turns statement logging off for its own transaction, so the
+server log never gets the password or the verifier (see §12). Delete the SQL file
 after applying it.
 
 Check a login that is already there, using the URL in --env-file. Checking mcp checks
