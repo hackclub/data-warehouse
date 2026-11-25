@@ -19,7 +19,20 @@ internal hostnames/IPs, and personal data.
 | **Unified YSWS Projects DB** | `airtable_unified_ysws_projects_db` | `materialize_unified_ysws_job` | Every 15m (`unified_ysws_15min_schedule`) | Canonical Airtable registry of YSWS programs and approved projects. |
 | **All Airtable Bases (raw)** | `airtable_raw_all_bases` | `airtable_raw_all_bases_sync` | Every 6h (`materialize_all_assets_job`) | Catch-all raw mirror of accessible Airtable bases. |
 | **Fillout** | `fillout` | `fillout_sync` | Every 6h (`materialize_all_assets_job`) | Form submissions across Hack Club forms. |
-| **Zenventory (AGH Fulfillment)** | `agh_fulfillment` | `materialize_frequent_job` | Every 15m (`frequent_15min_schedule`) | Warehouse inventory, orders, shipments. |
+| **Zenventory (AGH Fulfillment)** | `agh_fulfillment_zenventory` | `materialize_frequent_job` | Every 15m (`frequent_15min_schedule`) | Warehouse inventory, orders, shipments. |
+
+## Mirror Freshness Visibility
+
+Agents and operators can check per-mirror sync freshness without querying the Dagster instance DB:
+
+- **SQL view:** `warehouse_metadata.mirror_freshness` (readable by `hc_warehouse_agent` and `hc_warehouse_mcp` via `pg_read_all_data`).
+- **MCP tool:** `check_freshness(schema_name=..., only_stale=...)` in `warehouse-mcp`.
+- **Backing Dagster asset:** `warehouse_mirror_freshness` (runs every 15 minutes in `materialize_frequent_job`).
+
+Columns exposed by `warehouse_metadata.mirror_freshness`:
+`schema_name`, `asset_key`, `sync_type`, `schedule_name`, `last_synced_at`, `age_hours`, `expected_cadence_minutes`, `stale_after_minutes`, `is_stale`, `status` (`fresh` | `stale` | `never_synced`), and `recorded_at`.
+
+Because `age_hours`, `is_stale`, and `status` are computed dynamically against `NOW()` in the view, mirrors still flip to stale if Dagster stops running. Check `recorded_at` to verify that the freshness asset itself is current.
 
 ## Active YSWS Programs → Warehouse Location
 

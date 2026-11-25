@@ -655,6 +655,51 @@ class Database:
 
         return columns, total
 
+    async def get_mirror_freshness(
+        self,
+        schema_name: Optional[str] = None,
+        only_stale: bool = False,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Read per-mirror sync freshness from warehouse_metadata.mirror_freshness.
+
+        Returns (rows, view_exists). When the view has not been materialized yet,
+        returns ([], False) instead of raising an error.
+        """
+        if schema_name is not None and not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', schema_name):
+            raise ValueError(f"Invalid schema name: {schema_name}")
+
+        clauses = []
+        params: list[Any] = []
+        if schema_name is not None:
+            clauses.append("schema_name = %s")
+            params.append(schema_name)
+        if only_stale:
+            clauses.append("is_stale = TRUE")
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""
+            SELECT
+                schema_name,
+                asset_key,
+                sync_type,
+                schedule_name,
+                last_synced_at,
+                age_hours,
+                expected_cadence_minutes,
+                stale_after_minutes,
+                is_stale,
+                status,
+                recorded_at
+            FROM warehouse_metadata.mirror_freshness
+            {where_sql}
+            ORDER BY is_stale DESC, age_hours DESC NULLS FIRST, schema_name
+        """
+        try:
+            rows, _ = await self.execute_query_with_params(sql, tuple(params), max_rows=500)
+            return rows, True
+        except psycopg.errors.UndefinedTable:
+            return [], False
+
 
 # Global database instance
 _db: Optional[Database] = None

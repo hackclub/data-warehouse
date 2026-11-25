@@ -287,6 +287,7 @@ async def list_tools() -> list[Tool]:
             description=(
                 "List all available schemas in the data warehouse.\n\n"
                 "Key schemas:\n"
+                "- warehouse_metadata: Per-mirror sync freshness (mirror_freshness view; or call check_freshness)\n"
                 "- airtable_unified_ysws_projects_db: Shipped projects and NPS on programs\n"
                 "- public_unified_analytics: User histories and events on users\n"
                 "- loops.audience: User profile fields (geocoded country, etc.)\n"
@@ -295,6 +296,28 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {},
+                "required": []
+            }
+        ),
+        Tool(
+            name="check_freshness",
+            description=(
+                "Check per-mirror last successful sync time, expected cadence, age, and stale flag "
+                "from warehouse_metadata.mirror_freshness. Call this before trusting recent data in a mirror."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "schema_name": {
+                        "type": "string",
+                        "description": "Optional warehouse schema name to filter to a single mirror"
+                    },
+                    "only_stale": {
+                        "type": "boolean",
+                        "description": "If true, return only mirrors currently flagged as stale or never synced (default: false)",
+                        "default": False
+                    }
+                },
                 "required": []
             }
         ),
@@ -466,9 +489,59 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             response = "Available schemas:\n"
             for schema in schemas:
                 response += f"  - {schema}\n"
-            response += f"\nUse describe_schema(schema_name='...') to see tables and columns."
+            response += (
+                "\nUse describe_schema(schema_name='...') to see tables and columns, "
+                "or check_freshness() to see per-mirror last sync times and stale flags."
+            )
             
             return [TextContent(type="text", text=response)]
+
+        elif name == "check_freshness":
+            schema_name = arguments.get("schema_name")
+            only_stale = bool(arguments.get("only_stale", False))
+            rows, view_exists = await db.get_mirror_freshness(
+                schema_name=schema_name,
+                only_stale=only_stale,
+            )
+            row_count = len(rows)
+
+            if not view_exists:
+                return [TextContent(
+                    type="text",
+                    text=(
+                        "Freshness view warehouse_metadata.mirror_freshness has not been "
+                        "materialized yet. Run the Dagster asset warehouse_mirror_freshness."
+                    ),
+                )]
+
+            if not rows:
+                if schema_name:
+                    msg = f"No freshness record found for schema '{schema_name}'."
+                elif only_stale:
+                    msg = "All tracked mirrors are fresh (0 stale)."
+                else:
+                    msg = "No mirrors recorded in warehouse_metadata.mirror_freshness."
+                return [TextContent(type="text", text=msg)]
+
+            stale_count = sum(1 for r in rows if r.get("is_stale"))
+            fresh_count = len(rows) - stale_count
+            recorded_at = rows[0].get("recorded_at")
+            display_cols = [
+                "schema_name",
+                "status",
+                "last_synced_at",
+                "age_hours",
+                "expected_cadence_minutes",
+                "stale_after_minutes",
+                "is_stale",
+                "asset_key",
+            ]
+            table = format_rows_for_display(rows, display_cols)
+            header = (
+                f"Mirror freshness ({len(rows)} mirrors: {fresh_count} fresh, {stale_count} stale; "
+                f"metadata recorded_at={recorded_at}):\n\n{table}"
+            )
+            return [TextContent(type="text", text=header)]
         
         elif name == "describe_schema":
             schema_name = arguments["schema_name"]

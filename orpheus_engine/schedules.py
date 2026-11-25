@@ -12,6 +12,7 @@ EXCLUDED_FROM_MAIN_JOB: set[dg.AssetKey] = {
     # (it last ran 2026-01-29 for exactly this reason). See definitions.py.
     dg.AssetKey("warehouse_row_hashes"),
     dg.AssetKey("ducklake_sync"),
+    dg.AssetKey("warehouse_mirror_freshness"),
 }
 
 # Run statuses that count as "still in flight" for the skip-if-running schedules.
@@ -151,7 +152,9 @@ FREQUENT_SELECTION = (
     dg.AssetSelection.assets(dg.AssetKey(["stardance_analytics", "journey_user_stages"])) |
     # Hack Club Videos DB (source + warehouse mirrors)
     dg.AssetSelection.groups("airtable_hack_club_videos_db") |
-    dg.AssetSelection.groups("dlt_airtable_hack_club_videos_db")
+    dg.AssetSelection.groups("dlt_airtable_hack_club_videos_db") |
+    # Per-mirror freshness view (warehouse_metadata.mirror_freshness)
+    dg.AssetSelection.assets("warehouse_mirror_freshness")
 )
 
 # Hackatime DAU refresh selection (hourly).

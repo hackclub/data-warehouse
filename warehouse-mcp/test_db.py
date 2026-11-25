@@ -217,3 +217,64 @@ def test_terminated_query_is_silently_run_again(server, monkeypatch, caplog):
 )
 def test_only_a_lost_connection_counts(error, lost):
     assert warehouse_db.is_connection_lost(error) is lost
+
+
+def test_get_mirror_freshness_handles_missing_view_and_reads_as_mcp_role(server, monkeypatch):
+    async def read_all(database):
+        return await database.get_mirror_freshness()
+
+    async def read_stale(database):
+        return await database.get_mirror_freshness(only_stale=True)
+
+    async def read_one(database):
+        return await database.get_mirror_freshness(schema_name="stardance")
+
+    # Before the view exists, get_mirror_freshness degrades gracefully.
+    with server.admin() as conn, conn.cursor() as cur:
+        cur.execute("DROP SCHEMA IF EXISTS warehouse_metadata CASCADE")
+    rows, exists = _on_database(server.mcp_url(), monkeypatch, read_all)
+    assert exists is False
+    assert rows == []
+
+    # Populate the real freshness table + view and verify hc_warehouse_mcp reads it.
+    from datetime import datetime, timedelta, timezone
+    from orpheus_engine.defs.freshness.definitions import (
+        MirrorFreshnessSpec,
+        write_mirror_freshness,
+    )
+
+    now = datetime.now(timezone.utc)
+    specs = [
+        MirrorFreshnessSpec("stardance", "stardance_warehouse_mirror", "sling", "frequent_15min_schedule", 15, 60),
+        MirrorFreshnessSpec("hcb", "hcb_warehouse_mirror", "sling", "materialize_all_assets", 360, 720),
+    ]
+    with server.admin() as conn:
+        write_mirror_freshness(
+            conn,
+            specs,
+            {
+                "stardance_warehouse_mirror": now - timedelta(minutes=5),
+                "hcb_warehouse_mirror": now - timedelta(hours=24),
+            },
+            recorded_at=now,
+        )
+
+    rows, exists = _on_database(server.mcp_url(), monkeypatch, read_all)
+    assert exists is True
+    assert [r["schema_name"] for r in rows] == ["hcb", "stardance"]
+    assert rows[0]["is_stale"] is True
+    assert rows[1]["is_stale"] is False
+
+    stale_rows, exists = _on_database(server.mcp_url(), monkeypatch, read_stale)
+    assert exists is True
+    assert [r["schema_name"] for r in stale_rows] == ["hcb"]
+
+    one_rows, exists = _on_database(server.mcp_url(), monkeypatch, read_one)
+    assert exists is True
+    assert [r["schema_name"] for r in one_rows] == ["stardance"]
+
+    async def read_bad(database):
+        return await database.get_mirror_freshness(schema_name="stardance; DROP TABLE x")
+
+    with pytest.raises(ValueError, match="Invalid schema name"):
+        _on_database(server.mcp_url(), monkeypatch, read_bad)

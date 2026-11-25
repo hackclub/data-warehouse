@@ -731,3 +731,28 @@ Postgres sees (`client=`)**, and the **client-supplied `application_name`
   and `bin/warehouse-admin-psql` connect over the Unix socket. Trace them to the
   operator's SSH session via the host-side SSH and audit logs described in the
   private ops notes.
+
+## 13. Per-mirror freshness view
+
+`warehouse_metadata.mirror_freshness` exposes per-mirror last successful sync
+timestamps, expected cadences, and a live `is_stale` flag directly inside the
+warehouse Postgres database.
+
+- **Populated by:** Dagster asset `warehouse_mirror_freshness`
+  (`orpheus_engine/defs/freshness/definitions.py`), scheduled every 15 minutes
+  inside `materialize_frequent_job`.
+- **Readable by:** `hc_warehouse_agent`, `hc_warehouse_mcp` (via
+  `pg_read_all_data`), and the `warehouse-mcp` tool `check_freshness`.
+- **Staleness evaluation:** The view computes `age_hours`, `is_stale`, and
+  `status` (`fresh`, `stale`, or `never_synced`) against `NOW()` at query time,
+  so mirrors still show as stale if Dagster stops running. Check `recorded_at`
+  to confirm the freshness asset itself is updating.
+
+Quick SQL check:
+
+```sql
+SELECT schema_name, status, last_synced_at, age_hours, expected_cadence_minutes, is_stale
+FROM warehouse_metadata.mirror_freshness
+WHERE is_stale = TRUE
+ORDER BY age_hours DESC NULLS FIRST;
+```

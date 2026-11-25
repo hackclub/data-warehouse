@@ -19,6 +19,7 @@ import orpheus_engine.defs.airtable_users.definitions as airtable_users_defs
 import orpheus_engine.defs.zoom.definitions as zoom_defs
 import orpheus_engine.defs.highway_github.definitions as highway_github_defs
 import orpheus_engine.defs.fillout.definitions as fillout_defs
+import orpheus_engine.defs.freshness.definitions as freshness_defs
 import orpheus_engine.defs.quickbooks_online.definitions as quickbooks_defs
 import orpheus_engine.defs.janitor.definitions as janitor_defs
 import orpheus_engine.defs.ysws_true_spend_site.definitions as ysws_true_spend_site_defs
@@ -59,6 +60,7 @@ def _build_definitions() -> dg.Definitions:
         zoom_defs.defs,
         highway_github_defs.defs,
         fillout_defs.defs,
+        freshness_defs.defs,
         quickbooks_defs.defs,
         janitor_defs.defs,
         ysws_true_spend_site_defs.defs,

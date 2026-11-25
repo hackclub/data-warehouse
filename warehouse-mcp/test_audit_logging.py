@@ -115,3 +115,59 @@ def test_schema_and_column_tools_are_audited(monkeypatch, caplog):
     assert records[1]["schema"] == "sample"
     assert records[1]["table"] == "items"
     assert records[1]["row_count"] == 1
+
+
+def test_check_freshness_tool_formats_output_and_emits_audit_log(monkeypatch, caplog):
+    fake_db = MagicMock()
+    fake_db.get_mirror_freshness = AsyncMock(
+        return_value=(
+            [
+                {
+                    "schema_name": "hcb",
+                    "asset_key": "hcb_warehouse_mirror",
+                    "sync_type": "sling",
+                    "schedule_name": "materialize_all_assets",
+                    "last_synced_at": "2026-11-23T05:33:49+00:00",
+                    "age_hours": 43.0,
+                    "expected_cadence_minutes": 360,
+                    "stale_after_minutes": 720,
+                    "is_stale": True,
+                    "status": "stale",
+                    "recorded_at": "2026-11-25T00:30:00+00:00",
+                },
+                {
+                    "schema_name": "stardance",
+                    "asset_key": "stardance_warehouse_mirror",
+                    "sync_type": "sling",
+                    "schedule_name": "frequent_15min_schedule",
+                    "last_synced_at": "2026-11-25T00:25:00+00:00",
+                    "age_hours": 0.08,
+                    "expected_cadence_minutes": 15,
+                    "stale_after_minutes": 60,
+                    "is_stale": False,
+                    "status": "fresh",
+                    "recorded_at": "2026-11-25T00:30:00+00:00",
+                },
+            ],
+            True,
+        )
+    )
+    monkeypatch.setattr(mcp_server, "get_database", lambda: fake_db)
+
+    u_tok = mcp_server._current_user.set(("Ada", "Lovelace"))
+    try:
+        with caplog.at_level(logging.INFO, logger=mcp_server.logger.name):
+            out = asyncio.run(mcp_server.call_tool("check_freshness", {"schema_name": "hcb"}))
+    finally:
+        mcp_server._current_user.reset(u_tok)
+
+    text = out[0].text
+    assert "1 fresh, 1 stale" in text
+    assert "hcb" in text
+    assert "stardance" in text
+    records = _audit_records(caplog)
+    assert len(records) == 1
+    assert records[0]["tool"] == "check_freshness"
+    assert records[0]["schema"] == "hcb"
+    assert records[0]["outcome"] == "ok"
+    assert records[0]["row_count"] == 2
