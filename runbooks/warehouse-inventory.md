@@ -53,11 +53,13 @@ data lives in one of three places:
    - Programs with dedicated mirrors that also use `ari` for review
      workflows: `3am`, `Embassy`, `Grandma`, `Half Life`, `Phantom`,
      `Snowglobe` (`airtable_snowglobe`), `Terra`, `thirdspace`.
-4. **Unified YSWS Registry Only (operational source not yet shared with warehouse)**:
-   - Newly launched programs currently tracked in
-     `airtable_unified_ysws_projects_db` (`ysws_programs` / `approved_projects`)
-     that do not yet have an accessible operational base in
-     `airtable_raw_all_bases` or a dedicated mirror: `Haggle`, `Harvest`.
+4. **Active Programs Not Yet Mirrored (Unified YSWS Registry Only)**:
+   - `Haggle`: has a Hack Club Orchard Postgres database that is not yet
+     mirrored (public endpoint off); currently tracked in
+     `airtable_unified_ysws_projects_db` (`ysws_programs` / `approved_projects`).
+   - `Harvest`: an itch.io jam with no Hack Club operational database
+     (submissions live on itch.io; approved projects are tracked in
+     `airtable_unified_ysws_projects_db.approved_projects`).
 
 ## Warehouse MCP access and audit logs
 

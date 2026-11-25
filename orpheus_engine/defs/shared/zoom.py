@@ -159,7 +159,8 @@ class ZoomResource(dg.ConfigurableResource):
             return resp.json()
         if saw_429:
             raise ZoomDailyQuotaError(
-                f"Exhausted {max_attempts} rate-limit retries on {url}",
+                f"Exhausted {max_attempts} HTTP 429 rate-limit retries on {url} "
+                "(response headers did not identify daily quota)",
                 response=last_429_resp,
             )
         raise requests.exceptions.HTTPError(f"Exhausted {max_attempts} retries on {url}")
