@@ -500,12 +500,20 @@ class Database:
         if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', schema_name):
             raise ValueError(f"Invalid schema name: {schema_name}")
 
-        # Get all tables in schema
+        # Get all tables and views in schema, with their comments. Views are
+        # listed too: some (warehouse_metadata.mirror_freshness) are the main
+        # way to read a schema, and their comments say how to read them.
         tables_sql = """
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = %s AND table_type = 'BASE TABLE'
-            ORDER BY table_name
+            SELECT t.table_name,
+                   t.table_type,
+                   c.oid AS table_oid,
+                   pg_catalog.obj_description(c.oid, 'pg_class') AS table_comment
+            FROM information_schema.tables t
+            JOIN pg_catalog.pg_namespace n ON n.nspname = t.table_schema
+            JOIN pg_catalog.pg_class c
+              ON c.relnamespace = n.oid AND c.relname = t.table_name
+            WHERE t.table_schema = %s AND t.table_type IN ('BASE TABLE', 'VIEW')
+            ORDER BY t.table_name
         """
         tables, _ = await self.execute_query_with_params(tables_sql, (schema_name,))
 
@@ -521,32 +529,50 @@ class Database:
             is_internal = table_name.startswith('_dlt_')
 
             # Get columns for this table
+            # ordinal_position is the column's attnum, so it finds its comment.
             columns_sql = """
-                SELECT column_name, data_type
+                SELECT column_name,
+                       data_type,
+                       pg_catalog.col_description(%s::oid, ordinal_position::int) AS column_comment
                 FROM information_schema.columns
                 WHERE table_schema = %s AND table_name = %s
                 ORDER BY ordinal_position
             """
             all_columns, _ = await self.execute_query_with_params(
-                columns_sql, (schema_name, table_name)
+                columns_sql, (table_row['table_oid'], schema_name, table_name)
             )
 
             total_columns = len(all_columns)
             columns = all_columns[:max_columns]
 
             # Build table header
-            table_block = f"\n## {schema_name}.{table_name}\n"
+            table_block = f"\n## {schema_name}.{table_name}"
+            if table_row['table_type'] == 'VIEW':
+                table_block += " (view)"
+            table_block += "\n"
+            if table_row['table_comment']:
+                table_block += f"{table_row['table_comment']}\n"
             table_block += f"Columns ({total_columns} total)"
             if total_columns > max_columns:
                 table_block += f" - showing first {max_columns}"
             table_block += ":\n"
 
-            # Column list
-            col_names = [c['column_name'] for c in columns]
-            table_block += ", ".join(col_names)
-            if total_columns > max_columns:
-                table_block += f", ... (+{total_columns - max_columns} more)"
-            table_block += "\n"
+            # Column list: comma-separated, or one per line with its comment
+            # when any column has one.
+            if any(c['column_comment'] for c in columns):
+                table_block += "".join(
+                    f"- {c['column_name']}: {c['column_comment']}\n"
+                    if c['column_comment'] else f"- {c['column_name']}\n"
+                    for c in columns
+                )
+                if total_columns > max_columns:
+                    table_block += f"... (+{total_columns - max_columns} more)\n"
+            else:
+                col_names = [c['column_name'] for c in columns]
+                table_block += ", ".join(col_names)
+                if total_columns > max_columns:
+                    table_block += f", ... (+{total_columns - max_columns} more)"
+                table_block += "\n"
 
             # Sample data (skip for internal _dlt_* tables or if budget exceeded)
             if budget_exceeded:
@@ -587,7 +613,7 @@ class Database:
             block_size = len(table_block.encode('utf-8'))
             if current_size + block_size > max_output_bytes:
                 remaining_tables = len(tables) - len(output_parts) + 1
-                output_parts.append(f"\n... and {remaining_tables} more tables (output limit reached)\n")
+                output_parts.append(f"\n... and {remaining_tables} more tables/views (output limit reached)\n")
                 budget_exceeded = True
                 break
 

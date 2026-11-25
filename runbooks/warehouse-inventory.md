@@ -19,7 +19,20 @@ internal hostnames/IPs, and personal data.
 | **Unified YSWS Projects DB** | `airtable_unified_ysws_projects_db` | `materialize_unified_ysws_job` | Every 15m (`unified_ysws_15min_schedule`) | Canonical Airtable registry of YSWS programs and approved projects. |
 | **All Airtable Bases (raw)** | `airtable_raw_all_bases` | `airtable_raw_all_bases_sync` | Every 6h (`materialize_all_assets_job`) | Catch-all raw mirror of accessible Airtable bases. |
 | **Fillout** | `fillout` | `fillout_sync` | Every 6h (`materialize_all_assets_job`) | Form submissions across Hack Club forms. |
-| **Zenventory (AGH Fulfillment)** | `agh_fulfillment` | `materialize_frequent_job` | Every 15m (`frequent_15min_schedule`) | Warehouse inventory, orders, shipments. |
+| **Zenventory (AGH Fulfillment)** | `agh_fulfillment_zenventory` | `materialize_frequent_job` | Every 15m (`frequent_15min_schedule`) | Warehouse inventory, orders, shipments. |
+
+## Mirror Freshness Visibility
+
+Agents and operators can check per-schema and per-asset sync freshness without querying the Dagster instance DB:
+
+- **Per-schema worst-of SQL view:** `warehouse_metadata.mirror_freshness` (one row per warehouse schema, including dbt marts, Fivetran schemas, and explicit `untracked` rows with reasons; readable by `hc_warehouse_agent` and `hc_warehouse_mcp` via `pg_read_all_data`).
+- **Per-asset SQL view:** `warehouse_metadata.asset_freshness` (one row per Dagster/dbt/Fivetran asset; exposes individual stale tables inside multi-asset schemas such as `airtable_campfire` and `loops`).
+- **No separate tool:** read both views with plain SQL (the `warehouse-mcp` `query` tool, `bin/readonly-psql`). The `warehouse-mcp` server instructions and its `query` and `list_schemas` text point agents to `warehouse_metadata.mirror_freshness`. Each view and column has a Postgres comment that explains it. `describe_schema(schema_name='warehouse_metadata')` in `warehouse-mcp` lists both views with those comments, or read them with SQL: `SELECT obj_description('warehouse_metadata.mirror_freshness'::regclass, 'pg_class')`.
+- **Backing Dagster asset:** `warehouse_mirror_freshness` (runs every 15 minutes in `materialize_frequent_job`; cadences are derived directly from the job selections in `orpheus_engine/schedules.py`).
+
+Because `age_hours`, `is_stale`, and `status` (`fresh` | `stale` | `never_synced` | `untracked`) are computed dynamically against `NOW()` in the views, mirrors still flip to stale if Dagster stops running. Check `recorded_at` to verify that the freshness asset itself is current.
+
+> **Limitation (incremental mirrors & hard deletes):** Freshness reflects last successful sync time only. Incremental Sling mirrors (for example `stardance.users`, `auth.oauth_access_tokens`, and several `flavortown.*` tables) do not propagate hard deletes from the source database, so a freshly synced incremental table can still retain rows deleted at the source.
 
 ## Active YSWS Programs → Warehouse Location
 
