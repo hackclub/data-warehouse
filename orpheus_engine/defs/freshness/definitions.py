@@ -644,9 +644,10 @@ def _view_ddl_comment(view: str) -> str:
 
 
 def _ensure_freshness_views(cur: Any) -> bool:
-    """Rebuild the views only when their DDL changed. Returns True if rebuilt.
+    """Rebuild the views only when their DDL or comments changed. Returns True if rebuilt.
 
-    The comment on each view records a hash of the DDL that made it. Dropping and
+    The comment on each view records a hash of the DDL and of the view and
+    column descriptions that made it. Dropping and
     recreating (rather than CREATE OR REPLACE) lets a later change remove or
     reorder columns.
     """

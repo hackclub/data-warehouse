@@ -143,7 +143,9 @@ async def _emit_audit_log(
             raise RuntimeError("Request audit is temporarily unavailable") from None
 
 
-# Create MCP server
+# There is no freshness tool: agents read the freshness views with SQL. This
+# text goes in the server instructions, the query tool description and the
+# list_schemas reply, because some clients drop server instructions.
 FRESHNESS_HINT = (
     "Before trusting recent data, query warehouse_metadata.mirror_freshness "
     "(one row per schema: status, last_synced_at, age_hours, is_stale) or "
@@ -151,6 +153,7 @@ FRESHNESS_HINT = (
     "time only: incremental mirrors may keep rows deleted at the source."
 )
 
+# Create MCP server
 mcp = Server("warehouse-mcp", instructions=FRESHNESS_HINT)
 
 # HTTP transport - messages path (root for Streamable HTTP compatibility)
