@@ -177,17 +177,12 @@ def render_rollback_sql(
         lines.append(f"ALTER SYSTEM RESET {key};")
     lines.append("SELECT pg_reload_conf();")
     if role_exclusions or suppress_error_roles:
-        # Wait briefly for SIGHUP reload to propagate before resetting role overrides.
+        # Process SIGHUP between top-level statements before verifying log_statement='none'.
         lines.extend(
             [
+                "SELECT pg_sleep(0.2);",
                 "DO $$",
-                "DECLARE",
-                "  i int := 0;",
                 "BEGIN",
-                "  WHILE current_setting('log_statement') <> 'none' AND i < 40 LOOP",
-                "    PERFORM pg_sleep(0.05);",
-                "    i := i + 1;",
-                "  END LOOP;",
                 "  IF current_setting('log_statement') <> 'none' THEN",
                 "    RAISE EXCEPTION 'log_statement is still % after pg_reload_conf(); aborting role reset', current_setting('log_statement');",
                 "  END IF;",
