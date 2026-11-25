@@ -1,15 +1,19 @@
-"""Per-mirror warehouse freshness metadata table and live SQL view.
+"""Per-asset and per-schema warehouse freshness tables and live SQL views.
 
-Materializes ``warehouse_metadata.mirror_sync_status`` from Dagster's latest
-successful ``ASSET_MATERIALIZATION`` timestamps and exposes a live SQL view
-``warehouse_metadata.mirror_freshness`` that evaluates ``age_hours``,
-``is_stale``, and ``status`` against ``NOW()`` at query time.
+Materializes ``warehouse_metadata.asset_sync_status`` from Dagster's latest
+successful ``ASSET_MATERIALIZATION`` timestamps (plus Fivetran's
+``_fivetran_log`` metadata and explicit untracked entries for unmanaged
+warehouse schemas) and exposes two live SQL views:
 
-Because ``is_stale`` is computed in the view rather than frozen at write time,
-every mirror still flips to stale if Dagster stops running. Both
-``hc_warehouse_agent`` and ``hc_warehouse_mcp`` hold ``pg_read_all_data`` and
-can query ``warehouse_metadata.mirror_freshness`` directly or via the
-``check_freshness`` MCP tool.
+- ``warehouse_metadata.asset_freshness``: one row per tracked asset (or
+  untracked schema), evaluating ``age_hours``, ``is_stale``, and ``status``
+  against ``NOW()`` at query time.
+- ``warehouse_metadata.mirror_freshness``: one row per warehouse schema using
+  a worst-of rollup across all assets writing to that schema, so a schema with
+  even one stale or never-synced asset is flagged ``is_stale = TRUE``.
+
+Every Dagster asset's expected cadence is derived directly from the job
+selections in ``orpheus_engine.schedules`` rather than hand-maintained.
 """
 
 import importlib
@@ -17,6 +21,7 @@ import os
 import pkgutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import dagster as dg
@@ -26,26 +31,24 @@ import psycopg2
 from orpheus_engine.defs.sling import programs as sling_programs_pkg
 
 FRESHNESS_SCHEMA = "warehouse_metadata"
-FRESHNESS_TABLE = f"{FRESHNESS_SCHEMA}.mirror_sync_status"
+FRESHNESS_TABLE = f"{FRESHNESS_SCHEMA}.asset_sync_status"
+ASSET_FRESHNESS_VIEW = f"{FRESHNESS_SCHEMA}.asset_freshness"
 FRESHNESS_VIEW = f"{FRESHNESS_SCHEMA}.mirror_freshness"
 
+# Scheduled job definitions ordered from fastest to slowest cadence.
+# (job_name, schedule_name, expected_cadence_minutes, default_stale_after_minutes)
+_SCHEDULED_JOB_CADENCES: tuple[tuple[str, str, int, int], ...] = (
+    ("materialize_frequent_job", "frequent_15min_schedule", 15, 60),
+    ("materialize_unified_ysws_job", "unified_ysws_15min_schedule", 15, 60),
+    ("materialize_hackatime_dau_job", "hackatime_dau_hourly_schedule", 120, 360),
+    ("materialize_project_search_job", "project_search_2h_schedule", 120, 360),
+    ("materialize_all_assets_job", "materialize_all_assets", 360, 720),
+)
 
-@dataclass(frozen=True)
-class MirrorFreshnessSpec:
-    schema_name: str
-    asset_key: str
-    sync_type: str
-    schedule_name: str
-    expected_cadence_minutes: int
-    stale_after_minutes: int
-
-
-# Mirrors synced on a faster cadence than the 6-hourly materialize_all_assets job.
-_SLING_CADENCE_OVERRIDES: dict[str, tuple[str, int, int]] = {
-    "stardance_warehouse_mirror": ("frequent_15min_schedule", 15, 60),
-    "stardance_ahoy_warehouse_mirror": ("frequent_15min_schedule", 15, 60),
-    "hackatime_warehouse_mirror": ("hackatime_dau_hourly_schedule", 120, 360),
-}
+# Assets that hit external daily API quotas or have daily-tolerant stale windows
+# while still running inside their derived schedule.
+_DAILY_TOLERANCE_STALE_MINUTES = 1440
+_DAILY_TOLERANCE_PREFIXES: tuple[str, ...] = ("zoom_", "quickbooks_")
 
 _CORE_SLING_MIRRORS: tuple[tuple[str, str], ...] = (
     ("hackatime", "hackatime_warehouse_mirror"),
@@ -54,169 +57,61 @@ _CORE_SLING_MIRRORS: tuple[tuple[str, str], ...] = (
     ("auth", "auth_warehouse_mirror"),
 )
 
-# Non-Sling mirrors (Airtable DLT, API syncs, Loops, Fillout, Zoom, QuickBooks, Zenventory).
-_NON_SLING_MIRRORS: tuple[MirrorFreshnessSpec, ...] = (
-    MirrorFreshnessSpec(
-        schema_name="airtable_unified_ysws_projects_db",
-        asset_key="unified_ysws_approved_projects_warehouse",
-        sync_type="dlt",
-        schedule_name="unified_ysws_15min_schedule",
-        expected_cadence_minutes=15,
-        stale_after_minutes=60,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_raw_all_bases",
-        asset_key="airtable_raw_all_bases_sync",
-        sync_type="api",
-        schedule_name="materialize_all_assets",
-        expected_cadence_minutes=360,
-        stale_after_minutes=720,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_campfire",
-        asset_key="campfire_event_warehouse",
-        sync_type="dlt",
-        schedule_name="frequent_15min_schedule",
-        expected_cadence_minutes=15,
-        stale_after_minutes=60,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_campfire_flagship",
-        asset_key="campfire_flagship_rsvps_warehouse",
-        sync_type="dlt",
-        schedule_name="frequent_15min_schedule",
-        expected_cadence_minutes=15,
-        stale_after_minutes=60,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_daydream",
-        asset_key="daydream_projects_warehouse",
-        sync_type="dlt",
-        schedule_name="frequent_15min_schedule",
-        expected_cadence_minutes=15,
-        stale_after_minutes=60,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_daydream_ops",
-        asset_key="daydream_ops_all_attendees_ever_warehouse",
-        sync_type="dlt",
-        schedule_name="frequent_15min_schedule",
-        expected_cadence_minutes=15,
-        stale_after_minutes=60,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_hack_club_videos_db",
-        asset_key="hack_club_videos_db_videos_warehouse",
-        sync_type="dlt",
-        schedule_name="frequent_15min_schedule",
-        expected_cadence_minutes=15,
-        stale_after_minutes=60,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_slack_nps",
-        asset_key="slack_nps_nps_warehouse",
-        sync_type="dlt",
-        schedule_name="frequent_15min_schedule",
-        expected_cadence_minutes=15,
-        stale_after_minutes=60,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_sleepover",
-        asset_key="sleepover_projects_warehouse",
-        sync_type="dlt",
-        schedule_name="frequent_15min_schedule",
-        expected_cadence_minutes=15,
-        stale_after_minutes=60,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_snowglobe",
-        asset_key="snowglobe_projects_warehouse",
-        sync_type="dlt",
-        schedule_name="materialize_all_assets",
-        expected_cadence_minutes=360,
-        stale_after_minutes=720,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_shredder",
-        asset_key="shredder_projects_warehouse",
-        sync_type="dlt",
-        schedule_name="materialize_all_assets",
-        expected_cadence_minutes=360,
-        stale_after_minutes=720,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_mipmap",
-        asset_key="mipmap_project_warehouse",
-        sync_type="dlt",
-        schedule_name="materialize_all_assets",
-        expected_cadence_minutes=360,
-        stale_after_minutes=720,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_audit_logs",
-        asset_key="airtable_audit_log_events",
-        sync_type="api",
-        schedule_name="materialize_all_assets",
-        expected_cadence_minutes=360,
-        stale_after_minutes=720,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="airtable_users",
-        asset_key="airtable_enterprise_users",
-        sync_type="api",
-        schedule_name="materialize_all_assets",
-        expected_cadence_minutes=360,
-        stale_after_minutes=720,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="agh_fulfillment_zenventory",
-        asset_key="agh_fulfillment_zenventory_inventory",
-        sync_type="api",
-        schedule_name="frequent_15min_schedule",
-        expected_cadence_minutes=15,
-        stale_after_minutes=60,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="loops",
-        asset_key="loops_audience",
-        sync_type="dlt",
-        schedule_name="materialize_all_assets",
-        expected_cadence_minutes=360,
-        stale_after_minutes=720,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="fillout",
-        asset_key="fillout_sync",
-        sync_type="api",
-        schedule_name="materialize_all_assets",
-        expected_cadence_minutes=360,
-        stale_after_minutes=720,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="zoom",
-        asset_key="zoom_meetings",
-        sync_type="api",
-        schedule_name="materialize_all_assets",
-        expected_cadence_minutes=360,
-        stale_after_minutes=1440,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="quickbooks",
-        asset_key="quickbooks_online_sync",
-        sync_type="api",
-        schedule_name="materialize_all_assets",
-        expected_cadence_minutes=360,
-        stale_after_minutes=1440,
-    ),
-    MirrorFreshnessSpec(
-        schema_name="slack",
-        asset_key="slack_member_metadata",
-        sync_type="api",
-        schedule_name="materialize_all_assets",
-        expected_cadence_minutes=360,
-        stale_after_minutes=720,
-    ),
-)
+# Map Dagster asset group names to target warehouse schemas for multi-asset groups.
+_GROUP_TO_SCHEMA: dict[str, tuple[str, str]] = {
+    "dlt_airtable_unified_ysws": ("airtable_unified_ysws_projects_db", "dlt"),
+    "agh_fulfillment_zenventory": ("agh_fulfillment_zenventory", "api"),
+    "airtable_raw_all_bases": ("airtable_raw_all_bases", "api"),
+    "fillout": ("fillout", "api"),
+    "quickbooks": ("quickbooks", "api"),
+    "zoom": ("zoom", "api"),
+}
+
+# Individual non-Sling, non-group-mapped warehouse-writing assets -> (schema, sync_type).
+_EXPLICIT_ASSET_TO_SCHEMA: dict[str, tuple[str, str]] = {
+    "airtable_audit_log_events": ("airtable_audit_logs", "api"),
+    "airtable_enterprise_users": ("airtable_users", "api"),
+    "loops_audience": ("loops", "dlt"),
+    "loops_audience_mailing_lists_to_warehouse": ("loops", "api"),
+    "loops_campaigns_to_warehouse": ("loops", "api"),
+    "loops_campaign_contents_to_warehouse": ("loops", "api"),
+    "loops_campaign_email_contents": ("loops", "api"),
+    "loops_campaign_metrics_to_warehouse": ("loops", "api"),
+    "loops_campaign_publishable_content_to_warehouse": ("loops", "api"),
+    "loops_mailing_lists_to_warehouse": ("loops", "api"),
+    "slack_audit_logs": ("slack", "api"),
+    "slack_member_metadata": ("slack", "api"),
+    "slack_public_channel_analytics": ("slack", "api"),
+    "slack_public_channel_metadata": ("slack", "api"),
+}
+
+# Explicit reasons for warehouse schemas not managed by a scheduled Dagster sync.
+_KNOWN_UNTRACKED_REASONS: dict[str, str] = {
+    "highway_github": "Manual-only one-time backfill (Highway ended Oct 2025; excluded from scheduled jobs)",
+    "metabase_user_uploads": "Metabase user-uploaded tables (not synced by Dagster)",
+    "moonshot": "Historical/legacy schema (not synced by Dagster)",
+    "public": "Warehouse top-level views and Postgres extension views (not a mirror)",
+    "review": "Retired mirror (source DB decommissioned; disabled in Dagster)",
+    "warehouse_metadata": "Internal warehouse freshness metadata schema",
+}
+
+_FIVETRAN_CADENCE_MINUTES = 360
+_FIVETRAN_STALE_MINUTES = 1440
+
+
+@dataclass(frozen=True)
+class AssetFreshnessSpec:
+    schema_name: str
+    asset_key: str  # slash-joined for multi-part keys (e.g. "unified_analytics/events")
+    sync_type: str  # sling | dlt | api | dbt | fivetran | untracked
+    schedule_name: str
+    expected_cadence_minutes: int
+    stale_after_minutes: int
+    tracking_status: str = "tracked"  # tracked | untracked
+    untracked_reason: str | None = None
+
+    def dagster_asset_key(self) -> dg.AssetKey:
+        return dg.AssetKey(self.asset_key.split("/"))
 
 
 def _extract_target_schema(replication_config: Mapping[str, Any] | None, fallback: str) -> str:
@@ -234,94 +129,301 @@ def _extract_target_schema(replication_config: Mapping[str, Any] | None, fallbac
     return fallback
 
 
-def build_mirror_specs() -> list[MirrorFreshnessSpec]:
-    """Return every active warehouse mirror spec, sorted by schema_name."""
-    by_schema: dict[str, MirrorFreshnessSpec] = {}
+def _discover_dbt_model_assets() -> list[tuple[str, str]]:
+    """Return (public_<dir>, '<dir>/<model>') pairs from orpheus_engine_dbt/models/."""
+    models_root = Path(__file__).resolve().parents[3] / "orpheus_engine_dbt" / "models"
+    if not models_root.is_dir():
+        return []
+    pairs: list[tuple[str, str]] = []
+    for subdir in sorted(models_root.iterdir()):
+        if not subdir.is_dir() or subdir.name in ("sources", "__pycache__"):
+            continue
+        schema_name = f"public_{subdir.name}"
+        for sql_file in sorted(subdir.glob("*.sql")):
+            pairs.append((schema_name, f"{subdir.name}/{sql_file.stem}"))
+    return pairs
 
-    def _add_sling(schema_name: str, asset_key: str) -> None:
-        schedule_name, cadence, stale_after = _SLING_CADENCE_OVERRIDES.get(
-            asset_key, ("materialize_all_assets", 360, 720)
-        )
-        by_schema[schema_name] = MirrorFreshnessSpec(
-            schema_name=schema_name,
-            asset_key=asset_key,
-            sync_type="sling",
-            schedule_name=schedule_name,
-            expected_cadence_minutes=cadence,
-            stale_after_minutes=stale_after,
-        )
 
+def resolve_asset_schedule_map(
+    defs: dg.Definitions | None = None,
+) -> dict[str, tuple[str, int, int]]:
+    """Derive (schedule_name, expected_cadence_minutes, stale_after_minutes) per asset key
+    directly from the job selections in orpheus_engine.schedules."""
+    from orpheus_engine import schedules
+
+    if defs is None:
+        import orpheus_engine.definitions as defs_mod
+
+        defs = defs_mod.defs
+
+    asset_graph = defs.resolve_asset_graph()
+    selections_by_job = {
+        "materialize_frequent_job": schedules.FREQUENT_SELECTION,
+        "materialize_unified_ysws_job": schedules.UNIFIED_YSWS_SELECTION,
+        "materialize_hackatime_dau_job": schedules.HACKATIME_DAU_SELECTION,
+        "materialize_project_search_job": schedules.PROJECT_SEARCH_SELECTION,
+        "materialize_all_assets_job": schedules.materialize_all_assets_job.selection,
+    }
+
+    # Include dbt model keys explicitly for cadence resolution when dbt assets are
+    # skipped in local environments without WAREHOUSE_COOLIFY_URL.
+    frequent_dbt_keys = {
+        "finance_2026_analytics/monthly_summary",
+        "finance_2026_analytics/major_gifts",
+        "finance_2026_analytics/metadata",
+        "stardance_analytics/journey_user_stages",
+    }
+    dau_dbt_keys = {"/".join(k.path) for k in schedules.HACKATIME_DAU_DBT_ASSETS}
+
+    schedule_map: dict[str, tuple[str, int, int]] = {}
+    for job_name, sched_name, cadence, stale_after in _SCHEDULED_JOB_CADENCES:
+        resolved = selections_by_job[job_name].resolve(asset_graph, allow_missing=True)
+        for key in resolved:
+            key_str = "/".join(key.path)
+            if key_str in schedule_map:
+                continue
+            effective_stale = (
+                _DAILY_TOLERANCE_STALE_MINUTES
+                if key_str.startswith(_DAILY_TOLERANCE_PREFIXES)
+                else stale_after
+            )
+            schedule_map[key_str] = (sched_name, cadence, effective_stale)
+
+    for key_str in frequent_dbt_keys:
+        schedule_map.setdefault(key_str, ("frequent_15min_schedule", 15, 60))
+    for key_str in dau_dbt_keys:
+        schedule_map.setdefault(key_str, ("hackatime_dau_hourly_schedule", 120, 360))
+    for _, key_str in _discover_dbt_model_assets():
+        schedule_map.setdefault(key_str, ("materialize_all_assets", 360, 720))
+
+    return schedule_map
+
+
+def build_asset_specs(defs: dg.Definitions | None = None) -> list[AssetFreshnessSpec]:
+    """Return every tracked warehouse-writing asset spec, with cadences derived from
+    the actual Dagster job selections."""
+    from orpheus_engine.schedules import EXCLUDED_FROM_MAIN_JOB
+
+    if defs is None:
+        import orpheus_engine.definitions as defs_mod
+
+        defs = defs_mod.defs
+
+    schedule_map = resolve_asset_schedule_map(defs)
+    excluded_keys = {"/".join(k.path) for k in EXCLUDED_FROM_MAIN_JOB}
+
+    # Collect (schema_name, asset_key, sync_type) tuples.
+    entries: dict[tuple[str, str], str] = {}
+
+    # 1. Core + program Sling mirrors.
     for schema_name, asset_key in _CORE_SLING_MIRRORS:
-        _add_sling(schema_name, asset_key)
+        entries[(schema_name, asset_key)] = "sling"
 
     for _, mod_name, _ in pkgutil.iter_modules(sling_programs_pkg.__path__):
         mod = importlib.import_module(f"orpheus_engine.defs.sling.programs.{mod_name}")
         if getattr(mod, "__disabled__", False):
             continue
-        asset_fn = getattr(mod, f"{mod_name}_warehouse_mirror", None)
-        if asset_fn is None:
+        if getattr(mod, f"{mod_name}_warehouse_mirror", None) is None:
             continue
         repl_cfg = getattr(mod, f"{mod_name}_replication_config", None)
         schema_name = _extract_target_schema(repl_cfg, fallback=mod_name)
-        _add_sling(schema_name, f"{mod_name}_warehouse_mirror")
+        entries[(schema_name, f"{mod_name}_warehouse_mirror")] = "sling"
 
-    for spec in _NON_SLING_MIRRORS:
-        by_schema.setdefault(spec.schema_name, spec)
+    # 2. All other warehouse-writing Dagster assets (dlt Airtable, Zenventory, Loops,
+    #    Fillout, Zoom, QuickBooks, Slack, Airtable raw/audit/users).
+    asset_graph = defs.resolve_asset_graph()
+    for asset in defs.assets:
+        for key in asset.keys if hasattr(asset, "keys") else [asset.key]:
+            key_str = "/".join(key.path)
+            if key_str in excluded_keys:
+                continue
+            group = asset_graph.get(key).group_name or ""
 
-    return [by_schema[name] for name in sorted(by_schema)]
+            if key_str in _EXPLICIT_ASSET_TO_SCHEMA:
+                schema_name, sync_type = _EXPLICIT_ASSET_TO_SCHEMA[key_str]
+                entries[(schema_name, key_str)] = sync_type
+            elif group in _GROUP_TO_SCHEMA:
+                schema_name, sync_type = _GROUP_TO_SCHEMA[group]
+                entries[(schema_name, key_str)] = sync_type
+            elif group.startswith("dlt_airtable_"):
+                schema_name = group[len("dlt_"):]  # e.g. dlt_airtable_campfire -> airtable_campfire
+                entries[(schema_name, key_str)] = "dlt"
+
+    # 3. dbt mart models (public_<dir> schemas).
+    for schema_name, key_str in _discover_dbt_model_assets():
+        entries[(schema_name, key_str)] = "dbt"
+
+    specs: list[AssetFreshnessSpec] = []
+    for (schema_name, asset_key), sync_type in sorted(entries.items()):
+        sched_name, cadence, stale_after = schedule_map.get(
+            asset_key, ("materialize_all_assets", 360, 720)
+        )
+        specs.append(
+            AssetFreshnessSpec(
+                schema_name=schema_name,
+                asset_key=asset_key,
+                sync_type=sync_type,
+                schedule_name=sched_name,
+                expected_cadence_minutes=cadence,
+                stale_after_minutes=stale_after,
+            )
+        )
+    return specs
+
+
+# Backward-compatible alias for tests/callers expecting build_mirror_specs.
+build_mirror_specs = build_asset_specs
 
 
 FRESHNESS_DDL_STATEMENTS: tuple[str, ...] = (
     f"CREATE SCHEMA IF NOT EXISTS {FRESHNESS_SCHEMA}",
     f"""
     CREATE TABLE IF NOT EXISTS {FRESHNESS_TABLE} (
-        schema_name TEXT PRIMARY KEY,
+        schema_name TEXT NOT NULL,
         asset_key TEXT NOT NULL,
         sync_type TEXT NOT NULL,
         schedule_name TEXT NOT NULL,
         expected_cadence_minutes INTEGER NOT NULL,
         stale_after_minutes INTEGER NOT NULL,
         last_synced_at TIMESTAMPTZ,
-        recorded_at TIMESTAMPTZ NOT NULL
+        tracking_status TEXT NOT NULL DEFAULT 'tracked',
+        untracked_reason TEXT,
+        recorded_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (schema_name, asset_key)
     )
     """,
     f"""
-    CREATE OR REPLACE VIEW {FRESHNESS_VIEW} AS
+    CREATE OR REPLACE VIEW {ASSET_FRESHNESS_VIEW} AS
     SELECT
         schema_name,
         asset_key,
         sync_type,
         schedule_name,
+        tracking_status,
+        untracked_reason,
         last_synced_at,
-        ROUND((EXTRACT(EPOCH FROM (NOW() - last_synced_at)) / 3600.0)::numeric, 2) AS age_hours,
+        CASE
+            WHEN tracking_status = 'untracked' OR last_synced_at IS NULL THEN NULL
+            ELSE ROUND((EXTRACT(EPOCH FROM (NOW() - last_synced_at)) / 3600.0)::numeric, 2)
+        END AS age_hours,
         expected_cadence_minutes,
         stale_after_minutes,
-        (
-            last_synced_at IS NULL
-            OR NOW() - last_synced_at > make_interval(mins => stale_after_minutes)
-        ) AS is_stale,
         CASE
+            WHEN tracking_status = 'untracked' THEN NULL
+            WHEN last_synced_at IS NULL THEN TRUE
+            ELSE (NOW() - last_synced_at > make_interval(mins => stale_after_minutes))
+        END AS is_stale,
+        CASE
+            WHEN tracking_status = 'untracked' THEN 'untracked'
             WHEN last_synced_at IS NULL THEN 'never_synced'
             WHEN NOW() - last_synced_at > make_interval(mins => stale_after_minutes) THEN 'stale'
             ELSE 'fresh'
         END AS status,
         recorded_at
     FROM {FRESHNESS_TABLE}
-    ORDER BY is_stale DESC, age_hours DESC NULLS FIRST, schema_name
+    ORDER BY
+        CASE
+            WHEN tracking_status = 'untracked' THEN 2
+            WHEN last_synced_at IS NULL OR NOW() - last_synced_at > make_interval(mins => stale_after_minutes) THEN 0
+            ELSE 1
+        END,
+        age_hours DESC NULLS FIRST,
+        schema_name,
+        asset_key
+    """,
+    f"""
+    CREATE OR REPLACE VIEW {FRESHNESS_VIEW} AS
+    WITH ranked AS (
+        SELECT
+            af.*,
+            ROW_NUMBER() OVER (
+                PARTITION BY af.schema_name
+                ORDER BY
+                    CASE af.status
+                        WHEN 'never_synced' THEN 0
+                        WHEN 'stale' THEN 1
+                        WHEN 'fresh' THEN 2
+                        ELSE 3
+                    END,
+                    af.age_hours DESC NULLS FIRST,
+                    af.asset_key
+            ) AS worst_rank
+        FROM {ASSET_FRESHNESS_VIEW} af
+    ),
+    rolled AS (
+        SELECT
+            schema_name,
+            COUNT(*) FILTER (WHERE tracking_status = 'tracked')::integer AS asset_count,
+            COUNT(*) FILTER (WHERE tracking_status = 'tracked' AND is_stale IS TRUE)::integer AS stale_asset_count,
+            MIN(last_synced_at) FILTER (WHERE tracking_status = 'tracked') AS oldest_synced_at,
+            MAX(last_synced_at) FILTER (WHERE tracking_status = 'tracked') AS newest_synced_at,
+            BOOL_OR(is_stale) FILTER (WHERE tracking_status = 'tracked') AS any_stale,
+            BOOL_OR(status = 'never_synced') FILTER (WHERE tracking_status = 'tracked') AS any_never_synced,
+            BOOL_AND(tracking_status = 'untracked') AS all_untracked,
+            MAX(untracked_reason) AS untracked_reason,
+            MAX(recorded_at) AS recorded_at
+        FROM {ASSET_FRESHNESS_VIEW}
+        GROUP BY schema_name
+    )
+    SELECT
+        r.schema_name,
+        w.asset_key AS worst_asset_key,
+        w.asset_key AS asset_key,
+        w.sync_type,
+        w.schedule_name,
+        r.asset_count,
+        r.stale_asset_count,
+        CASE
+            WHEN r.all_untracked THEN NULL
+            WHEN r.any_never_synced THEN NULL
+            ELSE r.oldest_synced_at
+        END AS last_synced_at,
+        r.newest_synced_at,
+        w.age_hours,
+        w.expected_cadence_minutes,
+        w.stale_after_minutes,
+        CASE
+            WHEN r.all_untracked THEN NULL
+            ELSE COALESCE(r.any_stale, TRUE)
+        END AS is_stale,
+        CASE
+            WHEN r.all_untracked THEN 'untracked'
+            WHEN r.any_never_synced AND NOT COALESCE(
+                (SELECT BOOL_OR(status = 'stale') FROM {ASSET_FRESHNESS_VIEW} af2 WHERE af2.schema_name = r.schema_name),
+                FALSE
+            ) THEN 'never_synced'
+            WHEN COALESCE(r.any_stale, TRUE) THEN 'stale'
+            ELSE 'fresh'
+        END AS status,
+        r.untracked_reason,
+        r.recorded_at
+    FROM rolled r
+    JOIN ranked w ON w.schema_name = r.schema_name AND w.worst_rank = 1
+    ORDER BY
+        CASE
+            WHEN r.all_untracked THEN 2
+            WHEN COALESCE(r.any_stale, TRUE) THEN 0
+            ELSE 1
+        END,
+        w.age_hours DESC NULLS FIRST,
+        r.schema_name
     """,
 )
 
 
 def fetch_latest_materializations(
     instance: dg.DagsterInstance,
-    specs: Sequence[MirrorFreshnessSpec],
+    specs: Sequence[AssetFreshnessSpec],
 ) -> dict[str, datetime | None]:
     """Query Dagster for the latest successful materialization UTC time per asset_key."""
-    asset_keys = [dg.AssetKey(spec.asset_key) for spec in specs]
+    dagster_specs = [s for s in specs if s.tracking_status == "tracked" and s.sync_type != "fivetran"]
+    asset_keys = [spec.dagster_asset_key() for spec in dagster_specs]
+    if not asset_keys:
+        return {}
     latest = instance.get_latest_materialization_events(asset_keys)
     result: dict[str, datetime | None] = {}
-    for spec in specs:
-        event = latest.get(dg.AssetKey(spec.asset_key))
+    for spec in dagster_specs:
+        event = latest.get(spec.dagster_asset_key())
         if event is None or event.timestamp is None:
             result[spec.asset_key] = None
         else:
@@ -329,13 +431,145 @@ def fetch_latest_materializations(
     return result
 
 
+def discover_warehouse_extra_specs(
+    conn: Any,
+    tracked_schemas: set[str],
+) -> tuple[list[AssetFreshnessSpec], dict[str, datetime | None]]:
+    """Inspect the warehouse Postgres read-only for:
+    1. Fivetran-managed schemas (reading _fivetran_log.connection / log when present), and
+    2. Any remaining non-system schemas with tables, recorded explicitly as untracked.
+    """
+    extra_specs: list[AssetFreshnessSpec] = []
+    extra_times: dict[str, datetime | None] = {}
+    seen = set(tracked_schemas)
+
+    with conn.cursor() as cur:
+        # 1. Discover all non-system schemas that hold at least one table or view.
+        cur.execute(
+            """
+            SELECT DISTINCT table_schema
+            FROM information_schema.tables
+            WHERE table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+              AND table_schema NOT LIKE 'pg_temp_%'
+              AND table_schema NOT LIKE 'pg_toast_temp_%'
+            ORDER BY table_schema
+            """
+        )
+        all_schemas = [row[0] for row in cur.fetchall()]
+
+        # 2. Check Fivetran sync metadata if _fivetran_log.connection + log exist.
+        cur.execute(
+            """
+            SELECT to_regclass('_fivetran_log.connection') IS NOT NULL
+               AND to_regclass('_fivetran_log.log') IS NOT NULL
+            """
+        )
+        has_fivetran_log = bool(cur.fetchone()[0])
+
+        fivetran_schemas: dict[str, tuple[bool, datetime | None]] = {}
+        if has_fivetran_log:
+            cur.execute(
+                """
+                SELECT
+                    split_part(c.connection_name, '.', 1) AS schema_name,
+                    BOOL_AND(c.paused) AS all_paused,
+                    MAX(l.time_stamp) FILTER (WHERE l.message_event = 'sync_end') AS last_sync_end
+                FROM _fivetran_log.connection c
+                LEFT JOIN _fivetran_log.log l ON l.connection_id = c.connection_id
+                GROUP BY 1
+                """
+            )
+            for sch, all_paused, last_sync in cur.fetchall():
+                if sch:
+                    fivetran_schemas[sch] = (bool(all_paused), last_sync)
+
+        # Also identify legacy Fivetran-created schemas via _fivetran_synced column.
+        cur.execute(
+            """
+            SELECT DISTINCT table_schema
+            FROM information_schema.columns
+            WHERE column_name = '_fivetran_synced'
+              AND table_schema NOT IN ('pg_catalog', 'information_schema')
+            """
+        )
+        fivetran_synced_schemas = {row[0] for row in cur.fetchall()}
+
+    for schema_name in all_schemas:
+        if schema_name in seen:
+            continue
+        if schema_name in fivetran_schemas:
+            all_paused, last_sync = fivetran_schemas[schema_name]
+            asset_key = f"fivetran/{schema_name}"
+            if all_paused:
+                extra_specs.append(
+                    AssetFreshnessSpec(
+                        schema_name=schema_name,
+                        asset_key=asset_key,
+                        sync_type="fivetran",
+                        schedule_name="fivetran_paused",
+                        expected_cadence_minutes=0,
+                        stale_after_minutes=0,
+                        tracking_status="untracked",
+                        untracked_reason="Paused Fivetran connector (historical snapshot)",
+                    )
+                )
+            else:
+                extra_specs.append(
+                    AssetFreshnessSpec(
+                        schema_name=schema_name,
+                        asset_key=asset_key,
+                        sync_type="fivetran",
+                        schedule_name="fivetran",
+                        expected_cadence_minutes=_FIVETRAN_CADENCE_MINUTES,
+                        stale_after_minutes=_FIVETRAN_STALE_MINUTES,
+                        tracking_status="tracked",
+                    )
+                )
+                extra_times[asset_key] = last_sync
+            seen.add(schema_name)
+        elif schema_name in fivetran_synced_schemas:
+            extra_specs.append(
+                AssetFreshnessSpec(
+                    schema_name=schema_name,
+                    asset_key=f"untracked/{schema_name}",
+                    sync_type="untracked",
+                    schedule_name="untracked",
+                    expected_cadence_minutes=0,
+                    stale_after_minutes=0,
+                    tracking_status="untracked",
+                    untracked_reason="Legacy Fivetran snapshot schema (connector paused or removed)",
+                )
+            )
+            seen.add(schema_name)
+        else:
+            reason = _KNOWN_UNTRACKED_REASONS.get(
+                schema_name,
+                "Not tracked by a scheduled Dagster mirror or Fivetran connector (freshness unknown)",
+            )
+            extra_specs.append(
+                AssetFreshnessSpec(
+                    schema_name=schema_name,
+                    asset_key=f"untracked/{schema_name}",
+                    sync_type="untracked",
+                    schedule_name="untracked",
+                    expected_cadence_minutes=0,
+                    stale_after_minutes=0,
+                    tracking_status="untracked",
+                    untracked_reason=reason,
+                )
+            )
+            seen.add(schema_name)
+
+    return extra_specs, extra_times
+
+
 def write_mirror_freshness(
     conn: Any,
-    specs: Sequence[MirrorFreshnessSpec],
+    specs: Sequence[AssetFreshnessSpec],
     materializations: Mapping[str, datetime | None],
     recorded_at: datetime | None = None,
 ) -> int:
-    """Create/update the freshness table and view atomically in one transaction."""
+    """Create/update the freshness table and views atomically in one transaction."""
     now = recorded_at or datetime.now(timezone.utc)
     rows = [
         (
@@ -346,6 +580,8 @@ def write_mirror_freshness(
             spec.expected_cadence_minutes,
             spec.stale_after_minutes,
             materializations.get(spec.asset_key),
+            spec.tracking_status,
+            spec.untracked_reason,
             now,
         )
         for spec in specs
@@ -365,8 +601,10 @@ def write_mirror_freshness(
                 expected_cadence_minutes,
                 stale_after_minutes,
                 last_synced_at,
+                tracking_status,
+                untracked_reason,
                 recorded_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             rows,
         )
@@ -380,39 +618,51 @@ def write_mirror_freshness(
     compute_kind="postgres",
 )
 def warehouse_mirror_freshness(context: AssetExecutionContext) -> Nothing:
-    """Refresh warehouse_metadata.mirror_sync_status and warehouse_metadata.mirror_freshness."""
+    """Refresh warehouse_metadata.asset_sync_status, asset_freshness, and mirror_freshness."""
     warehouse_url = os.getenv("WAREHOUSE_COOLIFY_URL")
     if not warehouse_url:
         raise ValueError("WAREHOUSE_COOLIFY_URL is required to update mirror freshness")
 
-    specs = build_mirror_specs()
+    specs = build_asset_specs()
     materializations = fetch_latest_materializations(context.instance, specs)
     recorded_at = datetime.now(timezone.utc)
 
     conn = psycopg2.connect(warehouse_url)
     try:
-        count = write_mirror_freshness(conn, specs, materializations, recorded_at=recorded_at)
+        tracked_schemas = {s.schema_name for s in specs}
+        extra_specs, extra_times = discover_warehouse_extra_specs(conn, tracked_schemas)
+        all_specs = list(specs) + extra_specs
+        all_times = {**materializations, **extra_times}
+        count = write_mirror_freshness(conn, all_specs, all_times, recorded_at=recorded_at)
     finally:
         conn.close()
 
+    tracked_only = [s for s in all_specs if s.tracking_status == "tracked"]
     stale_count = sum(
         1
-        for spec in specs
-        if materializations.get(spec.asset_key) is None
-        or (recorded_at - materializations[spec.asset_key]).total_seconds()
+        for spec in tracked_only
+        if all_times.get(spec.asset_key) is None
+        or (recorded_at - all_times[spec.asset_key]).total_seconds()
         > spec.stale_after_minutes * 60
     )
+    untracked_count = sum(1 for s in all_specs if s.tracking_status == "untracked")
     context.log.info(
-        "Updated %s with %d mirrors (%d currently stale)",
+        "Updated %s and %s with %d rows (%d tracked assets, %d stale, %d untracked schemas)",
+        ASSET_FRESHNESS_VIEW,
         FRESHNESS_VIEW,
         count,
+        len(tracked_only),
         stale_count,
+        untracked_count,
     )
     context.add_output_metadata(
         {
-            "mirror_count": count,
-            "stale_count": stale_count,
+            "row_count": count,
+            "tracked_asset_count": len(tracked_only),
+            "stale_asset_count": stale_count,
+            "untracked_schema_count": untracked_count,
             "view": FRESHNESS_VIEW,
+            "asset_view": ASSET_FRESHNESS_VIEW,
         }
     )
     return None

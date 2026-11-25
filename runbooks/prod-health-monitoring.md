@@ -732,26 +732,35 @@ Postgres sees (`client=`)**, and the **client-supplied `application_name`
   operator's SSH session via the host-side SSH and audit logs described in the
   private ops notes.
 
-## 13. Per-mirror freshness view
+## 13. Per-mirror freshness views
 
-`warehouse_metadata.mirror_freshness` exposes per-mirror last successful sync
-timestamps, expected cadences, and a live `is_stale` flag directly inside the
-warehouse Postgres database.
+`warehouse_metadata.mirror_freshness` (per-schema worst-of rollup) and
+`warehouse_metadata.asset_freshness` (per-asset detail) expose last successful
+sync timestamps, derived expected cadences, a live `is_stale` flag, and explicit
+`untracked` reasons directly inside the warehouse Postgres database.
 
 - **Populated by:** Dagster asset `warehouse_mirror_freshness`
   (`orpheus_engine/defs/freshness/definitions.py`), scheduled every 15 minutes
-  inside `materialize_frequent_job`.
+  inside `materialize_frequent_job`. Expected cadences are derived from the job
+  selections in `orpheus_engine/schedules.py`.
+- **Coverage:** Every active Sling mirror, DLT/API mirror, `public_*` dbt mart,
+  Fivetran schema (via `_fivetran_log`), and any remaining warehouse schema
+  (explicitly marked `untracked` with a reason).
 - **Readable by:** `hc_warehouse_agent`, `hc_warehouse_mcp` (via
   `pg_read_all_data`), and the `warehouse-mcp` tool `check_freshness`.
-- **Staleness evaluation:** The view computes `age_hours`, `is_stale`, and
-  `status` (`fresh`, `stale`, or `never_synced`) against `NOW()` at query time,
-  so mirrors still show as stale if Dagster stops running. Check `recorded_at`
-  to confirm the freshness asset itself is updating.
+- **Staleness evaluation:** Both views compute `age_hours`, `is_stale`, and
+  `status` (`fresh`, `stale`, `never_synced`, or `untracked`) against `NOW()` at
+  query time, so mirrors still show as stale if Dagster stops running. Check
+  `recorded_at` to confirm the freshness asset itself is updating.
+- **Limitation (incremental mirrors & hard deletes):** Freshness reflects last
+  sync time only. Incremental Sling mirrors do not propagate hard deletes from
+  source databases, so a fresh incremental table can still retain rows deleted
+  at the source.
 
 Quick SQL check:
 
 ```sql
-SELECT schema_name, status, last_synced_at, age_hours, expected_cadence_minutes, is_stale
+SELECT schema_name, status, asset_count, stale_asset_count, last_synced_at, age_hours, worst_asset_key
 FROM warehouse_metadata.mirror_freshness
 WHERE is_stale = TRUE
 ORDER BY age_hours DESC NULLS FIRST;

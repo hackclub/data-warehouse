@@ -659,11 +659,16 @@ class Database:
         self,
         schema_name: Optional[str] = None,
         only_stale: bool = False,
-    ) -> tuple[list[dict[str, Any]], bool]:
-        """Read per-mirror sync freshness from warehouse_metadata.mirror_freshness.
+        include_assets: bool = False,
+    ) -> tuple[list[dict[str, Any]], bool, bool]:
+        """Read per-schema (worst-of) or per-asset sync freshness.
 
-        Returns (rows, view_exists). When the view has not been materialized yet,
-        returns ([], False) instead of raising an error.
+        Returns (rows, view_exists, schema_exists).
+        - When the view has not been materialized yet, returns ([], False, False).
+        - When ``schema_name`` is given and has no row in the freshness view,
+          ``schema_exists`` reports whether the schema exists in
+          ``information_schema.schemata`` so callers can distinguish untracked
+          schemas from non-existent schemas.
         """
         if schema_name is not None and not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', schema_name):
             raise ValueError(f"Invalid schema name: {schema_name}")
@@ -677,28 +682,70 @@ class Database:
             clauses.append("is_stale = TRUE")
 
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        sql = f"""
-            SELECT
-                schema_name,
-                asset_key,
-                sync_type,
-                schedule_name,
-                last_synced_at,
-                age_hours,
-                expected_cadence_minutes,
-                stale_after_minutes,
-                is_stale,
-                status,
-                recorded_at
-            FROM warehouse_metadata.mirror_freshness
-            {where_sql}
-            ORDER BY is_stale DESC, age_hours DESC NULLS FIRST, schema_name
-        """
+        if include_assets:
+            sql = f"""
+                SELECT
+                    schema_name,
+                    asset_key,
+                    sync_type,
+                    schedule_name,
+                    tracking_status,
+                    untracked_reason,
+                    last_synced_at,
+                    age_hours,
+                    expected_cadence_minutes,
+                    stale_after_minutes,
+                    is_stale,
+                    status,
+                    recorded_at
+                FROM warehouse_metadata.asset_freshness
+                {where_sql}
+                ORDER BY
+                    CASE WHEN tracking_status = 'untracked' THEN 2 WHEN is_stale THEN 0 ELSE 1 END,
+                    age_hours DESC NULLS FIRST,
+                    schema_name,
+                    asset_key
+            """
+        else:
+            sql = f"""
+                SELECT
+                    schema_name,
+                    worst_asset_key,
+                    asset_key,
+                    sync_type,
+                    schedule_name,
+                    asset_count,
+                    stale_asset_count,
+                    last_synced_at,
+                    newest_synced_at,
+                    age_hours,
+                    expected_cadence_minutes,
+                    stale_after_minutes,
+                    is_stale,
+                    status,
+                    untracked_reason,
+                    recorded_at
+                FROM warehouse_metadata.mirror_freshness
+                {where_sql}
+                ORDER BY
+                    CASE WHEN status = 'untracked' THEN 2 WHEN is_stale THEN 0 ELSE 1 END,
+                    age_hours DESC NULLS FIRST,
+                    schema_name
+            """
         try:
-            rows, _ = await self.execute_query_with_params(sql, tuple(params), max_rows=500)
-            return rows, True
+            rows, _ = await self.execute_query_with_params(sql, tuple(params), max_rows=1000)
         except psycopg.errors.UndefinedTable:
-            return [], False
+            return [], False, False
+
+        schema_exists = True
+        if schema_name is not None and not rows:
+            chk, _ = await self.execute_query_with_params(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
+                (schema_name,),
+                max_rows=1,
+            )
+            schema_exists = bool(chk)
+        return rows, True, schema_exists
 
 
 # Global database instance

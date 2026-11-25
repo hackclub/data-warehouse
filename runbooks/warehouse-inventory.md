@@ -23,16 +23,16 @@ internal hostnames/IPs, and personal data.
 
 ## Mirror Freshness Visibility
 
-Agents and operators can check per-mirror sync freshness without querying the Dagster instance DB:
+Agents and operators can check per-schema and per-asset sync freshness without querying the Dagster instance DB:
 
-- **SQL view:** `warehouse_metadata.mirror_freshness` (readable by `hc_warehouse_agent` and `hc_warehouse_mcp` via `pg_read_all_data`).
-- **MCP tool:** `check_freshness(schema_name=..., only_stale=...)` in `warehouse-mcp`.
-- **Backing Dagster asset:** `warehouse_mirror_freshness` (runs every 15 minutes in `materialize_frequent_job`).
+- **Per-schema worst-of SQL view:** `warehouse_metadata.mirror_freshness` (one row per warehouse schema, including dbt marts, Fivetran schemas, and explicit `untracked` rows with reasons; readable by `hc_warehouse_agent` and `hc_warehouse_mcp` via `pg_read_all_data`).
+- **Per-asset SQL view:** `warehouse_metadata.asset_freshness` (one row per Dagster/dbt/Fivetran asset; exposes individual stale tables inside multi-asset schemas such as `airtable_campfire` and `loops`).
+- **MCP tool:** `check_freshness(schema_name=..., only_stale=..., include_assets=...)` in `warehouse-mcp`.
+- **Backing Dagster asset:** `warehouse_mirror_freshness` (runs every 15 minutes in `materialize_frequent_job`; cadences are derived directly from the job selections in `orpheus_engine/schedules.py`).
 
-Columns exposed by `warehouse_metadata.mirror_freshness`:
-`schema_name`, `asset_key`, `sync_type`, `schedule_name`, `last_synced_at`, `age_hours`, `expected_cadence_minutes`, `stale_after_minutes`, `is_stale`, `status` (`fresh` | `stale` | `never_synced`), and `recorded_at`.
+Because `age_hours`, `is_stale`, and `status` (`fresh` | `stale` | `never_synced` | `untracked`) are computed dynamically against `NOW()` in the views, mirrors still flip to stale if Dagster stops running. Check `recorded_at` to verify that the freshness asset itself is current.
 
-Because `age_hours`, `is_stale`, and `status` are computed dynamically against `NOW()` in the view, mirrors still flip to stale if Dagster stops running. Check `recorded_at` to verify that the freshness asset itself is current.
+> **Limitation (incremental mirrors & hard deletes):** Freshness reflects last successful sync time only. Incremental Sling mirrors (for example `stardance.users`, `auth.oauth_access_tokens`, and several `flavortown.*` tables) do not propagate hard deletes from the source database, so a freshly synced incremental table can still retain rows deleted at the source.
 
 ## Active YSWS Programs → Warehouse Location
 

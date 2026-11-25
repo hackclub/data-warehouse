@@ -124,31 +124,40 @@ def test_check_freshness_tool_formats_output_and_emits_audit_log(monkeypatch, ca
             [
                 {
                     "schema_name": "hcb",
+                    "worst_asset_key": "hcb_warehouse_mirror",
                     "asset_key": "hcb_warehouse_mirror",
                     "sync_type": "sling",
                     "schedule_name": "materialize_all_assets",
+                    "asset_count": 1,
+                    "stale_asset_count": 1,
                     "last_synced_at": "2026-11-23T05:33:49+00:00",
                     "age_hours": 43.0,
                     "expected_cadence_minutes": 360,
                     "stale_after_minutes": 720,
                     "is_stale": True,
                     "status": "stale",
+                    "untracked_reason": None,
                     "recorded_at": "2026-11-25T00:30:00+00:00",
                 },
                 {
                     "schema_name": "stardance",
+                    "worst_asset_key": "stardance_warehouse_mirror",
                     "asset_key": "stardance_warehouse_mirror",
                     "sync_type": "sling",
                     "schedule_name": "frequent_15min_schedule",
+                    "asset_count": 1,
+                    "stale_asset_count": 0,
                     "last_synced_at": "2026-11-25T00:25:00+00:00",
                     "age_hours": 0.08,
                     "expected_cadence_minutes": 15,
                     "stale_after_minutes": 60,
                     "is_stale": False,
                     "status": "fresh",
+                    "untracked_reason": None,
                     "recorded_at": "2026-11-25T00:30:00+00:00",
                 },
             ],
+            True,
             True,
         )
     )
@@ -162,7 +171,8 @@ def test_check_freshness_tool_formats_output_and_emits_audit_log(monkeypatch, ca
         mcp_server._current_user.reset(u_tok)
 
     text = out[0].text
-    assert "1 fresh, 1 stale" in text
+    assert "1 fresh, 1 stale, 0 untracked" in text
+    assert "incremental Sling mirrors may retain rows deleted" in text
     assert "hcb" in text
     assert "stardance" in text
     records = _audit_records(caplog)
@@ -171,3 +181,20 @@ def test_check_freshness_tool_formats_output_and_emits_audit_log(monkeypatch, ca
     assert records[0]["schema"] == "hcb"
     assert records[0]["outcome"] == "ok"
     assert records[0]["row_count"] == 2
+
+
+def test_check_freshness_distinguishes_untracked_real_schema_from_missing(monkeypatch):
+    fake_db = MagicMock()
+    fake_db.get_mirror_freshness = AsyncMock(return_value=([], True, True))
+    monkeypatch.setattr(mcp_server, "get_database", lambda: fake_db)
+
+    out_untracked = asyncio.run(
+        mcp_server.call_tool("check_freshness", {"schema_name": "legacy_schema"})
+    )
+    assert "exists in the warehouse but is not tracked" in out_untracked[0].text
+
+    fake_db.get_mirror_freshness = AsyncMock(return_value=([], True, False))
+    out_missing = asyncio.run(
+        mcp_server.call_tool("check_freshness", {"schema_name": "nope"})
+    )
+    assert "does not exist in the warehouse" in out_missing[0].text
