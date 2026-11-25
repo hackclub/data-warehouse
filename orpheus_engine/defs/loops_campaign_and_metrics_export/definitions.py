@@ -1,5 +1,6 @@
 """Dagster assets for Loops campaign and metrics export."""
 
+import logging
 import time
 import requests
 import polars as pl
@@ -17,6 +18,7 @@ from pydantic import BaseModel
 
 from orpheus_engine.defs.shared.loops_session import (
     LoopsAuthError,
+    LoopsRedirectError,
     loops_session_request,
 )
 
@@ -311,7 +313,13 @@ def warehouse_coolify_destination() -> postgres:
     return dlt.destinations.postgres(credentials=creds)
 
 
-def _http_get_html(path: str, session_token: str, querystring: Optional[str] = None) -> str:
+def _http_get_html(
+    path: str,
+    session_token: str,
+    querystring: Optional[str] = None,
+    *,
+    allowed_redirect_paths: Optional[Dict[str, str]] = None,
+) -> str:
     """Helper to fetch HTML from Loops app."""
     if querystring:
         url = f"{LOOPS_APP_BASE_URL}{path}?{querystring}"
@@ -333,6 +341,7 @@ def _http_get_html(path: str, session_token: str, querystring: Optional[str] = N
         context_label=path,
         headers=headers,
         timeout=30,
+        allowed_redirect_paths=allowed_redirect_paths,
     )
     if resp.status_code in (401, 403):
         raise LoopsAuthError(
@@ -343,7 +352,11 @@ def _http_get_html(path: str, session_token: str, querystring: Optional[str] = N
     return resp.text
 
 
-def _resolve_email_message_id_from_campaign(session_token: str, campaign_id: str) -> Optional[Dict[str, Any]]:
+def _resolve_email_message_id_from_campaign(
+    session_token: str,
+    campaign_id: str,
+    log: Any = None,
+) -> Optional[Dict[str, Any]]:
     """
     Load /campaigns/{campaignId}/compose and parse __NEXT_DATA__ for:
       - props.pageProps.campaign.emailMessage.id
@@ -355,7 +368,25 @@ def _resolve_email_message_id_from_campaign(session_token: str, campaign_id: str
     Returns dict with: email_message_id, status, sent_at_timestamp, mailing_list_id, audience_filter (or None if not found)
     """
     path = LOOPS_COMPOSE_PATH_TEMPLATE.format(campaignId=campaign_id)
-    html = _http_get_html(path, session_token, LOOPS_COMPOSE_QUERYSTRING)
+    allowed_redirects = {
+        "/campaigns": "campaigns_index",
+        f"/campaigns/{campaign_id}": "campaign_detail",
+    }
+    try:
+        html = _http_get_html(
+            path,
+            session_token,
+            LOOPS_COMPOSE_QUERYSTRING,
+            allowed_redirect_paths=allowed_redirects,
+        )
+    except LoopsRedirectError as exc:
+        # Allow-listed per-campaign redirect (/campaigns or /campaigns/<same id>);
+        # log only the redacted path class (never Location or cookies) and skip this campaign.
+        logger = log if log is not None else logging.getLogger(__name__)
+        logger.warning(
+            f"Skipping campaign {campaign_id}: allow-listed /compose redirect (class={exc.path_class})"
+        )
+        return None
     m = _NEXT_DATA_RE.search(html)
     if not m:
         return None
@@ -1231,7 +1262,7 @@ def loops_campaign_email_contents(
         
         try:
             # Step 1: Resolve campaign ID to email message ID (and get status, sent_at)
-            campaign_info = _resolve_email_message_id_from_campaign(session_token, campaign_id)
+            campaign_info = _resolve_email_message_id_from_campaign(session_token, campaign_id, log=log)
             
             if not campaign_info:
                 log.warning(f"Could not resolve email message ID for campaign {campaign_name} ({campaign_id})")
@@ -2251,7 +2282,7 @@ def _fetch_campaign_recipient_records(
     Returns None if the campaign's email message ID can't be resolved.
     """
     log.info(f"Resolving email message ID for campaign {campaign_name} ({campaign_id})")
-    campaign_info = _resolve_email_message_id_from_campaign(session_token, campaign_id)
+    campaign_info = _resolve_email_message_id_from_campaign(session_token, campaign_id, log=log)
 
     if not campaign_info or not campaign_info.get("email_message_id"):
         return None

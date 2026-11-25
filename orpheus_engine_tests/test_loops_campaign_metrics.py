@@ -70,7 +70,7 @@ def harness(monkeypatch):
     monkeypatch.delenv("LOOPS_METRICS_TIME_BUDGET_SECONDS", raising=False)
     monkeypatch.setattr(loops_defs.time, "sleep", lambda _s: None)
 
-    def fake_resolve(_token, campaign_id):
+    def fake_resolve(_token, campaign_id, log=None):
         events.append(("resolve", campaign_id))
         if campaign_id == "unresolvable":
             return None

@@ -314,3 +314,153 @@ def test_http_get_html_raises_auth_error_on_expired_cookie(monkeypatch, status_c
 
     with pytest.raises(loops_campaign_defs.LoopsAuthError, match="LOOPS_SESSION_TOKEN"):
         loops_campaign_defs._http_get_html("/campaigns/c1/compose", "fake-token")
+
+
+@pytest.mark.parametrize(
+    "allowed_loc,expected_class",
+    [
+        ("/campaigns/cm1", "campaign_detail"),
+        ("/campaigns/cm1/", "campaign_detail"),
+        ("https://app.loops.so/campaigns/cm1", "campaign_detail"),
+        ("HTTPS://APP.LOOPS.SO/campaigns/cm1", "campaign_detail"),
+        ("/campaigns", "campaigns_index"),
+    ],
+)
+def test_compose_allow_listed_redirect_skips_campaign_with_redacted_class(monkeypatch, allowed_loc, expected_class):
+    from orpheus_engine.defs.shared.loops_session import LoopsRedirectError
+
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return _make_response(status_code=307, headers={"Location": allowed_loc})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    with pytest.raises(LoopsRedirectError) as exc:
+        loops_session_request(
+            "GET",
+            "https://app.loops.so/campaigns/cm1/compose",
+            "tok",
+            context_label="compose_page",
+            allowed_redirect_paths={"/campaigns": "campaigns_index", "/campaigns/cm1": "campaign_detail"},
+        )
+    assert exc.value.path_class == expected_class
+    assert allowed_loc not in str(exc.value)
+    assert f"class={expected_class}" in str(exc.value)
+    assert calls[0][1]["allow_redirects"] is False
+
+    assert loops_campaign_defs._resolve_email_message_id_from_campaign("tok", "cm1") is None
+
+
+@pytest.mark.parametrize(
+    "bad_location",
+    [
+        "/login",
+        "/LOGIN",
+        "/sign-in?next=/campaigns/cm1",
+        "/",
+        "https://app.loops.so/",
+        "/register",
+        "/home",
+        "/campaigns/other_id",
+        "/campaigns?error=SessionRequired",
+        "/campaigns?next=/login",
+        "/campaigns#login",
+        "/campaigns/cm1?reauth=1",
+        "/campaigns/../login",
+        "/%6Cogin",
+        "/\\evil.example/x",
+        "http://app.loops.so/campaigns/cm1",
+        "https://evil.example/campaigns/cm1",
+        "https://user@app.loops.so/campaigns/cm1",
+        "//evil.example/campaigns/cm1",
+        "",
+        None,
+    ],
+)
+def test_non_allow_listed_compose_redirect_is_fatal_auth_error(monkeypatch, bad_location):
+    headers = {"Location": bad_location} if bad_location is not None else {}
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _make_response(status_code=307, headers=headers))
+    with pytest.raises(LoopsAuthError):
+        loops_campaign_defs._resolve_email_message_id_from_campaign("tok", "cm1")
+
+
+@pytest.mark.parametrize("fn", ["_fetch_email_message_by_id", "_fetch_email_html", "_fetch_campaign_metrics_page"])
+@pytest.mark.parametrize("loc", ["/campaigns/cm1", "/campaigns", "/login"])
+def test_api_redirects_remain_fatal_even_for_campaign_paths(monkeypatch, fn, loc):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _make_response(status_code=307, headers={"Location": loc}))
+    with pytest.raises(LoopsAuthError):
+        getattr(loops_campaign_defs, fn)("tok", "cm1")
+
+
+def test_compose_allow_listed_redirect_logs_redacted_class_without_location(monkeypatch, caplog):
+    """Caller logs a single warning with the redacted path class and never the Location header."""
+    import logging
+
+    raw_location = "https://app.loops.so/campaigns/cm1"
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **k: _make_response(status_code=307, headers={"Location": raw_location}),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = loops_campaign_defs._resolve_email_message_id_from_campaign("tok", "cm1")
+
+    assert result is None
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "class=campaign_detail" in warnings[0]
+    assert raw_location not in warnings[0]
+    assert "/campaigns/cm1" not in warnings[0]
+    assert "tok" not in warnings[0]
+
+
+def test_loops_campaign_email_contents_succeeds_empty_when_unresolvable_campaigns_due(monkeypatch):
+    """Unresolvable campaigns returning a compose page without emailMessageId return SUCCESS with 0 rows."""
+    monkeypatch.setattr(loops_campaign_defs.time, "sleep", lambda s: None)
+    compose_without_msg_id = (
+        '<html><script id="__NEXT_DATA__" type="application/json">'
+        '{"props":{"pageProps":{"campaign":{"status":"Draft"}}}}'
+        "</script></html>"
+    )
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **k: _make_response(status_code=200, text=compose_without_msg_id),
+    )
+    ids = [f"c{i}" for i in range(10)]
+    df = pl.DataFrame({
+        "id": ids,
+        "name": [f"Campaign {i}" for i in range(len(ids))],
+        "emoji": [""] * len(ids),
+    })
+
+    class Tok:
+        def get_value(self):
+            return "tok"
+
+    ctx = dg.build_asset_context(resources={"loops_session_token": Tok()})
+    out = loops_campaign_defs.loops_campaign_email_contents(ctx, df)
+    assert out.height == 0
+
+
+@pytest.mark.parametrize("loc", ["/login", "/", "/campaigns?error=SessionRequired", "/campaigns#login"])
+def test_loops_campaign_email_contents_dead_session_redirect_raises_auth_error(monkeypatch, loc):
+    """Dead-session login or non-allow-listed redirect -> fatal LoopsAuthError."""
+    monkeypatch.setattr(loops_campaign_defs.time, "sleep", lambda s: None)
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _make_response(status_code=307, headers={"Location": loc}))
+    df = pl.DataFrame({
+        "id": ["c1", "c2"],
+        "name": ["n1", "n2"],
+        "emoji": ["", ""],
+    })
+
+    class Tok:
+        def get_value(self):
+            return "tok"
+
+    ctx = dg.build_asset_context(resources={"loops_session_token": Tok()})
+    with pytest.raises(LoopsAuthError):
+        loops_campaign_defs.loops_campaign_email_contents(ctx, df)
