@@ -754,7 +754,9 @@ sync timestamps, derived expected cadences, a live `is_stale` flag, and explicit
   recent data.
 - **Self-describing:** each view and each column has a Postgres comment
   (status values, cadence, `untracked`, the deleted-rows caveat). Read them
-  with `obj_description(...)` and `col_description(...)`. The comments are part
+  with `obj_description(...)` and `col_description(...)`, or with
+  `warehouse-mcp` `describe_schema(schema_name='warehouse_metadata')`, which
+  lists views (not only tables) with their comments. The comments are part
   of the DDL hash in the view comment, so changing them rebuilds the views on
   the next run.
 - **Staleness evaluation:** Both views compute `age_hours`, `is_stale`, and

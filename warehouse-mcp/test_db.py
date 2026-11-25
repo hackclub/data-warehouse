@@ -256,3 +256,29 @@ def test_freshness_is_found_and_read_through_sql_alone(server, monkeypatch):
         {"schema_name": "stardance", "status": "fresh", "is_stale": False},
     ]
     assert "deleted at the source" in doc
+
+
+def test_describe_schema_shows_the_freshness_views_and_their_comments(server, monkeypatch):
+    """describe_schema, the step list_schemas points to, lists the views with their docs."""
+    from datetime import datetime, timezone
+
+    from orpheus_engine.defs.freshness.definitions import (
+        FRESHNESS_TABLE,
+        AssetFreshnessSpec,
+        write_mirror_freshness,
+    )
+
+    now = datetime.now(timezone.utc)
+    spec = AssetFreshnessSpec("stardance", "stardance_warehouse_mirror", "sling", "frequent_15min_schedule", 15, 60)
+    with server.admin() as conn:
+        write_mirror_freshness(conn, [spec], {"stardance_warehouse_mirror": now}, recorded_at=now)
+
+    async def use(database):
+        return await database.describe_schema("warehouse_metadata")
+
+    described = _on_database(server.mcp_url(), monkeypatch, use)
+    assert "## warehouse_metadata.mirror_freshness (view)" in described
+    assert "## warehouse_metadata.asset_freshness (view)" in described
+    assert f"## {FRESHNESS_TABLE}\n" in described
+    assert "deleted at the source" in described
+    assert "\n- status: " in described, "column comments must sit next to their column"

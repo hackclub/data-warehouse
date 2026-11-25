@@ -567,8 +567,9 @@ _DELETED_ROWS_CAVEAT = (
     "deleted at the source."
 )
 
-# Agents find these through SQL alone (obj_description / col_description or
-# describe_schema), so they explain how to read the views. They are part of the
+# Agents find these through SQL alone: obj_description / col_description, or
+# warehouse-mcp's describe_schema, which lists views with their view and column
+# comments. So they explain how to read the views. They are part of the
 # DDL hash, so changing them rebuilds the views.
 FRESHNESS_VIEW_DESCRIPTIONS: dict[str, str] = {
     ASSET_FRESHNESS_VIEW: (
