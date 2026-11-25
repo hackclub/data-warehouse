@@ -711,7 +711,6 @@ class Database:
                 SELECT
                     schema_name,
                     worst_asset_key,
-                    asset_key,
                     sync_type,
                     schedule_name,
                     asset_count,

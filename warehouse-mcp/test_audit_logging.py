@@ -125,7 +125,6 @@ def test_check_freshness_tool_formats_output_and_emits_audit_log(monkeypatch, ca
                 {
                     "schema_name": "hcb",
                     "worst_asset_key": "hcb_warehouse_mirror",
-                    "asset_key": "hcb_warehouse_mirror",
                     "sync_type": "sling",
                     "schedule_name": "materialize_all_assets",
                     "asset_count": 1,
@@ -142,7 +141,6 @@ def test_check_freshness_tool_formats_output_and_emits_audit_log(monkeypatch, ca
                 {
                     "schema_name": "stardance",
                     "worst_asset_key": "stardance_warehouse_mirror",
-                    "asset_key": "stardance_warehouse_mirror",
                     "sync_type": "sling",
                     "schedule_name": "frequent_15min_schedule",
                     "asset_count": 1,

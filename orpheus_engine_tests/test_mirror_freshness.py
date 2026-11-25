@@ -207,3 +207,46 @@ def test_flavortown_post_ship_events_uses_full_refresh():
     assert flavortown_replication_config["defaults"]["mode"] == "full-refresh"
     stream_cfg = flavortown_replication_config["streams"].get("public.post_ship_events")
     assert stream_cfg is None or stream_cfg.get("mode") == "full-refresh"
+
+
+def test_scheduled_cadences_match_cron():
+    """The hand-written cadence for each schedule must equal its cron interval."""
+    from dagster._utils.schedules import get_smallest_cron_interval
+
+    from orpheus_engine import schedules
+    from orpheus_engine.defs.freshness.definitions import _SCHEDULED_JOB_CADENCES
+
+    for sched_attr, cadence_minutes, stale_after_minutes in _SCHEDULED_JOB_CADENCES:
+        schedule_def = getattr(schedules, sched_attr)
+        interval = get_smallest_cron_interval(
+            schedule_def.cron_schedule, schedule_def.execution_timezone
+        )
+        assert interval == timedelta(minutes=cadence_minutes), sched_attr
+        assert stale_after_minutes > cadence_minutes, sched_attr
+
+
+def test_views_are_rebuilt_only_when_their_ddl_changes(server):
+    """A routine run must not take an ACCESS EXCLUSIVE lock on the views."""
+    from orpheus_engine.defs.freshness.definitions import _ensure_freshness_views
+
+    spec = AssetFreshnessSpec("stardance", "stardance_warehouse_mirror", "sling", "frequent_15min_schedule", 15, 60)
+    now = datetime.now(timezone.utc)
+    with server.admin() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP SCHEMA IF EXISTS warehouse_metadata CASCADE")
+        write_mirror_freshness(conn, [spec], {spec.asset_key: now}, recorded_at=now)
+        with conn.cursor() as cur:
+            assert _ensure_freshness_views(cur) is False
+            # An older definition (different comment) is replaced.
+            cur.execute(f"COMMENT ON VIEW {FRESHNESS_VIEW} IS 'old'")
+            assert _ensure_freshness_views(cur) is True
+            assert _ensure_freshness_views(cur) is False
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'warehouse_metadata' AND table_name = 'mirror_freshness'"
+            )
+            columns = {row[0] for row in cur.fetchall()}
+            cur.execute(f"SELECT status FROM {FRESHNESS_VIEW} WHERE schema_name = 'stardance'")
+            assert cur.fetchone()[0] == "fresh"
+    assert "worst_asset_key" in columns
+    assert "asset_key" not in columns

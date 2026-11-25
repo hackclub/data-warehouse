@@ -16,6 +16,7 @@ Every Dagster asset's expected cadence is derived directly from the job
 selections in ``orpheus_engine.schedules`` rather than hand-maintained.
 """
 
+import hashlib
 import importlib
 import os
 import pkgutil
@@ -35,15 +36,20 @@ FRESHNESS_TABLE = f"{FRESHNESS_SCHEMA}.asset_sync_status"
 ASSET_FRESHNESS_VIEW = f"{FRESHNESS_SCHEMA}.asset_freshness"
 FRESHNESS_VIEW = f"{FRESHNESS_SCHEMA}.mirror_freshness"
 
-# Scheduled job definitions ordered from fastest to slowest cadence.
-# (job_name, schedule_name, expected_cadence_minutes, default_stale_after_minutes)
-_SCHEDULED_JOB_CADENCES: tuple[tuple[str, str, int, int], ...] = (
-    ("materialize_frequent_job", "frequent_15min_schedule", 15, 60),
-    ("materialize_unified_ysws_job", "unified_ysws_15min_schedule", 15, 60),
-    ("materialize_hackatime_dau_job", "hackatime_dau_hourly_schedule", 120, 360),
-    ("materialize_project_search_job", "project_search_2h_schedule", 120, 360),
-    ("materialize_all_assets_job", "materialize_all_assets", 360, 720),
+# Schedules in orpheus_engine.schedules, fastest first. An asset in several
+# selections takes the first (fastest) one. The cadence must equal the schedule's
+# cron interval; test_scheduled_cadences_match_cron enforces that.
+# (schedule attribute name, expected_cadence_minutes, default_stale_after_minutes)
+_SCHEDULED_JOB_CADENCES: tuple[tuple[str, int, int], ...] = (
+    ("frequent_15min_schedule", 15, 60),
+    ("unified_ysws_15min_schedule", 15, 60),
+    ("hackatime_dau_hourly_schedule", 120, 360),
+    ("project_search_2h_schedule", 120, 360),
+    ("materialize_all_assets_schedule", 360, 720),
 )
+
+# Keep the freshness write from queueing agents' reads behind it, or hanging.
+_WAREHOUSE_CONNECT_OPTIONS = "-c lock_timeout=10000 -c statement_timeout=120000"
 
 # Assets that hit external daily API quotas or have daily-tolerant stale windows
 # while still running inside their derived schedule.
@@ -157,27 +163,17 @@ def resolve_asset_schedule_map(
         defs = defs_mod.defs
 
     asset_graph = defs.resolve_asset_graph()
-    selections_by_job = {
-        "materialize_frequent_job": schedules.FREQUENT_SELECTION,
-        "materialize_unified_ysws_job": schedules.UNIFIED_YSWS_SELECTION,
-        "materialize_hackatime_dau_job": schedules.HACKATIME_DAU_SELECTION,
-        "materialize_project_search_job": schedules.PROJECT_SEARCH_SELECTION,
-        "materialize_all_assets_job": schedules.materialize_all_assets_job.selection,
-    }
 
-    # Include dbt model keys explicitly for cadence resolution when dbt assets are
-    # skipped in local environments without WAREHOUSE_COOLIFY_URL.
-    frequent_dbt_keys = {
-        "finance_2026_analytics/monthly_summary",
-        "finance_2026_analytics/major_gifts",
-        "finance_2026_analytics/metadata",
-        "stardance_analytics/journey_user_stages",
-    }
+    # dbt assets are not loaded locally without WAREHOUSE_COOLIFY_URL, so the
+    # selections above miss them; name the scheduled ones explicitly.
+    frequent_dbt_keys = {"/".join(k.path) for k in schedules.FREQUENT_DBT_ASSETS}
     dau_dbt_keys = {"/".join(k.path) for k in schedules.HACKATIME_DAU_DBT_ASSETS}
 
     schedule_map: dict[str, tuple[str, int, int]] = {}
-    for job_name, sched_name, cadence, stale_after in _SCHEDULED_JOB_CADENCES:
-        resolved = selections_by_job[job_name].resolve(asset_graph, allow_missing=True)
+    for sched_attr, cadence, stale_after in _SCHEDULED_JOB_CADENCES:
+        schedule_def = getattr(schedules, sched_attr)
+        sched_name = schedule_def.name
+        resolved = schedule_def.job.selection.resolve(asset_graph, allow_missing=True)
         for key in resolved:
             key_str = "/".join(key.path)
             if key_str in schedule_map:
@@ -189,12 +185,16 @@ def resolve_asset_schedule_map(
             )
             schedule_map[key_str] = (sched_name, cadence, effective_stale)
 
-    for key_str in frequent_dbt_keys:
-        schedule_map.setdefault(key_str, ("frequent_15min_schedule", 15, 60))
-    for key_str in dau_dbt_keys:
-        schedule_map.setdefault(key_str, ("hackatime_dau_hourly_schedule", 120, 360))
-    for _, key_str in _discover_dbt_model_assets():
-        schedule_map.setdefault(key_str, ("materialize_all_assets", 360, 720))
+    cadence_by_attr = {attr: (cad, stale) for attr, cad, stale in _SCHEDULED_JOB_CADENCES}
+    for keys, sched_attr in (
+        (frequent_dbt_keys, "frequent_15min_schedule"),
+        (dau_dbt_keys, "hackatime_dau_hourly_schedule"),
+        ({key for _, key in _discover_dbt_model_assets()}, "materialize_all_assets_schedule"),
+    ):
+        sched_name = getattr(schedules, sched_attr).name
+        cadence, stale_after = cadence_by_attr[sched_attr]
+        for key_str in sorted(keys):
+            schedule_map.setdefault(key_str, (sched_name, cadence, stale_after))
 
     return schedule_map
 
@@ -271,10 +271,6 @@ def build_asset_specs(defs: dg.Definitions | None = None) -> list[AssetFreshness
     return specs
 
 
-# Backward-compatible alias for tests/callers expecting build_mirror_specs.
-build_mirror_specs = build_asset_specs
-
-
 FRESHNESS_DDL_STATEMENTS: tuple[str, ...] = (
     f"CREATE SCHEMA IF NOT EXISTS {FRESHNESS_SCHEMA}",
     f"""
@@ -292,8 +288,13 @@ FRESHNESS_DDL_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY (schema_name, asset_key)
     )
     """,
+)
+
+# The views are only rebuilt when this text changes (see _ensure_freshness_views),
+# not on every 15-minute run: each rebuild takes an ACCESS EXCLUSIVE lock.
+FRESHNESS_VIEW_DDL_STATEMENTS: tuple[str, ...] = (
     f"""
-    CREATE OR REPLACE VIEW {ASSET_FRESHNESS_VIEW} AS
+    CREATE VIEW {ASSET_FRESHNESS_VIEW} AS
     SELECT
         schema_name,
         asset_key,
@@ -332,7 +333,7 @@ FRESHNESS_DDL_STATEMENTS: tuple[str, ...] = (
         asset_key
     """,
     f"""
-    CREATE OR REPLACE VIEW {FRESHNESS_VIEW} AS
+    CREATE VIEW {FRESHNESS_VIEW} AS
     WITH ranked AS (
         SELECT
             af.*,
@@ -359,6 +360,7 @@ FRESHNESS_DDL_STATEMENTS: tuple[str, ...] = (
             MAX(last_synced_at) FILTER (WHERE tracking_status = 'tracked') AS newest_synced_at,
             BOOL_OR(is_stale) FILTER (WHERE tracking_status = 'tracked') AS any_stale,
             BOOL_OR(status = 'never_synced') FILTER (WHERE tracking_status = 'tracked') AS any_never_synced,
+            BOOL_OR(status = 'stale') FILTER (WHERE tracking_status = 'tracked') AS any_synced_stale,
             BOOL_AND(tracking_status = 'untracked') AS all_untracked,
             MAX(untracked_reason) AS untracked_reason,
             MAX(recorded_at) AS recorded_at
@@ -368,7 +370,6 @@ FRESHNESS_DDL_STATEMENTS: tuple[str, ...] = (
     SELECT
         r.schema_name,
         w.asset_key AS worst_asset_key,
-        w.asset_key AS asset_key,
         w.sync_type,
         w.schedule_name,
         r.asset_count,
@@ -388,10 +389,7 @@ FRESHNESS_DDL_STATEMENTS: tuple[str, ...] = (
         END AS is_stale,
         CASE
             WHEN r.all_untracked THEN 'untracked'
-            WHEN r.any_never_synced AND NOT COALESCE(
-                (SELECT BOOL_OR(status = 'stale') FROM {ASSET_FRESHNESS_VIEW} af2 WHERE af2.schema_name = r.schema_name),
-                FALSE
-            ) THEN 'never_synced'
+            WHEN r.any_never_synced AND NOT COALESCE(r.any_synced_stale, FALSE) THEN 'never_synced'
             WHEN COALESCE(r.any_stale, TRUE) THEN 'stale'
             ELSE 'fresh'
         END AS status,
@@ -563,6 +561,35 @@ def discover_warehouse_extra_specs(
     return extra_specs, extra_times
 
 
+def _view_ddl_comment() -> str:
+    digest = hashlib.sha256("\n".join(FRESHNESS_VIEW_DDL_STATEMENTS).encode()).hexdigest()[:16]
+    return f"Managed by Dagster asset warehouse_mirror_freshness (ddl {digest})"
+
+
+def _ensure_freshness_views(cur: Any) -> bool:
+    """Rebuild the views only when their DDL changed. Returns True if rebuilt.
+
+    The comment on each view records a hash of the DDL that made it. Dropping and
+    recreating (rather than CREATE OR REPLACE) lets a later change remove or
+    reorder columns.
+    """
+    comment = _view_ddl_comment()
+    cur.execute(
+        "SELECT obj_description(to_regclass(%s), 'pg_class'), "
+        "obj_description(to_regclass(%s), 'pg_class')",
+        (ASSET_FRESHNESS_VIEW, FRESHNESS_VIEW),
+    )
+    if all(existing == comment for existing in cur.fetchone()):
+        return False
+    cur.execute(f"DROP VIEW IF EXISTS {FRESHNESS_VIEW}")
+    cur.execute(f"DROP VIEW IF EXISTS {ASSET_FRESHNESS_VIEW}")
+    for ddl in FRESHNESS_VIEW_DDL_STATEMENTS:
+        cur.execute(ddl)
+    for view in (ASSET_FRESHNESS_VIEW, FRESHNESS_VIEW):
+        cur.execute(f"COMMENT ON VIEW {view} IS %s", (comment,))
+    return True
+
+
 def write_mirror_freshness(
     conn: Any,
     specs: Sequence[AssetFreshnessSpec],
@@ -590,6 +617,7 @@ def write_mirror_freshness(
     with conn.cursor() as cur:
         for ddl in FRESHNESS_DDL_STATEMENTS:
             cur.execute(ddl)
+        _ensure_freshness_views(cur)
         cur.execute(f"DELETE FROM {FRESHNESS_TABLE}")
         cur.executemany(
             f"""
@@ -627,7 +655,7 @@ def warehouse_mirror_freshness(context: AssetExecutionContext) -> Nothing:
     materializations = fetch_latest_materializations(context.instance, specs)
     recorded_at = datetime.now(timezone.utc)
 
-    conn = psycopg2.connect(warehouse_url)
+    conn = psycopg2.connect(warehouse_url, options=_WAREHOUSE_CONNECT_OPTIONS)
     try:
         tracked_schemas = {s.schema_name for s in specs}
         extra_specs, extra_times = discover_warehouse_extra_specs(conn, tracked_schemas)
