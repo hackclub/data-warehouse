@@ -161,7 +161,7 @@ def test_render_rollback_sql_resets_cluster_and_reloads_before_role_reset():
     )
     reset_sys = stmt_only.index("ALTER SYSTEM RESET log_statement;")
     reload_pos = stmt_only.index("SELECT pg_reload_conf();")
-    source_guard = stmt_only.index("v_source IN ('session', 'user', 'database')")
+    source_guard = stmt_only.index("v_source NOT IN ('default', 'configuration file')")
     val_guard = stmt_only.index("v_setting <> 'none'")
     reset_role = stmt_only.index('ALTER ROLE "dagster_app" RESET log_statement;')
     reset_err_role = stmt_only.index('ALTER ROLE "dagster_app" RESET log_min_error_statement;')

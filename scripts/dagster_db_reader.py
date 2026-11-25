@@ -71,7 +71,7 @@ READ_CHECKS = {
 }
 
 # Runs on the app host, sent over stdin. Standard library only. Values stay on the host
-# except the `read_superuser` reply, which this script keeps in memory and never prints.
+# except the `read_superuser` reply (the app's write-capable credentials), which this script keeps in memory and never prints.
 HOST_PROGRAM = r"""
 import json, subprocess, sys
 from pathlib import Path
@@ -373,7 +373,7 @@ def host_call(args: argparse.Namespace, deps: Any, action: str) -> dict[str, Any
 
 
 def read_superuser(args: argparse.Namespace, deps: Any) -> dict[str, Any]:
-    """The superuser's current login from the host, the only source this script trusts."""
+    """The Dagster app's current write-capable login from the host, the only source this script trusts."""
     host = host_call(args, deps, "read_superuser")
     for key in ("password", "role", "database"):
         if not host.get(key):
@@ -442,7 +442,7 @@ def checkout_env_files(parent: Path) -> list[Path]:
 
 
 def scrub_backups(parent: Path, value: str, url: str) -> list[str]:
-    """Point any backup in the checkout that holds the superuser value at the reader.
+    """Point any backup in the checkout that holds the app's write-capable value at the reader.
 
     Everything else in a backup stays, so it can still restore the other names.
     Returns the names of backups still holding the value in some other line.

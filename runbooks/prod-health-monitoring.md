@@ -880,6 +880,12 @@ Postgres logs record the **database role (`user=`)**, the **TCP peer address
 Postgres sees (`client=`)**, and the **client-supplied `application_name`
 (`app=`)**:
 
+- **Excluded-role error and slow-query edge cases:** A deadlock `DETAIL:` line
+  emitted by another (non-excluded) backend follows that backend's own
+  `log_error_verbosity` and can include an excluded role's conflicting query
+  text. Likewise, enabling `log_min_duration_statement` or loading `auto_explain`
+  in the future would log excluded roles' slow statements in full (both remain
+  off/default here).
 - **Superuser bypass limit (cannot be prevented inside PostgreSQL):** No
   PostgreSQL setting can stop a cluster superuser (`postgres`) from disabling
   statement logging in its own session — via `SET log_statement = 'none'` (which

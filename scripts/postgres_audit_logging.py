@@ -162,8 +162,9 @@ def render_rollback_sql(
 
     Resets cluster-level ``ALTER SYSTEM`` settings (unless ``cluster_managed_by_file``
     is True, when the caller already restored ``postgresql.conf``) and reloads FIRST,
-    verifies ``log_statement = 'none'`` from cluster config (rejecting ``session``,
-    ``user``, or ``database`` overrides), and ONLY THEN resets per-role overrides.
+    verifies ``log_statement = 'none'`` with ``pg_settings.source`` in
+    ``('default', 'configuration file')`` (rejecting session, user, database,
+    database user, client, and other overrides), and ONLY THEN resets per-role overrides.
     """
     keys_to_reset = (
         RELOADABLE_KEYS
@@ -193,7 +194,7 @@ def render_rollback_sql(
                 "BEGIN",
                 "  SELECT setting, source INTO v_setting, v_source",
                 "  FROM pg_settings WHERE name = 'log_statement';",
-                "  IF v_source IN ('session', 'user', 'database') THEN",
+                "  IF v_source NOT IN ('default', 'configuration file') THEN",
                 "    RAISE EXCEPTION 'log_statement comes from % override (value %), not cluster config; aborting role reset', v_source, v_setting;",
                 "  END IF;",
                 "  IF v_setting <> 'none' THEN",
