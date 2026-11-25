@@ -715,17 +715,25 @@ Why these settings:
 ### Proposed per-role exclusions (pending approval)
 
 Cluster-level `log_statement = 'all'` applies to every role unless an explicit
-exception is approved and documented here. Note that with PostgreSQL's default
-`log_min_error_statement = error`, **statements that fail** still log their full
-SQL text regardless of `log_statement`; setting `log_min_error_statement = 'panic'`
-on the excluded bulk-write roles is therefore also proposed below so failed bulk
-inserts do not ship raw payloads to the central log store. The following
-exclusions are **proposed, pending approval**:
+exception is approved and documented here. Note that with PostgreSQL's defaults
+(`log_min_error_statement = error` and `log_error_verbosity = default`),
+**statements that fail** still log their full SQL text (`STATEMENT:`) and
+constraint-violation `DETAIL:` lines (such as `Failing row contains (...)` on
+not-null/check violations or `Key (...)=(...)` on unique violations) regardless
+of `log_statement`. Setting both `log_min_error_statement = 'panic'` and
+`log_error_verbosity = 'terse'` on the excluded bulk-write roles is therefore
+proposed below so failed bulk inserts suppress both `STATEMENT:` and `DETAIL:`
+payloads. Even with both settings, the `ERROR:` message line itself is still
+logged (for example `ERROR: null value in column ...` or invalid-type-input
+messages such as `invalid input syntax for type integer: "<bad value>"`). Both
+parameters have PostgreSQL context `superuser`, so non-superuser roles cannot
+change them with `SET`. The following exclusions are **proposed, pending
+approval**:
 
 | Database | Role | Proposed Setting | Scope & Rationale |
 | --- | --- | --- | --- |
-| Warehouse Postgres | `hc_warehouse_dagster` | `ALTER ROLE hc_warehouse_dagster SET log_statement = 'ddl';` and `SET log_min_error_statement = 'panic';` | Applies to **all** sessions of `hc_warehouse_dagster`: scheduled syncs (Sling, dlt, dbt — both writes and reads) and human/agent `bin/warehouse-dbt --elevated` runs (§10). Prevents batched inline `INSERT` literals from shipping row-level PII to the central log store (including on statement failure) and avoids sync-window log spikes, while still logging all DDL (`CREATE`, `ALTER`, `DROP`). Note: `fivetran` is **not** excluded and remains at `log_statement = 'all'`. |
-| Dagster instance Postgres | `dagster_app` (dedicated non-superuser app role) | `ALTER ROLE dagster_app SET log_statement = 'ddl';` and `SET log_min_error_statement = 'panic';` | Dagster writes through SQLAlchemy + `psycopg2`, which interpolates values client-side into SQL literals (`log_parameter_max_length = 0` does not strip them). `event_logs` and `asset_keys.last_materialization` include multi-megabyte JSON payloads (containing emails and tokens) that exceed central log-store per-line and per-stream limits. Moving the Dagster app onto a dedicated non-superuser `dagster_app` role excluded at `'ddl'` (with `log_min_error_statement = 'panic'` so failed inserts do not log payloads either) keeps `postgres` (socket-only after cutover) and `dagster_reader` at `log_statement = 'all'`. |
+| Warehouse Postgres | `hc_warehouse_dagster` | `ALTER ROLE hc_warehouse_dagster SET log_statement = 'ddl';`, `SET log_min_error_statement = 'panic';`, and `SET log_error_verbosity = 'terse';` | Applies to **all** sessions of `hc_warehouse_dagster`: scheduled syncs (Sling, dlt, dbt — both writes and reads) and human/agent `bin/warehouse-dbt --elevated` runs (§10). Prevents batched inline `INSERT` literals and constraint-violation `DETAIL` rows from shipping row-level PII to the central log store and avoids sync-window log spikes, while still logging all DDL (`CREATE`, `ALTER`, `DROP`) and `ERROR:` message lines. Note: `fivetran` is **not** excluded and remains at `log_statement = 'all'`. |
+| Dagster instance Postgres | `dagster_app` (dedicated non-superuser app role) | `ALTER ROLE dagster_app SET log_statement = 'ddl';`, `SET log_min_error_statement = 'panic';`, and `SET log_error_verbosity = 'terse';` | Dagster writes through SQLAlchemy + `psycopg2`, which interpolates values client-side into SQL literals (`log_parameter_max_length = 0` does not strip them). `event_logs` and `asset_keys.last_materialization` include multi-megabyte JSON payloads (containing emails and tokens) that exceed central log-store per-line and per-stream limits. Moving the Dagster app onto a dedicated non-superuser `dagster_app` role excluded at `'ddl'` (plus `log_min_error_statement = 'panic'` and `log_error_verbosity = 'terse'` to suppress `STATEMENT:` and `DETAIL:` row dumps on failed inserts, leaving only the `ERROR:` message line) keeps `postgres` (socket-only after cutover) and `dagster_reader` at `log_statement = 'all'`. |
 
 No role exclusion is proposed on the MCP auth DB (low query volume; all queries
 from `warehouse_mcp_auth` use extended-protocol bind parameters).

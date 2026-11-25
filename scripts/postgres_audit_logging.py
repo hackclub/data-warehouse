@@ -141,6 +141,9 @@ def render_apply_sql(
         lines.append(
             f"ALTER ROLE {_quote_ident(role)} SET log_min_error_statement = 'panic';"
         )
+        lines.append(
+            f"ALTER ROLE {_quote_ident(role)} SET log_error_verbosity = 'terse';"
+        )
     for key in RELOADABLE_KEYS:
         if key not in settings:
             raise KeyError(f"Missing required key {key!r} in {conf_path}")
@@ -153,13 +156,14 @@ def render_rollback_sql(
     role_exclusions: list[tuple[str, str]] | None = None,
     suppress_error_roles: list[str] | None = None,
     reset_connection_logging: bool = False,
+    cluster_managed_by_file: bool = False,
 ) -> str:
     """Render reload-only rollback SQL with safe ordering.
 
-    Resets cluster-level ``ALTER SYSTEM`` settings and reloads FIRST, waits
-    until ``current_setting('log_statement') = 'none'`` (so new sessions of an
-    excluded role can never inherit ``log_statement = 'all'`` during rollback),
-    and ONLY THEN resets per-role overrides.
+    Resets cluster-level ``ALTER SYSTEM`` settings (unless ``cluster_managed_by_file``
+    is True, when the caller already restored ``postgresql.conf``) and reloads FIRST,
+    verifies ``log_statement = 'none'`` from cluster config (rejecting ``session``,
+    ``user``, or ``database`` overrides), and ONLY THEN resets per-role overrides.
     """
     keys_to_reset = (
         RELOADABLE_KEYS
@@ -173,18 +177,27 @@ def render_rollback_sql(
     lines = [
         "-- Roll back PostgreSQL audit logging changes (reload-only, safe cluster-first order)",
     ]
-    for key in keys_to_reset:
-        lines.append(f"ALTER SYSTEM RESET {key};")
+    if not cluster_managed_by_file:
+        for key in keys_to_reset:
+            lines.append(f"ALTER SYSTEM RESET {key};")
     lines.append("SELECT pg_reload_conf();")
     if role_exclusions or suppress_error_roles:
-        # Process SIGHUP between top-level statements before verifying log_statement='none'.
+        # Process SIGHUP between top-level statements before verifying cluster log_statement='none'.
         lines.extend(
             [
                 "SELECT pg_sleep(0.2);",
                 "DO $$",
+                "DECLARE",
+                "  v_setting text;",
+                "  v_source  text;",
                 "BEGIN",
-                "  IF current_setting('log_statement') <> 'none' THEN",
-                "    RAISE EXCEPTION 'log_statement is still % after pg_reload_conf(); aborting role reset', current_setting('log_statement');",
+                "  SELECT setting, source INTO v_setting, v_source",
+                "  FROM pg_settings WHERE name = 'log_statement';",
+                "  IF v_source IN ('session', 'user', 'database') THEN",
+                "    RAISE EXCEPTION 'log_statement comes from % override (value %), not cluster config; aborting role reset', v_source, v_setting;",
+                "  END IF;",
+                "  IF v_setting <> 'none' THEN",
+                "    RAISE EXCEPTION 'log_statement is still % (source %) after pg_reload_conf(); aborting role reset', v_setting, v_source;",
                 "  END IF;",
                 "END $$;",
             ]
@@ -193,6 +206,7 @@ def render_rollback_sql(
         lines.append(f"ALTER ROLE {_quote_ident(role)} RESET log_statement;")
     for role in suppress_error_roles or []:
         lines.append(f"ALTER ROLE {_quote_ident(role)} RESET log_min_error_statement;")
+        lines.append(f"ALTER ROLE {_quote_ident(role)} RESET log_error_verbosity;")
     return "\n".join(lines) + "\n"
 
 
@@ -230,11 +244,14 @@ def evaluate_settings(
     want_roles = dict(expected_exclusions or [])
     got_roles: dict[str, str] = {}
     got_err_roles: dict[str, str] = {}
+    got_verb_roles: dict[str, str] = {}
     for role, cfg in (live_role_overrides or {}).items():
         if "log_statement" in cfg:
             got_roles[role] = cfg["log_statement"]
         if "log_min_error_statement" in cfg:
             got_err_roles[role] = cfg["log_min_error_statement"]
+        if "log_error_verbosity" in cfg:
+            got_verb_roles[role] = cfg["log_error_verbosity"]
 
     for role, want_level in sorted(want_roles.items()):
         got_level = got_roles.get(role)
@@ -259,6 +276,19 @@ def evaluate_settings(
         if role not in want_err:
             errors.append(
                 f"unexpected role override on {role!r}: log_min_error_statement={got_level!r}"
+            )
+
+    want_verb = {role: "terse" for role in (expected_suppress_error_roles or [])}
+    for role, want_level in sorted(want_verb.items()):
+        got_level = got_verb_roles.get(role)
+        if got_level != want_level:
+            errors.append(
+                f"role {role!r} log_error_verbosity: expected {want_level!r}, got {got_level!r}"
+            )
+    for role, got_level in sorted(got_verb_roles.items()):
+        if role not in want_verb:
+            errors.append(
+                f"unexpected role override on {role!r}: log_error_verbosity={got_level!r}"
             )
 
     for err in file_errors or []:
@@ -381,6 +411,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="With --rollback, also reset log_connections, log_disconnections, and log_line_prefix.",
     )
     render_p.add_argument(
+        "--cluster-managed-by-file",
+        action="store_true",
+        help="With --rollback, omit ALTER SYSTEM RESET (use after restoring a custom postgresql.conf file).",
+    )
+    render_p.add_argument(
         "--conf",
         type=Path,
         default=DEFAULT_LOGGING_CONF,
@@ -443,6 +478,7 @@ def main(argv: list[str] | None = None) -> int:
                 role_exclusions=exclusions,
                 suppress_error_roles=suppress_error_roles,
                 reset_connection_logging=args.reset_connection_logging,
+                cluster_managed_by_file=args.cluster_managed_by_file,
             )
         else:
             sql = render_apply_sql(

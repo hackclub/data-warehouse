@@ -130,10 +130,16 @@ def test_runbook_settings_match_logging_conf_and_document_limits():
 
 
 def test_render_apply_sql_pg17_places_role_exclusion_before_cluster_reload():
-    sql = pal.render_apply_sql(17, role_exclusions=[("hc_warehouse_dagster", "ddl")])
+    sql = pal.render_apply_sql(
+        17,
+        role_exclusions=[("hc_warehouse_dagster", "ddl")],
+        suppress_error_roles=["hc_warehouse_dagster"],
+    )
     alter_role_pos = sql.index('ALTER ROLE "hc_warehouse_dagster" SET log_statement = \'ddl\';')
+    alter_err_pos = sql.index('ALTER ROLE "hc_warehouse_dagster" SET log_min_error_statement = \'panic\';')
+    alter_verb_pos = sql.index('ALTER ROLE "hc_warehouse_dagster" SET log_error_verbosity = \'terse\';')
     alter_sys_pos = sql.index("ALTER SYSTEM SET log_statement = 'all';")
-    assert alter_role_pos < alter_sys_pos
+    assert alter_role_pos < alter_err_pos < alter_verb_pos < alter_sys_pos
     assert "ALTER SYSTEM SET log_connections = 'on';" in sql
     assert "ALTER SYSTEM SET log_disconnections = 'on';" in sql
     assert "ALTER SYSTEM SET log_parameter_max_length = '0';" in sql
@@ -155,12 +161,24 @@ def test_render_rollback_sql_resets_cluster_and_reloads_before_role_reset():
     )
     reset_sys = stmt_only.index("ALTER SYSTEM RESET log_statement;")
     reload_pos = stmt_only.index("SELECT pg_reload_conf();")
-    guard_pos = stmt_only.index("current_setting('log_statement') <> 'none'")
+    source_guard = stmt_only.index("v_source IN ('session', 'user', 'database')")
+    val_guard = stmt_only.index("v_setting <> 'none'")
     reset_role = stmt_only.index('ALTER ROLE "dagster_app" RESET log_statement;')
     reset_err_role = stmt_only.index('ALTER ROLE "dagster_app" RESET log_min_error_statement;')
-    assert reset_sys < reload_pos < guard_pos < reset_role < reset_err_role
+    reset_verb_role = stmt_only.index('ALTER ROLE "dagster_app" RESET log_error_verbosity;')
+    assert reset_sys < reload_pos < source_guard < val_guard < reset_role < reset_err_role < reset_verb_role
     assert "ALTER SYSTEM RESET log_parameter_max_length;" in stmt_only
     assert "ALTER SYSTEM RESET log_connections;" not in stmt_only
+
+    file_managed = pal.render_rollback_sql(
+        role_exclusions=[("hc_warehouse_dagster", "ddl")],
+        suppress_error_roles=["hc_warehouse_dagster"],
+        cluster_managed_by_file=True,
+    )
+    assert "ALTER SYSTEM RESET" not in file_managed
+    assert file_managed.index("SELECT pg_reload_conf();") < file_managed.index(
+        'ALTER ROLE "hc_warehouse_dagster" RESET log_statement;'
+    )
 
     full = pal.render_rollback_sql(reset_connection_logging=True)
     assert "ALTER SYSTEM RESET log_connections;" in full

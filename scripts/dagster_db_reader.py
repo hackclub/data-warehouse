@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Keep agents on dagster_reader, a read-only login for the Dagster instance database.
 
-The superuser password belongs only in Coolify's store, the host `.env` and the app
-container. See "The agents' read-only Dagster login" in
+The Dagster app's write-capable database password belongs only in Coolify's store,
+the host `.env` and the app container. See "The agents' read-only Dagster login" in
 runbooks/prod-health-monitoring.md.
 
 Subcommands, run as `PYTHONPATH=. .venv/bin/python scripts/dagster_db_reader.py <command>`:
 
     provision   Create the login, or give it a new password, and save its URL.
-    verify      Check the login and that no agent copy holds the superuser value.
+    verify      Check the login and that no agent copy holds the app's write-capable value.
     push-gate   Before a push to main: stop if the app has variables Coolify's store lacks.
 
 Secrets travel only through stdin or in-process values, never through a command's
