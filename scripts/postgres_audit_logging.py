@@ -100,17 +100,34 @@ def _quote_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def parse_role_names(items: list[str]) -> list[str]:
+    """Validate and deduplicate bare PostgreSQL role names."""
+    parsed: list[str] = []
+    seen: set[str] = set()
+    for raw in items:
+        role = raw.strip()
+        if not ROLE_NAME_RE.match(role):
+            raise ValueError(f"Invalid PostgreSQL role name: {role!r}")
+        if role in seen:
+            raise ValueError(f"Duplicate role {role!r}")
+        seen.add(role)
+        parsed.append(role)
+    return parsed
+
+
 def render_apply_sql(
     pg_major: int,
     role_exclusions: list[tuple[str, str]] | None = None,
+    suppress_error_roles: list[str] | None = None,
     conf_path: Path = DEFAULT_LOGGING_CONF,
 ) -> str:
     """Render idempotent, reload-only SQL to enable access and statement logging.
 
     Note: when applying role exclusions on a live database with active sessions
-    of an excluded role, run ``ALTER ROLE ... SET log_statement`` first and
-    wait for pre-existing sessions of that role to end before reloading
-    cluster-wide ``log_statement = 'all'``.
+    of an excluded role, run ``ALTER ROLE ... SET log_statement`` first, take
+    the DB cutoff ``SELECT clock_timestamp()`` after commit, and wait for
+    pre-existing sessions of that role to end before reloading cluster-wide
+    ``log_statement = 'all'``.
     """
     settings = expected_settings(pg_major, conf_path=conf_path)
     lines = [
@@ -119,6 +136,10 @@ def render_apply_sql(
     for role, level in role_exclusions or []:
         lines.append(
             f"ALTER ROLE {_quote_ident(role)} SET log_statement = {_quote_literal(level)};"
+        )
+    for role in suppress_error_roles or []:
+        lines.append(
+            f"ALTER ROLE {_quote_ident(role)} SET log_min_error_statement = 'panic';"
         )
     for key in RELOADABLE_KEYS:
         if key not in settings:
@@ -130,9 +151,16 @@ def render_apply_sql(
 
 def render_rollback_sql(
     role_exclusions: list[tuple[str, str]] | None = None,
+    suppress_error_roles: list[str] | None = None,
     reset_connection_logging: bool = False,
 ) -> str:
-    """Render reload-only SQL to roll back statement (and optionally connection) logging."""
+    """Render reload-only rollback SQL with safe ordering.
+
+    Resets cluster-level ``ALTER SYSTEM`` settings and reloads FIRST, waits
+    until ``current_setting('log_statement') = 'none'`` (so new sessions of an
+    excluded role can never inherit ``log_statement = 'all'`` during rollback),
+    and ONLY THEN resets per-role overrides.
+    """
     keys_to_reset = (
         RELOADABLE_KEYS
         if reset_connection_logging
@@ -143,13 +171,33 @@ def render_rollback_sql(
         )
     )
     lines = [
-        "-- Roll back PostgreSQL audit logging changes (reload-only, no restart)",
+        "-- Roll back PostgreSQL audit logging changes (reload-only, safe cluster-first order)",
     ]
     for key in keys_to_reset:
         lines.append(f"ALTER SYSTEM RESET {key};")
+    lines.append("SELECT pg_reload_conf();")
+    if role_exclusions or suppress_error_roles:
+        # Wait briefly for SIGHUP reload to propagate before resetting role overrides.
+        lines.extend(
+            [
+                "DO $$",
+                "DECLARE",
+                "  i int := 0;",
+                "BEGIN",
+                "  WHILE current_setting('log_statement') <> 'none' AND i < 40 LOOP",
+                "    PERFORM pg_sleep(0.05);",
+                "    i := i + 1;",
+                "  END LOOP;",
+                "  IF current_setting('log_statement') <> 'none' THEN",
+                "    RAISE EXCEPTION 'log_statement is still % after pg_reload_conf(); aborting role reset', current_setting('log_statement');",
+                "  END IF;",
+                "END $$;",
+            ]
+        )
     for role, _ in role_exclusions or []:
         lines.append(f"ALTER ROLE {_quote_ident(role)} RESET log_statement;")
-    lines.append("SELECT pg_reload_conf();")
+    for role in suppress_error_roles or []:
+        lines.append(f"ALTER ROLE {_quote_ident(role)} RESET log_min_error_statement;")
     return "\n".join(lines) + "\n"
 
 
@@ -169,6 +217,7 @@ def evaluate_settings(
     pg_major: int,
     live_role_overrides: dict[str, dict[str, str]] | None = None,
     expected_exclusions: list[tuple[str, str]] | None = None,
+    expected_suppress_error_roles: list[str] | None = None,
     file_errors: list[str] | None = None,
     conf_path: Path = DEFAULT_LOGGING_CONF,
 ) -> list[str]:
@@ -185,9 +234,12 @@ def evaluate_settings(
 
     want_roles = dict(expected_exclusions or [])
     got_roles: dict[str, str] = {}
+    got_err_roles: dict[str, str] = {}
     for role, cfg in (live_role_overrides or {}).items():
         if "log_statement" in cfg:
             got_roles[role] = cfg["log_statement"]
+        if "log_min_error_statement" in cfg:
+            got_err_roles[role] = cfg["log_min_error_statement"]
 
     for role, want_level in sorted(want_roles.items()):
         got_level = got_roles.get(role)
@@ -201,6 +253,19 @@ def evaluate_settings(
                 f"unexpected role override on {role!r}: log_statement={got_level!r}"
             )
 
+    want_err = {role: "panic" for role in (expected_suppress_error_roles or [])}
+    for role, want_level in sorted(want_err.items()):
+        got_level = got_err_roles.get(role)
+        if got_level != want_level:
+            errors.append(
+                f"role {role!r} log_min_error_statement: expected {want_level!r}, got {got_level!r}"
+            )
+    for role, got_level in sorted(got_err_roles.items()):
+        if role not in want_err:
+            errors.append(
+                f"unexpected role override on {role!r}: log_min_error_statement={got_level!r}"
+            )
+
     for err in file_errors or []:
         errors.append(f"pg_file_settings error: {err}")
     return errors
@@ -210,6 +275,7 @@ def check_live_database(
     dsn: str,
     pg_major: int,
     expected_exclusions: list[tuple[str, str]] | None = None,
+    expected_suppress_error_roles: list[str] | None = None,
     conf_path: Path = DEFAULT_LOGGING_CONF,
 ) -> dict[str, object]:
     """Read-only check of live PostgreSQL logging settings and role overrides."""
@@ -241,6 +307,8 @@ def check_live_database(
                 live_role_overrides[role_name] = parse_setconfig(setconfig)
 
             file_errors: list[str] = []
+            file_settings_checked = True
+            warnings: list[str] = []
             try:
                 cur.execute(
                     """
@@ -252,8 +320,10 @@ def check_live_database(
                 for src, line, name, err in cur.fetchall():
                     file_errors.append(f"{src}:{line} ({name}): {err}")
             except psycopg2.errors.InsufficientPrivilege:
-                # Non-superuser readers cannot read pg_file_settings; skip cleanly.
-                pass
+                file_settings_checked = False
+                warnings.append(
+                    "pg_file_settings could not be read (insufficient privilege; run as superuser to check config-file syntax errors)"
+                )
     finally:
         conn.close()
 
@@ -262,14 +332,17 @@ def check_live_database(
         pg_major=pg_major,
         live_role_overrides=live_role_overrides,
         expected_exclusions=expected_exclusions,
+        expected_suppress_error_roles=expected_suppress_error_roles,
         file_errors=file_errors,
         conf_path=conf_path,
     )
     return {
         "ok": len(errors) == 0,
         "pg_major": pg_major,
+        "file_settings_checked": file_settings_checked,
         "settings": live_settings,
         "role_overrides": live_role_overrides,
+        "warnings": warnings,
         "errors": errors,
     }
 
@@ -294,6 +367,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="ROLE=LEVEL",
         help="Proposed/approved per-role log_statement override (e.g. hc_warehouse_dagster=ddl).",
+    )
+    render_p.add_argument(
+        "--suppress-error-role",
+        action="append",
+        default=[],
+        metavar="ROLE",
+        help="Proposed/approved role to set log_min_error_statement='panic' so failed bulk inserts do not log payloads.",
     )
     render_p.add_argument(
         "--rollback",
@@ -341,6 +421,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Expected per-role log_statement override (e.g. hc_warehouse_dagster=ddl).",
     )
     check_p.add_argument(
+        "--suppress-error-role",
+        action="append",
+        default=[],
+        metavar="ROLE",
+        help="Expected role with log_min_error_statement='panic'.",
+    )
+    check_p.add_argument(
         "--conf",
         type=Path,
         default=DEFAULT_LOGGING_CONF,
@@ -353,17 +440,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     exclusions = parse_role_exclusions(args.exclude_role)
+    suppress_error_roles = parse_role_names(args.suppress_error_role)
 
     if args.command == "render":
         if args.rollback:
             sql = render_rollback_sql(
                 role_exclusions=exclusions,
+                suppress_error_roles=suppress_error_roles,
                 reset_connection_logging=args.reset_connection_logging,
             )
         else:
             sql = render_apply_sql(
                 pg_major=args.pg_major,
                 role_exclusions=exclusions,
+                suppress_error_roles=suppress_error_roles,
                 conf_path=args.conf,
             )
         sys.stdout.write(sql)
@@ -378,6 +468,7 @@ def main(argv: list[str] | None = None) -> int:
             dsn=dsn,
             pg_major=args.pg_major,
             expected_exclusions=exclusions,
+            expected_suppress_error_roles=suppress_error_roles,
             conf_path=args.conf,
         )
         sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n")

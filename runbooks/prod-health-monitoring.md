@@ -561,18 +561,20 @@ The syncs are not affected either way.
 ## 11. The agents' read-only Dagster login
 
 `PROD_DAGSTER_DB_URL` in the parent `.env` and the Vaultwarden `.env` note logs in as
-`dagster_reader`, which has `pg_read_all_data` and nothing else. The superuser value
-belongs only in Coolify's store, the host `.env` and the app container. The app does
-not use this variable, so nothing here touches it.
+`dagster_reader`, which has `pg_read_all_data` and nothing else. The Dagster app's
+write-capable database credentials (`POSTGRES_USERNAME` / `POSTGRES_PASSWORD`) belong
+only in Coolify's store, the host `.env` and the app container (not in `PROD_DAGSTER_DB_URL`).
+The app does not use `PROD_DAGSTER_DB_URL`, so nothing here touches it.
 
 | Action | How |
 | --- | --- |
 | §1, §2, §5 queries, freshness checks, `scripts/ysws_true_spend_preview.py` | `PROD_DAGSTER_DB_URL` |
 | Launch, retry or cancel a run, turn a schedule on or off | Dagster GraphQL (`scripts/cancel_orphaned_runs.py`), never SQL |
-| Superuser work on this database | The database's local socket on the host: `docker exec -i -u postgres <container> psql`. Only for a request that asks for it |
+| Superuser work on this database | The database's local socket on the host: `docker exec -i -u postgres <container> psql -U postgres`. Only for a request that asks for it |
 
-Do not copy the superuser URL back into the parent `.env` or the vault note, even to
-restore a backup: `provision` also changes the line in the checkout's `.env*` backups.
+Do not copy the Dagster app's write-capable credentials back into the parent `.env` or
+the vault note, even to restore a backup: `provision` also changes the line in the
+checkout's `.env*` backups.
 
 ### What the login can still do
 
@@ -616,13 +618,15 @@ in a private `@args` file, not in this repo. `--ssh` is the command that reaches
   app's variable names with the store's, listed one per line, and stops if the app has
   any the store lacks. Do not push until those are resolved.
 
-**Rotating the superuser password:** read the current value from the host, not the
-parent `.env`. The parent URL holds the reader's password and only says where the
-database is.
+**Rotating the Dagster app DB password:** read the current app credentials from the
+host, not the parent `.env`. The parent URL holds the reader's password and only says
+where the database is. `scripts/dagster_db_reader.py` always connects over the local
+socket as `-U postgres` regardless of `POSTGRES_USERNAME`.
 
-**Roll back:** copy the superuser value from the host `.env` into `PROD_DAGSTER_DB_URL`
+**Roll back:** restore the write-capable URL from the host `.env` into `PROD_DAGSTER_DB_URL`
 in the parent `.env` and the vault note, in-process, then drop the login over the
-socket with `DROP ROLE dagster_reader;`. Nothing in the app depends on the login.
+socket (`-U postgres`) with `DROP ROLE dagster_reader;`. Nothing in the app depends on
+the login.
 
 ## 12. Direct database access logging
 
@@ -697,8 +701,9 @@ Why these settings:
   are still logged verbatim; password-provisioning scripts
   (`scripts/dagster_db_reader.py`, `scripts/provision_warehouse_agent_login.py`,
   and `scripts/provision_warehouse_reader.py`) send only SCRAM-SHA-256 verifiers
-  and suppress statement logging (`SET [LOCAL] log_statement = 'none'`) for the
-  role DDL transaction.
+  and suppress statement and error-statement logging
+  (`SET [LOCAL] log_statement = 'none'`, `SET [LOCAL] log_min_error_statement = 'panic'`)
+  for the role DDL transaction.
 - `log_line_prefix` tags every session log line with timestamp (`%m`), backend PID
   (`%p`), Postgres role (`%u`), database (`%d`), `application_name` (`%a`), and
   peer address/port (`%r`). `%q` suppresses the session fields on non-session
@@ -710,13 +715,17 @@ Why these settings:
 ### Proposed per-role exclusions (pending approval)
 
 Cluster-level `log_statement = 'all'` applies to every role unless an explicit
-exception is approved and documented here. The following exclusions are
-**proposed, pending approval**:
+exception is approved and documented here. Note that with PostgreSQL's default
+`log_min_error_statement = error`, **statements that fail** still log their full
+SQL text regardless of `log_statement`; setting `log_min_error_statement = 'panic'`
+on the excluded bulk-write roles is therefore also proposed below so failed bulk
+inserts do not ship raw payloads to the central log store. The following
+exclusions are **proposed, pending approval**:
 
 | Database | Role | Proposed Setting | Scope & Rationale |
 | --- | --- | --- | --- |
-| Warehouse Postgres | `hc_warehouse_dagster` | `ALTER ROLE hc_warehouse_dagster SET log_statement = 'ddl';` | Applies to **all** sessions of `hc_warehouse_dagster`: scheduled syncs (Sling, dlt, dbt — both writes and reads) and human/agent `bin/warehouse-dbt --elevated` runs (§10). Prevents batched inline `INSERT` literals from shipping row-level PII to the central log store and avoids sync-window log spikes, while still logging all DDL (`CREATE`, `ALTER`, `DROP`). Note: `fivetran` is **not** excluded and remains at `log_statement = 'all'`. |
-| Dagster instance Postgres | `dagster_app` (dedicated non-superuser app role) | `ALTER ROLE dagster_app SET log_statement = 'ddl';` | Dagster writes through SQLAlchemy + `psycopg2`, which interpolates values client-side into SQL literals (`log_parameter_max_length = 0` does not strip them). `event_logs` and `asset_keys.last_materialization` include multi-megabyte JSON payloads (containing emails and tokens) that exceed central log-store per-line and per-stream limits. Moving the Dagster app onto a dedicated non-superuser `dagster_app` role excluded at `'ddl'` keeps `postgres` (socket-only) and `dagster_reader` at `log_statement = 'all'` while preventing event payloads from ever entering the log store. |
+| Warehouse Postgres | `hc_warehouse_dagster` | `ALTER ROLE hc_warehouse_dagster SET log_statement = 'ddl';` and `SET log_min_error_statement = 'panic';` | Applies to **all** sessions of `hc_warehouse_dagster`: scheduled syncs (Sling, dlt, dbt — both writes and reads) and human/agent `bin/warehouse-dbt --elevated` runs (§10). Prevents batched inline `INSERT` literals from shipping row-level PII to the central log store (including on statement failure) and avoids sync-window log spikes, while still logging all DDL (`CREATE`, `ALTER`, `DROP`). Note: `fivetran` is **not** excluded and remains at `log_statement = 'all'`. |
+| Dagster instance Postgres | `dagster_app` (dedicated non-superuser app role) | `ALTER ROLE dagster_app SET log_statement = 'ddl';` and `SET log_min_error_statement = 'panic';` | Dagster writes through SQLAlchemy + `psycopg2`, which interpolates values client-side into SQL literals (`log_parameter_max_length = 0` does not strip them). `event_logs` and `asset_keys.last_materialization` include multi-megabyte JSON payloads (containing emails and tokens) that exceed central log-store per-line and per-stream limits. Moving the Dagster app onto a dedicated non-superuser `dagster_app` role excluded at `'ddl'` (with `log_min_error_statement = 'panic'` so failed inserts do not log payloads either) keeps `postgres` (socket-only after cutover) and `dagster_reader` at `log_statement = 'all'`. |
 
 No role exclusion is proposed on the MCP auth DB (low query volume; all queries
 from `warehouse_mcp_auth` use extended-protocol bind parameters).
@@ -735,38 +744,61 @@ not clear them. The MCP auth database runs stock `postgres:18-alpine` with a
 persistent data volume, so `ALTER SYSTEM` writes to `postgresql.auto.conf` on
 that volume and survives container restarts and redeploys.
 
+**Logical restore durability limit:** Roles (`dagster_app`), per-role
+`ALTER ROLE ... SET` overrides, and table ownership live in the cluster catalog,
+and `ALTER SYSTEM` lives in `postgresql.auto.conf`. Restoring a single database
+from a logical `pg_dump` does **not** restore cluster roles, role settings, or
+`postgresql.auto.conf`; paste the logging settings into Coolify's Custom Postgres
+Configuration and re-apply roles, table ownership, and approved overrides after
+any logical restore.
+
 All logging parameters above (`log_connections`, `log_disconnections`,
 `log_statement`, `log_parameter_max_length`, `log_parameter_max_length_on_error`,
 `log_line_prefix`) activate immediately via `SELECT pg_reload_conf();` with **no
 database restart**.
 
-**Mandatory ordering for role exclusions:** `ALTER ROLE ... SET log_statement`
-applies only to **new** sessions, whereas cluster-wide `log_statement = 'all'`
-applies immediately on reload to **existing** sessions. Always:
+**Mandatory ordering for role exclusions (apply and rollback):**
+`ALTER ROLE ... SET log_statement` applies only to **new** sessions, whereas
+cluster-wide `log_statement = 'all'` applies immediately on reload to
+**existing** sessions.
 
-1. Apply the approved `ALTER ROLE ... SET log_statement = 'ddl'` (and for the
-   Dagster DB, cut the Dagster app over to `dagster_app`) **first**.
-2. Wait until **zero** pre-existing sessions of that role (or old Dagster app
-   TCP sessions as `postgres`) remain in `pg_stat_activity`.
-3. Update the config file idempotently, confirm
-   `SELECT sourcefile, sourceline, name, setting, error FROM pg_file_settings WHERE error IS NOT NULL;`
-   returns zero rows, and **only then** run `SELECT pg_reload_conf();`.
+- **Apply order:**
+  1. Apply the approved `ALTER ROLE ... SET log_statement = 'ddl'` (and
+     `SET log_min_error_statement = 'panic'`) first; for the Dagster DB, transfer
+     ownership of the `public` tables **only** (owned sequences follow
+     automatically) one table at a time with `SET lock_timeout = '5s'` in a quiet
+     window after confirming no `pg_dump` or long transaction is running, then
+     cut the Dagster app over to `dagster_app`.
+  2. Take the cutoff timestamp from the database **after** the `ALTER ROLE`
+     commits (`SELECT clock_timestamp()`), and wait until **zero** pre-existing
+     sessions of that role (with `backend_start <= cutoff`, or old Dagster app
+     TCP sessions as `postgres`) remain in `pg_stat_activity`.
+  3. Update the config file idempotently, confirm
+     `SELECT sourcefile, sourceline, name, setting, error FROM pg_file_settings WHERE error IS NOT NULL;`
+     returns zero rows, and **only then** run `SELECT pg_reload_conf();`.
+- **Rollback order (cluster-first):**
+  1. Reset cluster-level `log_statement` (via `ALTER SYSTEM RESET` or restoring
+     the backed-up config file) and run `SELECT pg_reload_conf();` **first**.
+  2. Confirm `SHOW log_statement;` returns `none`.
+  3. **Only then** reset per-role overrides (`ALTER ROLE ... RESET log_statement`
+     / `RESET log_min_error_statement`), so no new session of an excluded role
+     can ever inherit `log_statement = 'all'` during the rollback window.
 
 Use `scripts/postgres_audit_logging.py` to render idempotent apply/rollback SQL
 or run a read-only settings check:
 
 ```bash
 # Render reload-only apply SQL (pg17 for warehouse/dagster, pg18 for mcp-auth)
-.venv/bin/python scripts/postgres_audit_logging.py render --pg-major 17 --exclude-role hc_warehouse_dagster=ddl
-.venv/bin/python scripts/postgres_audit_logging.py render --pg-major 17 --exclude-role dagster_app=ddl
+.venv/bin/python scripts/postgres_audit_logging.py render --pg-major 17 --exclude-role hc_warehouse_dagster=ddl --suppress-error-role hc_warehouse_dagster
+.venv/bin/python scripts/postgres_audit_logging.py render --pg-major 17 --exclude-role dagster_app=ddl --suppress-error-role dagster_app
 .venv/bin/python scripts/postgres_audit_logging.py render --pg-major 18
 
-# Render exact rollback SQL
-.venv/bin/python scripts/postgres_audit_logging.py render --pg-major 17 --exclude-role hc_warehouse_dagster=ddl --rollback
+# Render safe cluster-first rollback SQL
+.venv/bin/python scripts/postgres_audit_logging.py render --pg-major 17 --exclude-role hc_warehouse_dagster=ddl --suppress-error-role hc_warehouse_dagster --rollback
 .venv/bin/python scripts/postgres_audit_logging.py render --pg-major 18 --rollback
 
 # Read-only live settings and role-override drift check
-.venv/bin/python scripts/postgres_audit_logging.py check --dsn-env WAREHOUSE_COOLIFY_URL --pg-major 17 --exclude-role hc_warehouse_dagster=ddl
+.venv/bin/python scripts/postgres_audit_logging.py check --dsn-env WAREHOUSE_COOLIFY_URL --pg-major 17 --exclude-role hc_warehouse_dagster=ddl --suppress-error-role hc_warehouse_dagster
 ```
 
 ### Verify live settings (read-only)
@@ -858,8 +890,12 @@ Postgres sees (`client=`)**, and the **client-supplied `application_name`
   queries (including `warehouse-mcp`, which uses a single-line
   `/* warehouse-mcp <caller> */` comment prefix) keep `user=`, `db=`, `app=`,
   `client=`, and the full statement in one record; multi-line SQL records carry
-  `user=`/`client=` on the first line only. Stitching continuation lines requires
-  multiline filtering in the Coolify-managed log drain (future follow-up).
+  `user=`/`client=` on the first line only. In particular, Metabase prepends a
+  `-- Metabase::...\n` comment line, so Metabase SQL appears on unprefixed `\t`
+  continuation lines and must be paired by timestamp with the preceding
+  `-- Metabase` line that carries `user=metabase` and `client=`. Stitching
+  continuation lines requires multiline filtering in the Coolify-managed log
+  drain (future follow-up).
 - **Shared roles and untrusted `app=`:** Direct database roles (`postgres`,
   `dagster_reader`, `dagster_app`, `hc_warehouse_agent`, `hc_warehouse_mcp`,
   `warehouse_mcp_auth`, and service roles) may be shared across operators or

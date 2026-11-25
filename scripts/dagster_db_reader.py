@@ -241,7 +241,8 @@ def render_role_sql(verifier: str) -> str:
         for name, value in ROLE_SETTINGS.items()
     )
     return (
-        "SET log_statement = 'none'; SET log_min_duration_statement = -1;\n"
+        "SET log_statement = 'none'; SET log_min_duration_statement = -1; "
+        "SET log_min_error_statement = 'panic';\n"
         "BEGIN;\n"
         f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{READER_ROLE}')"
         f" THEN CREATE ROLE {READER_ROLE}; END IF; END $$;\n"
@@ -384,14 +385,14 @@ def read_superuser(args: argparse.Namespace, deps: Any) -> dict[str, Any]:
 
 
 def apply_role_sql(args: argparse.Namespace, deps: Any, host: dict[str, Any], sql: str) -> None:
-    """Over the database's local socket, so no password is needed and none travels."""
+    """Over the database's local socket as postgres, so no password is needed and none travels."""
     if not SAFE_NAME.match(args.db_container):
         raise StepFailure("apply_role", "unexpected container name")
     deps.run(
         shlex.split(args.ssh)
         + ["docker", "exec", "-i", "-u", "postgres", args.db_container]
         + ["psql", "-X", "-q", "-At", "-v", "ON_ERROR_STOP=1"]
-        + ["-U", host["role"], "-d", host["database"]],
+        + ["-U", "postgres", "-d", host["database"]],
         step="apply_role",
         input_bytes=sql.encode(),
     )

@@ -148,13 +148,19 @@ def test_render_apply_sql_pg18_uses_all_for_log_connections():
     assert sql.rstrip().endswith("SELECT pg_reload_conf();")
 
 
-def test_render_rollback_sql_defaults_to_statement_only_and_supports_full_reset():
-    stmt_only = pal.render_rollback_sql(role_exclusions=[("hc_warehouse_dagster", "ddl")])
-    assert "ALTER SYSTEM RESET log_statement;" in stmt_only
+def test_render_rollback_sql_resets_cluster_and_reloads_before_role_reset():
+    stmt_only = pal.render_rollback_sql(
+        role_exclusions=[("dagster_app", "ddl")],
+        suppress_error_roles=["dagster_app"],
+    )
+    reset_sys = stmt_only.index("ALTER SYSTEM RESET log_statement;")
+    reload_pos = stmt_only.index("SELECT pg_reload_conf();")
+    guard_pos = stmt_only.index("current_setting('log_statement') <> 'none'")
+    reset_role = stmt_only.index('ALTER ROLE "dagster_app" RESET log_statement;')
+    reset_err_role = stmt_only.index('ALTER ROLE "dagster_app" RESET log_min_error_statement;')
+    assert reset_sys < reload_pos < guard_pos < reset_role < reset_err_role
     assert "ALTER SYSTEM RESET log_parameter_max_length;" in stmt_only
     assert "ALTER SYSTEM RESET log_connections;" not in stmt_only
-    assert 'ALTER ROLE "hc_warehouse_dagster" RESET log_statement;' in stmt_only
-    assert stmt_only.rstrip().endswith("SELECT pg_reload_conf();")
 
     full = pal.render_rollback_sql(reset_connection_logging=True)
     assert "ALTER SYSTEM RESET log_connections;" in full
@@ -211,7 +217,9 @@ def test_provisioning_scripts_suppress_statement_logging_for_scram_ddl():
         agent_sql = pwal.render_setup_sql(login, verifier)
         assert "SET LOCAL log_statement = 'none';" in agent_sql
         assert "SET LOCAL log_min_duration_statement = -1;" in agent_sql
+        assert "SET LOCAL log_min_error_statement = 'panic';" in agent_sql
         assert agent_sql.index("SET LOCAL log_statement = 'none';") < agent_sql.index(verifier)
+        assert agent_sql.index("SET LOCAL log_min_error_statement = 'panic';") < agent_sql.index(verifier)
 
     reader_sql = pwr._render_reader_setup_sql(
         role_name="hc_warehouse_reader",
@@ -222,13 +230,17 @@ def test_provisioning_scripts_suppress_statement_logging_for_scram_ddl():
     )
     assert "SET LOCAL log_statement = 'none';" in reader_sql
     assert "SET LOCAL log_min_duration_statement = -1;" in reader_sql
+    assert "SET LOCAL log_min_error_statement = 'panic';" in reader_sql
     assert reader_sql.index("SET LOCAL log_statement = 'none';") < reader_sql.index(verifier)
+    assert reader_sql.index("SET LOCAL log_min_error_statement = 'panic';") < reader_sql.index(verifier)
 
 
 def test_warehouse_mcp_attribution_comment_is_single_line():
-    # Static check so root pytest verifies B2 even when psycopg_pool isn't installed.
+    # Static check so root pytest verifies B2/R1 even when psycopg_pool isn't installed.
     db_src = (MCP_DIR / "db.py").read_text(encoding="utf-8")
     assert "-- warehouse-mcp" not in db_src, (
         "warehouse-mcp/db.py must not use '-- warehouse-mcp ...\\n' which splits SQL onto an unprefixed log line"
     )
     assert "/* warehouse-mcp " in db_src
+    assert "_SAFE_ATTRIBUTION_EXTRA" in db_src
+    assert "MAX_ATTRIBUTION_NAME_LENGTH" in db_src

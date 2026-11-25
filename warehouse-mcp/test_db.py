@@ -224,21 +224,51 @@ def test_attribution_comment_stays_single_line_and_safe():
     assert comment == "/* warehouse-mcp Ada Lovelace */"
     assert "\n" not in comment
 
-    sanitized = warehouse_db._format_attribution_comment("Ada\n*/DROP", "/*Lovelace\r")
-    assert "\n" not in sanitized
-    assert "\r" not in sanitized
-    assert sanitized.startswith("/* warehouse-mcp ")
-    assert sanitized.endswith(" */")
-    assert "*/" not in sanitized[2:-2]
-    assert "/*" not in sanitized[2:-2]
+    # Unicode letters, apostrophes, hyphens, periods, and digits are preserved.
+    assert (
+        warehouse_db._format_attribution_comment("José", "O'Brien-Jr. 2")
+        == "/* warehouse-mcp José O'Brien-Jr. 2 */"
+    )
+
+    # Length is capped.
+    long_comment = warehouse_db._format_attribution_comment("A" * 200, "B" * 200)
+    assert len(long_comment) <= len("/* warehouse-mcp  */") + warehouse_db.MAX_ATTRIBUTION_NAME_LENGTH
+
+    # Adversarial inputs cannot close or nest block comments, inject newlines/NULs, or escape.
+    adversarial = [
+        ("**//", "test"),
+        ("/**/", "test"),
+        ("*/", "/*"),
+        ("Ada\n*/DROP", "/*Lovelace\r"),
+        ("Bad\x00Name", "End\x00"),
+        ("**//set default_transaction_read_only=off; commit; create table injected(); select 2 as ok", "--"),
+    ]
+    for first, last in adversarial:
+        out = warehouse_db._format_attribution_comment(first, last)
+        assert out.startswith("/* warehouse-mcp") and out.endswith(" */")
+        inner = out[2:-2]
+        assert "/*" not in inner
+        assert "*/" not in inner
+        assert "\n" not in inner and "\r" not in inner and "\x00" not in inner
+        assert "*" not in inner and "/" not in inner and ";" not in inner
 
 
-def test_execute_query_with_user_info_keeps_single_line(server, monkeypatch):
+def test_execute_query_with_user_info_blocks_comment_escape_injection(server, monkeypatch):
+    exploit_first = (
+        "**//set default_transaction_read_only=off; commit; "
+        "create table injected(); select 2 as ok"
+    )
+
     async def use(database):
         rows, _ = await database.execute_query(
             "SELECT /* marker_mcp_single_line */ 1 AS ok",
-            user_info=("Test", "Caller"),
+            user_info=(exploit_first, "--"),
         )
-        return rows[0]
+        check_rows, _ = await database.execute_query(
+            "SELECT to_regclass('injected') AS tbl"
+        )
+        return rows[0], check_rows[0]
 
-    assert _on_database(server.mcp_url(), monkeypatch, use) == {"ok": 1}
+    result, check = _on_database(server.mcp_url(), monkeypatch, use)
+    assert result == {"ok": 1}
+    assert check == {"tbl": None}

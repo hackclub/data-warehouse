@@ -311,16 +311,39 @@ def make_readonly_url(url: str) -> str:
     return make_conninfo(**settings)
 
 
+MAX_ATTRIBUTION_NAME_LENGTH = 100
+_SAFE_ATTRIBUTION_EXTRA = frozenset(" .'-")
+
+
 def _format_attribution_comment(firstname: str, lastname: str) -> str:
     """Build a single-line SQL block comment for caller attribution.
 
     Uses ``/* ... */`` without a newline so PostgreSQL logs the caller comment
     and the SQL statement on the same prefixed log line instead of splitting
     the statement onto an unprefixed ``\\t`` continuation line.
+
+    Applies a strict character allow-list (Unicode letters, ASCII digits,
+    space, ``.``, ``'``, ``-``) and caps length so no caller name can contain
+    ``/*``, ``*/``, newlines, NUL bytes, or break out of the block comment.
     """
     raw = f"{firstname} {lastname}"
-    cleaned = re.sub(r"[\r\n]+", " ", raw).replace("/*", "").replace("*/", "")
-    cleaned = " ".join(cleaned.split())
+    allowed = "".join(
+        ch
+        for ch in raw
+        if (
+            unicodedata.category(ch).startswith("L")
+            or ("0" <= ch <= "9")
+            or ch in _SAFE_ATTRIBUTION_EXTRA
+        )
+    )
+    cleaned = " ".join(allowed.split())
+    while "--" in cleaned:
+        cleaned = cleaned.replace("--", "-")
+    cleaned = cleaned[:MAX_ATTRIBUTION_NAME_LENGTH].strip()
+    # Defense-in-depth: guarantee the comment body can never open/close a block comment
+    # or start a SQL line comment.
+    assert "/*" not in cleaned and "*/" not in cleaned and "--" not in cleaned
+    assert "\n" not in cleaned and "\r" not in cleaned and "\x00" not in cleaned
     return f"/* warehouse-mcp {cleaned} */" if cleaned else "/* warehouse-mcp */"
 
 
@@ -394,7 +417,7 @@ class Database:
         Raises:
             SQLValidationError: If SQL contains forbidden statements
         """
-        # Validate SQL before execution
+        # Validate user SQL before execution
         validate_sql(sql)
 
         # Prefix SQL with single-line user attribution comment so Postgres
@@ -402,6 +425,8 @@ class Database:
         if user_info:
             firstname, lastname = user_info
             sql = f"{_format_attribution_comment(firstname, lastname)} {sql}"
+            # Re-validate the final SQL text sent to PostgreSQL (defense in depth).
+            validate_sql(sql)
 
         return await self._run(sql, None, max_rows)
 
