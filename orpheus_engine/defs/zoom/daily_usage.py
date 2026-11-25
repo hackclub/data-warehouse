@@ -4,8 +4,14 @@ from typing import Any, Dict, List
 import dagster as dg
 import requests
 
-from orpheus_engine.defs.shared.zoom import ZoomAuthError, ZoomDailyQuotaError, ZoomResource
-from orpheus_engine.defs.zoom.db import SCHEMA_NAME, ensure_table, get_db_connection, upsert_rows
+from orpheus_engine.defs.shared.zoom import ZoomResource
+from orpheus_engine.defs.zoom.db import (
+    SCHEMA_NAME,
+    ensure_table,
+    flush_partial_on_abort,
+    get_db_connection,
+    upsert_rows,
+)
 
 
 COLUMNS = [
@@ -52,41 +58,37 @@ def zoom_daily_usage(
     now = datetime.now(timezone.utc)
     seen: dict[str, tuple] = {}
 
-    def _flush_seen() -> list[tuple]:
-        flushed = list(seen.values())
-        if not flushed:
-            return flushed
+    def _flush_seen() -> int:
+        if not seen:
+            return 0
         conn = get_db_connection()
         try:
             update_cols = [c for c in COLUMNS if c != "date"]
-            upsert_rows(conn, "daily_usage", COLUMNS, flushed, "date", update_cols)
+            upsert_rows(conn, "daily_usage", COLUMNS, list(seen.values()), "date", update_cols)
         finally:
             conn.close()
-        return flushed
+        return len(seen)
 
-    for months_ago in range(6):
-        year = now.year
-        month = now.month - months_ago
-        if month <= 0:
-            month += 12
-            year -= 1
-        try:
-            days = zoom.fetch_daily_usage(year=year, month=month, log=log)
-            for day in days:
-                row = _row(day, run_ts)
-                seen[row[0]] = row
-            log.info(f"Fetched {len(days)} days for {year}-{month:02d}")
-        except (ZoomDailyQuotaError, ZoomAuthError, requests.exceptions.HTTPError):
+    with flush_partial_on_abort(_flush_seen, log, "daily usage rows"):
+        for months_ago in range(6):
+            year = now.year
+            month = now.month - months_ago
+            if month <= 0:
+                month += 12
+                year -= 1
             try:
-                saved = _flush_seen()
-                if saved:
-                    log.info(f"Persisted {len(saved)} daily usage rows fetched before abort")
-            except Exception as flush_err:
-                log.error(f"Failed to persist partial daily usage rows before abort: {flush_err}")
-            raise
-        except Exception as e:
-            log.warning(f"Could not fetch {year}-{month:02d}: {e}")
-    rows = _flush_seen()
+                days = zoom.fetch_daily_usage(year=year, month=month, log=log)
+                for day in days:
+                    row = _row(day, run_ts)
+                    seen[row[0]] = row
+                log.info(f"Fetched {len(days)} days for {year}-{month:02d}")
+            except requests.exceptions.HTTPError:
+                # Includes ZoomFatalError. Failing visibly beats a silent month gap.
+                raise
+            except Exception as e:
+                log.warning(f"Could not fetch {year}-{month:02d}: {e}")
+    _flush_seen()
+    rows = list(seen.values())
 
     log.info(f"Synced {len(rows)} daily usage rows")
 

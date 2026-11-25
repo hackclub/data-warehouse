@@ -9,6 +9,7 @@ from orpheus_engine.defs.shared import zoom as zoom_mod
 from orpheus_engine.defs.shared.zoom import (
     ZoomAuthError,
     ZoomDailyQuotaError,
+    ZoomFatalError,
     ZoomResource,
     _parse_retry_after_seconds,
 )
@@ -260,3 +261,128 @@ def test_thirdspace_uses_full_refresh_to_propagate_deletes():
     for stream_name, cfg in thirdspace_replication_config["streams"].items():
         if isinstance(cfg, dict):
             assert cfg.get("mode", "full-refresh") == "full-refresh", f"{stream_name} must use full-refresh"
+
+
+def test_quota_and_auth_errors_share_the_fatal_base_class():
+    assert issubclass(ZoomDailyQuotaError, ZoomFatalError)
+    assert issubclass(ZoomAuthError, ZoomFatalError)
+    assert issubclass(ZoomFatalError, requests.exceptions.HTTPError)
+
+
+def _record_upserts(monkeypatch, module):
+    upserts = []
+    monkeypatch.setattr(module, "get_db_connection", lambda: MagicMock())
+    monkeypatch.setattr(module, "ensure_table", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        module, "upsert_rows", lambda conn, table, cols, rows, *a, **kw: upserts.append((table, list(rows)))
+    )
+    return upserts
+
+
+def test_zoom_daily_usage_persists_months_fetched_before_quota_abort(monkeypatch):
+    class FakeZoom:
+        calls = 0
+
+        def fetch_daily_usage(self, year, month, log=None):
+            FakeZoom.calls += 1
+            if FakeZoom.calls == 1:
+                return [{"date": "2026-11-24", "new_users": 1, "meetings": 2, "participants": 3, "meeting_minutes": 40}]
+            raise ZoomDailyQuotaError("daily quota exhausted on month 2")
+
+    upserts = _record_upserts(monkeypatch, daily_usage)
+    with pytest.raises(ZoomDailyQuotaError):
+        daily_usage.zoom_daily_usage(context=dg.build_asset_context(), zoom=FakeZoom())
+
+    assert [(t, [r[0] for r in rows]) for t, rows in upserts] == [("daily_usage", ["2026-11-24"])]
+
+
+def test_zoom_meetings_persists_meetings_fetched_before_quota_abort(monkeypatch):
+    class FakeZoom:
+        def fetch_users(self, log=None):
+            return [{"id": "u1"}, {"id": "u2"}]
+
+        def fetch_user_meetings(self, user_id, start, end, log=None):
+            if user_id == "u1":
+                yield {"uuid": "m1", "id": 1, "host_id": "u1", "end_time": "2026-11-24T05:00:00Z"}
+            else:
+                raise ZoomDailyQuotaError("daily quota exhausted on u2")
+
+    upserts = _record_upserts(monkeypatch, meetings)
+    with pytest.raises(ZoomDailyQuotaError):
+        meetings.zoom_meetings(
+            context=dg.build_asset_context(), config=meetings.ZoomMeetingSyncConfig(), zoom=FakeZoom()
+        )
+
+    assert [(t, [r[0] for r in rows]) for t, rows in upserts] == [("meetings", ["m1"])]
+
+
+def test_zoom_recordings_persists_recordings_fetched_before_quota_abort(monkeypatch):
+    class FakeZoom:
+        def fetch_users(self, log=None):
+            return [{"id": "u1"}, {"id": "u2"}]
+
+        def fetch_user_recordings(self, user_id, start, end, log=None):
+            if user_id == "u1":
+                yield {"uuid": "r1", "id": 1, "host_id": "u1", "start_time": "2026-11-24T05:00:00Z"}
+            else:
+                raise ZoomDailyQuotaError("daily quota exhausted on u2")
+
+    upserts = _record_upserts(monkeypatch, recordings)
+    with pytest.raises(ZoomDailyQuotaError):
+        recordings.zoom_recordings(
+            context=dg.build_asset_context(), config=recordings.ZoomRecordingSyncConfig(), zoom=FakeZoom()
+        )
+
+    assert [t for t, _ in upserts] == ["recordings"]
+    assert len(upserts[0][1]) == 1
+
+
+def test_zoom_recordings_preserves_original_quota_error_when_abort_flush_fails(monkeypatch):
+    class FakeZoom:
+        def fetch_users(self, log=None):
+            return [{"id": "u1"}, {"id": "u2"}]
+
+        def fetch_user_recordings(self, user_id, start, end, log=None):
+            if user_id == "u1":
+                yield {"uuid": "r1", "id": 1, "host_id": "u1", "start_time": "2026-11-24T05:00:00Z"}
+            else:
+                raise ZoomDailyQuotaError("daily quota exhausted on u2")
+
+    monkeypatch.setattr(recordings, "get_db_connection", lambda: MagicMock())
+    monkeypatch.setattr(recordings, "ensure_table", lambda *a, **kw: None)
+    monkeypatch.setattr(recordings, "upsert_rows", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("db down")))
+
+    with pytest.raises(ZoomDailyQuotaError):
+        recordings.zoom_recordings(
+            context=dg.build_asset_context(), config=recordings.ZoomRecordingSyncConfig(), zoom=FakeZoom()
+        )
+
+
+def test_zoom_cloud_recording_usage_persists_entries_fetched_before_quota_abort(monkeypatch):
+    class FakeZoom:
+        def fetch_cloud_recording_usage(self, start, end, log=None):
+            yield {"user_id": "u1", "email": "a@example.com", "usage": "10 MB"}
+            raise ZoomDailyQuotaError("daily quota exhausted on chunk 2")
+
+    upserts = _record_upserts(monkeypatch, recordings)
+    with pytest.raises(ZoomDailyQuotaError):
+        recordings.zoom_cloud_recording_usage(
+            context=dg.build_asset_context(), config=recordings.ZoomRecordingSyncConfig(), zoom=FakeZoom()
+        )
+
+    assert [(t, [r[0] for r in rows]) for t, rows in upserts] == [("cloud_recording_usage", ["u1"])]
+
+
+def test_zoom_cloud_recording_usage_upserts_once_on_success(monkeypatch):
+    class FakeZoom:
+        def fetch_cloud_recording_usage(self, start, end, log=None):
+            yield {"user_id": "u1", "email": "a@example.com", "usage": "10 MB"}
+            yield {"user_id": "u2", "email": "b@example.com", "usage": "20 MB"}
+
+    upserts = _record_upserts(monkeypatch, recordings)
+    result = recordings.zoom_cloud_recording_usage(
+        context=dg.build_asset_context(), config=recordings.ZoomRecordingSyncConfig(), zoom=FakeZoom()
+    )
+
+    assert [(t, [r[0] for r in rows]) for t, rows in upserts] == [("cloud_recording_usage", ["u1", "u2"])]
+    assert result.metadata

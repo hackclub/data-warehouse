@@ -1,5 +1,7 @@
 import json
 import os
+from contextlib import contextmanager
+from typing import Callable, Iterator
 
 import psycopg2
 from psycopg2 import sql
@@ -84,3 +86,24 @@ def upsert_rows(conn, table_name: str, columns: list[str], rows: list[tuple],
 
 def clean_json(obj) -> str:
     return json.dumps(obj or {}).replace("\\u0000", "")
+
+
+@contextmanager
+def flush_partial_on_abort(flush: Callable[[], int], log, what: str) -> Iterator[None]:
+    """Run ``flush`` if the wrapped fetch loop raises, then re-raise the original error.
+
+    Zoom report endpoints share a daily quota, so a sync can stop part way
+    through. Saving the rows fetched so far keeps that work; the upserts are
+    keyed, so the next run overwrites them. A failing flush is logged and
+    never hides the error that stopped the sync.
+    """
+    try:
+        yield
+    except BaseException:
+        try:
+            saved = flush()
+            if saved:
+                log.info(f"Persisted {saved} {what} fetched before abort")
+        except Exception as flush_err:
+            log.error(f"Failed to persist partial {what} before abort: {flush_err}")
+        raise

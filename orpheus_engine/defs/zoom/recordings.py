@@ -5,8 +5,15 @@ from typing import Any, Dict, List, Optional
 
 import dagster as dg
 
-from orpheus_engine.defs.shared.zoom import ZoomAuthError, ZoomDailyQuotaError, ZoomResource
-from orpheus_engine.defs.zoom.db import SCHEMA_NAME, clean_json, ensure_table, get_db_connection, upsert_rows
+from orpheus_engine.defs.shared.zoom import ZoomFatalError, ZoomResource
+from orpheus_engine.defs.zoom.db import (
+    SCHEMA_NAME,
+    clean_json,
+    ensure_table,
+    flush_partial_on_abort,
+    get_db_connection,
+    upsert_rows,
+)
 
 
 BATCH_SIZE = 500
@@ -112,38 +119,11 @@ def zoom_recordings(
     latest_start: Optional[str] = None
     errors = 0
 
-    for i, uid in enumerate(user_ids):
-        try:
-            for meeting in zoom.fetch_user_recordings(user_id=uid, start=start, end=end, log=log):
-                row = _recording_row(meeting, run_ts)
-                seen[row[0]] = row
-                ms = meeting.get("start_time")
-                if ms and (latest_start is None or ms > latest_start):
-                    latest_start = ms
-
-                if len(seen) >= BATCH_SIZE:
-                    batch = list(seen.values())
-                    seen.clear()
-                    conn = get_db_connection()
-                    try:
-                        upsert_rows(conn, "recordings", RECORDING_COLUMNS, batch,
-                                    "recording_id", [c for c in RECORDING_COLUMNS if c != "recording_id"],
-                                    "(" + ", ".join(["%s"] * 11 + ["%s::jsonb", "%s::jsonb", "%s"]) + ")")
-                    finally:
-                        conn.close()
-                    total += len(batch)
-        except (ZoomDailyQuotaError, ZoomAuthError):
-            raise
-        except Exception as e:
-            errors += 1
-            if errors <= 5:
-                log.warning(f"Failed to fetch recordings for user {uid}: {e}")
-
-        if (i + 1) % 20 == 0:
-            log.info(f"Processed {i + 1}/{len(user_ids)} users, {total + len(seen)} recordings")
-
-    if seen:
+    def _flush_recordings() -> int:
+        if not seen:
+            return 0
         batch = list(seen.values())
+        seen.clear()
         conn = get_db_connection()
         try:
             upsert_rows(conn, "recordings", RECORDING_COLUMNS, batch,
@@ -151,7 +131,30 @@ def zoom_recordings(
                         "(" + ", ".join(["%s"] * 11 + ["%s::jsonb", "%s::jsonb", "%s"]) + ")")
         finally:
             conn.close()
-        total += len(batch)
+        return len(batch)
+
+    with flush_partial_on_abort(_flush_recordings, log, "recordings"):
+        for i, uid in enumerate(user_ids):
+            try:
+                for meeting in zoom.fetch_user_recordings(user_id=uid, start=start, end=end, log=log):
+                    row = _recording_row(meeting, run_ts)
+                    seen[row[0]] = row
+                    ms = meeting.get("start_time")
+                    if ms and (latest_start is None or ms > latest_start):
+                        latest_start = ms
+
+                    if len(seen) >= BATCH_SIZE:
+                        total += _flush_recordings()
+            except ZoomFatalError:
+                raise
+            except Exception as e:
+                errors += 1
+                if errors <= 5:
+                    log.warning(f"Failed to fetch recordings for user {uid}: {e}")
+
+            if (i + 1) % 20 == 0:
+                log.info(f"Processed {i + 1}/{len(user_ids)} users, {total + len(seen)} recordings")
+    total += _flush_recordings()
 
     log.info(f"Sync complete: {total} recordings ({errors} errors)")
 
@@ -222,7 +225,7 @@ def zoom_recording_analytics(
                     entry.get("duration"), entry.get("type"),
                     clean_json(entry), run_ts,
                 ))
-        except (ZoomDailyQuotaError, ZoomAuthError):
+        except ZoomFatalError:
             raise
         except Exception as e:
             errors += 1
@@ -404,8 +407,19 @@ def zoom_cloud_recording_usage(
         conn.close()
 
     seen: dict[str, tuple] = {}
-    failed = False
-    try:
+    def _flush_usage() -> int:
+        if not seen:
+            return 0
+        conn = get_db_connection()
+        try:
+            upsert_rows(conn, "cloud_recording_usage", USAGE_COLUMNS, list(seen.values()),
+                        "usage_id", [c for c in USAGE_COLUMNS if c != "usage_id"],
+                        "(%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)")
+        finally:
+            conn.close()
+        return len(seen)
+
+    with flush_partial_on_abort(_flush_usage, log, "cloud recording usage entries"):
         for entry in zoom.fetch_cloud_recording_usage(start=start, end=end, log=log):
             uid = entry.get("user_id") or entry.get("email", "unknown")
             seen[uid] = (
@@ -420,31 +434,8 @@ def zoom_cloud_recording_usage(
                 clean_json(entry),
                 run_ts,
             )
-    except BaseException:
-        failed = True
-        raise
-    finally:
-        rows = list(seen.values())
-        if rows:
-            if failed:
-                try:
-                    conn = get_db_connection()
-                    try:
-                        upsert_rows(conn, "cloud_recording_usage", USAGE_COLUMNS, rows,
-                                    "usage_id", [c for c in USAGE_COLUMNS if c != "usage_id"],
-                                    "(%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)")
-                    finally:
-                        conn.close()
-                except Exception as flush_err:
-                    log.error(f"Failed to persist partial cloud recording usage before abort: {flush_err}")
-            else:
-                conn = get_db_connection()
-                try:
-                    upsert_rows(conn, "cloud_recording_usage", USAGE_COLUMNS, rows,
-                                "usage_id", [c for c in USAGE_COLUMNS if c != "usage_id"],
-                                "(%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)")
-                finally:
-                    conn.close()
+    _flush_usage()
+    rows = list(seen.values())
 
     log.info(f"Sync complete: {len(rows)} cloud recording usage entries")
 

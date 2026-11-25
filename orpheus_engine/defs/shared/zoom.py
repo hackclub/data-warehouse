@@ -19,11 +19,18 @@ PAGE_DELAY = 3.5  # report endpoints are 10-20 req/min
 MAX_RETRY_AFTER_SECONDS = 300
 
 
-class ZoomDailyQuotaError(requests.exceptions.HTTPError):
+class ZoomFatalError(requests.exceptions.HTTPError):
+    """A Zoom error that ends the whole sync: retrying later calls in the same run cannot help.
+
+    Assets that tolerate per-user or per-meeting failures must re-raise this.
+    """
+
+
+class ZoomDailyQuotaError(ZoomFatalError):
     """Raised when Zoom returns a 429 whose Retry-After exceeds our retry budget (daily quota)."""
 
 
-class ZoomAuthError(requests.exceptions.HTTPError):
+class ZoomAuthError(ZoomFatalError):
     """Raised when Zoom returns HTTP 401 even after refreshing the OAuth token."""
 
 
