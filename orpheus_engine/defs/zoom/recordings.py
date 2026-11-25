@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import dagster as dg
 
-from orpheus_engine.defs.shared.zoom import ZoomResource
+from orpheus_engine.defs.shared.zoom import ZoomAuthError, ZoomDailyQuotaError, ZoomResource
 from orpheus_engine.defs.zoom.db import SCHEMA_NAME, clean_json, ensure_table, get_db_connection, upsert_rows
 
 
@@ -132,6 +132,8 @@ def zoom_recordings(
                     finally:
                         conn.close()
                     total += len(batch)
+        except (ZoomDailyQuotaError, ZoomAuthError):
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:
@@ -220,6 +222,8 @@ def zoom_recording_analytics(
                     entry.get("duration"), entry.get("type"),
                     clean_json(entry), run_ts,
                 ))
+        except (ZoomDailyQuotaError, ZoomAuthError):
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:
@@ -400,6 +404,7 @@ def zoom_cloud_recording_usage(
         conn.close()
 
     seen: dict[str, tuple] = {}
+    failed = False
     try:
         for entry in zoom.fetch_cloud_recording_usage(start=start, end=end, log=log):
             uid = entry.get("user_id") or entry.get("email", "unknown")
@@ -415,16 +420,31 @@ def zoom_cloud_recording_usage(
                 clean_json(entry),
                 run_ts,
             )
+    except BaseException:
+        failed = True
+        raise
     finally:
         rows = list(seen.values())
         if rows:
-            conn = get_db_connection()
-            try:
-                upsert_rows(conn, "cloud_recording_usage", USAGE_COLUMNS, rows,
-                            "usage_id", [c for c in USAGE_COLUMNS if c != "usage_id"],
-                            "(%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)")
-            finally:
-                conn.close()
+            if failed:
+                try:
+                    conn = get_db_connection()
+                    try:
+                        upsert_rows(conn, "cloud_recording_usage", USAGE_COLUMNS, rows,
+                                    "usage_id", [c for c in USAGE_COLUMNS if c != "usage_id"],
+                                    "(%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)")
+                    finally:
+                        conn.close()
+                except Exception as flush_err:
+                    log.error(f"Failed to persist partial cloud recording usage before abort: {flush_err}")
+            else:
+                conn = get_db_connection()
+                try:
+                    upsert_rows(conn, "cloud_recording_usage", USAGE_COLUMNS, rows,
+                                "usage_id", [c for c in USAGE_COLUMNS if c != "usage_id"],
+                                "(%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)")
+                finally:
+                    conn.close()
 
     log.info(f"Sync complete: {len(rows)} cloud recording usage entries")
 

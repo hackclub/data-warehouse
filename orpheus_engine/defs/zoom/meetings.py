@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import dagster as dg
 
-from orpheus_engine.defs.shared.zoom import ZoomResource
+from orpheus_engine.defs.shared.zoom import ZoomAuthError, ZoomDailyQuotaError, ZoomResource
 from orpheus_engine.defs.zoom.db import SCHEMA_NAME, clean_json, ensure_table, get_db_connection, upsert_rows
 
 
@@ -128,6 +128,7 @@ def zoom_meetings(
             conn.close()
         return len(batch)
 
+    failed = False
     try:
         for i, uid in enumerate(user_ids):
             for meeting in zoom.fetch_user_meetings(user_id=uid, start=start, end=end, log=log):
@@ -142,8 +143,17 @@ def zoom_meetings(
 
             if (i + 1) % 20 == 0:
                 log.info(f"Processed {i + 1}/{len(user_ids)} users, {total + len(seen)} meetings so far")
+    except BaseException:
+        failed = True
+        raise
     finally:
-        total += _flush_meetings()
+        if failed:
+            try:
+                total += _flush_meetings()
+            except Exception as flush_err:
+                log.error(f"Failed to persist partial meetings batch before abort: {flush_err}")
+        else:
+            total += _flush_meetings()
 
     log.info(f"Sync complete: {total} meetings")
 
@@ -243,6 +253,8 @@ def zoom_meeting_participants(
         try:
             for p in zoom.fetch_meeting_participants(meeting_id=uuid, log=log):
                 batch.append(_participant_row(p, uuid, run_ts))
+        except (ZoomDailyQuotaError, ZoomAuthError):
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:
@@ -409,6 +421,8 @@ def zoom_meeting_participant_details(
         try:
             for p in zoom.fetch_meeting_participant_details(meeting_id=uuid, log=log):
                 batch.append(_detail_row(p, uuid, run_ts))
+        except (ZoomDailyQuotaError, ZoomAuthError):
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:
@@ -530,6 +544,8 @@ def zoom_meeting_participant_qos(
         try:
             for p in zoom.fetch_meeting_participant_qos(meeting_id=uuid, log=log):
                 batch.append(_qos_row(p, uuid, run_ts))
+        except (ZoomDailyQuotaError, ZoomAuthError):
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:
@@ -630,6 +646,8 @@ def zoom_meeting_sharing(
         try:
             for p in zoom.fetch_meeting_sharing(meeting_id=uuid, log=log):
                 batch.append(_sharing_row(p, uuid, run_ts))
+        except (ZoomDailyQuotaError, ZoomAuthError):
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:
@@ -734,6 +752,8 @@ def zoom_meeting_polls(
                         detail.get("question"), detail.get("answer"),
                         clean_json(q), run_ts,
                     ))
+        except (ZoomDailyQuotaError, ZoomAuthError):
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:
@@ -862,6 +882,8 @@ def zoom_meeting_qa(
                             detail.get("answer"), None,
                             clean_json(q), run_ts,
                         ))
+        except (ZoomDailyQuotaError, ZoomAuthError):
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:

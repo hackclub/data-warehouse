@@ -23,6 +23,10 @@ class ZoomDailyQuotaError(requests.exceptions.HTTPError):
     """Raised when Zoom returns a 429 whose Retry-After exceeds our retry budget (daily quota)."""
 
 
+class ZoomAuthError(requests.exceptions.HTTPError):
+    """Raised when Zoom returns HTTP 401 even after refreshing the OAuth token."""
+
+
 def _parse_retry_after_seconds(
     value: Optional[str], *, now: Optional[datetime] = None
 ) -> Optional[float]:
@@ -109,6 +113,7 @@ class ZoomResource(dg.ConfigurableResource):
 
     def _request(self, method: str, path: str, *, params=None, max_attempts: int = 15, log=None) -> dict:
         url = f"https://api.zoom.us/v2{path}"
+        retried_401 = False
         for attempt in range(max_attempts):
             self._ensure_token()
             resp = self._get_session().request(method, url, params=params)
@@ -131,6 +136,12 @@ class ZoomResource(dg.ConfigurableResource):
                 time.sleep(wait)
                 continue
             if resp.status_code == 401:
+                if retried_401:
+                    msg = f"Zoom API authentication failed (401) on {url} after token refresh"
+                    if log:
+                        log.error(msg)
+                    raise ZoomAuthError(msg, response=resp)
+                retried_401 = True
                 self._token = None
                 continue
             if not resp.ok:

@@ -21,6 +21,8 @@ thirdspace_replication_config = {
         "object": "thirdspace.{stream_table}",
     },
 
+    # All thirdspace tables are small (<2,000 rows each), so full-refresh
+    # keeps upstream hard-deletes in sync with negligible load on the 6h job.
     "streams": {
         "public.addresses": {
             "select": [
@@ -28,91 +30,31 @@ thirdspace_replication_config = {
                 "is_default", "created_at", "updated_at",
             ],  # Excludes recipient, line_1, line_2
         },
-        "public.claim_confirmations": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "confirmed_at",
-        },
-        "public.claims": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
-        "public.group_members": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
-        "public.groups": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
+        "public.claim_confirmations": None,
+        "public.claims": None,
+        "public.group_members": None,
+        "public.groups": None,
         "public.hackatime_tokens": {
             "select": [
                 "id", "user_id", "hackatime_user_id", "scope", "expires_at",
                 "created_at", "updated_at",
             ],  # Excludes access_token, refresh_token
         },
-        "public.hours_logs": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "synced_at",
-        },
-        "public.invites": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
-        "public.prize_tiers": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
-        "public.project_contributor_hours": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "reviewed_at",
-        },
-        "public.project_hackatime": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
-        "public.project_repos": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "created_at",
-        },
-        "public.project_weeks": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
-        "public.projects": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "updated_at",
-        },
-        "public.rate_limit_events": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "created_at",
-        },
+        "public.hours_logs": None,
+        "public.invites": None,
+        "public.prize_tiers": None,
+        "public.project_contributor_hours": None,
+        "public.project_hackatime": None,
+        "public.project_repos": None,
+        "public.project_weeks": None,
+        "public.projects": None,
+        "public.rate_limit_events": None,
         "public.referrals": {
             "select": ["id", "source", "created_at", "consumed_at"],
             # excludes: ["invitee_email", "referrer_email"]
         },
-        "public.shop_items": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "created_at",
-        },
-        "public.shop_redemptions": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "created_at",
-        },
+        "public.shop_items": None,
+        "public.shop_redemptions": None,
         "public.users": {
             "select": [
                 "id", "hackatime_id", "slack_id", "airtable_record_id",
@@ -122,11 +64,7 @@ thirdspace_replication_config = {
                 "hour_debt_hours", "hour_debt_due_week",
             ],  # Excludes name, email, display_name
         },
-        "public.week_saves": {
-            "mode": "incremental",
-            "primary_key": ["id"],
-            "update_key": "created_at",
-        },
+        "public.week_saves": None,
     },
 }
 

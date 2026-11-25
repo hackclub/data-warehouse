@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 import dagster as dg
 import requests
 
-from orpheus_engine.defs.shared.zoom import ZoomDailyQuotaError, ZoomResource
+from orpheus_engine.defs.shared.zoom import ZoomAuthError, ZoomDailyQuotaError, ZoomResource
 from orpheus_engine.defs.zoom.db import SCHEMA_NAME, ensure_table, get_db_connection, upsert_rows
 
 
@@ -76,10 +76,13 @@ def zoom_daily_usage(
                 row = _row(day, run_ts)
                 seen[row[0]] = row
             log.info(f"Fetched {len(days)} days for {year}-{month:02d}")
-        except (ZoomDailyQuotaError, requests.exceptions.HTTPError):
-            saved = _flush_seen()
-            if saved:
-                log.info(f"Persisted {len(saved)} daily usage rows fetched before rate-limit abort")
+        except (ZoomDailyQuotaError, ZoomAuthError, requests.exceptions.HTTPError):
+            try:
+                saved = _flush_seen()
+                if saved:
+                    log.info(f"Persisted {len(saved)} daily usage rows fetched before abort")
+            except Exception as flush_err:
+                log.error(f"Failed to persist partial daily usage rows before abort: {flush_err}")
             raise
         except Exception as e:
             log.warning(f"Could not fetch {year}-{month:02d}: {e}")
