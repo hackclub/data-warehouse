@@ -26,7 +26,7 @@ internal hostnames/IPs, and personal data.
 Every approved YSWS submission is also aggregated in
 `airtable_unified_ysws_projects_db.approved_projects` (keyed by program in
 `airtable_unified_ysws_projects_db.ysws_programs`). Individual program operational
-data lives in one of three places:
+data lives in one of these places:
 
 1. **Dedicated Sling Postgres mirror** (`orpheus_engine/defs/sling/programs/<name>.py`, schema `<name>`):
    - Active programs with dedicated schemas: `club_shop`, `contd`, `coral`,

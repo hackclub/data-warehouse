@@ -2,7 +2,6 @@ import dagster as dg
 from dagster_sling import SlingConnectionResource, SlingResource
 from dagster import EnvVar, Nothing
 from .._helpers import _sling_connection_url
-from .._helpers import _ensure_incremental_target_indexes
 
 
 thirdspace_db_connection = SlingConnectionResource(
@@ -81,7 +80,6 @@ def thirdspace_warehouse_mirror(
 ) -> Nothing:
     """Replicates analytics-safe thirdspace DB columns into the warehouse."""
     context.log.info("Starting thirdspace → warehouse Sling replication")
-    _ensure_incremental_target_indexes(context, thirdspace_replication_config)
 
     for _ in sling.replicate(
         context=context,

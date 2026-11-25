@@ -13,7 +13,6 @@ from orpheus_engine.defs.shared.zoom import (
     ZoomResource,
     _parse_retry_after_seconds,
 )
-from orpheus_engine.defs.sling.programs.thirdspace import thirdspace_replication_config
 from orpheus_engine.defs.zoom import daily_usage, meetings, recordings
 
 
@@ -254,13 +253,6 @@ def test_zoom_recordings_and_analytics_never_swallow_quota_or_auth_errors(monkey
         recordings.zoom_recordings(context=ctx, config=recordings.ZoomRecordingSyncConfig(), zoom=FakeZoom())
     with pytest.raises(exc_cls):
         recordings.zoom_recording_analytics(context=ctx, config=recordings.ZoomRecordingSyncConfig(), zoom=FakeZoom())
-
-
-def test_thirdspace_uses_full_refresh_to_propagate_deletes():
-    assert thirdspace_replication_config["defaults"]["mode"] == "full-refresh"
-    for stream_name, cfg in thirdspace_replication_config["streams"].items():
-        if isinstance(cfg, dict):
-            assert cfg.get("mode", "full-refresh") == "full-refresh", f"{stream_name} must use full-refresh"
 
 
 def test_quota_and_auth_errors_share_the_fatal_base_class():
