@@ -84,8 +84,8 @@ On success, the backup script pings an Uptime Kuma push monitor. If no ping arri
 
 ## Direct Database Access Logging
 
-The image bakes in `/etc/postgresql/logging.conf` (from `logging.conf` here, the source of truth for these settings), which turns on connection and disconnection logging with a `log_line_prefix` that records timestamp, PID, role, database, `application_name`, and client host/port.
+The image bakes in `/etc/postgresql/logging.conf` (from `logging.conf` here, the source of truth for these settings), which turns on connection, disconnection, and statement-level logging (`log_statement = 'all'`, with `log_parameter_max_length = 0` and `log_parameter_max_length_on_error = 0` so extended-protocol bind parameters are omitted) with a `log_line_prefix` that records timestamp, PID, role, database, `application_name`, and client host/port.
 
 - **Fresh clusters:** `conf.sh` appends `include = '/etc/postgresql/logging.conf'` to `$PGDATA/postgresql.conf` on first init.
 - **Restored or custom-config clusters:** If the container starts with `-c config_file=/etc/postgresql/postgresql.conf`, add `include '/etc/postgresql/logging.conf'` to the custom configuration file (or copy the settings from `logging.conf` directly).
-- **Log shipping:** `log_destination = 'stderr'` and `logging_collector = off` are kept on purpose so PostgreSQL writes to container stderr, where the container runtime forwards logs to the central log store while keeping recent logs readable via `docker logs`. See `runbooks/prod-health-monitoring.md` §12 for inspection and verification steps.
+- **Log shipping:** `log_destination = 'stderr'` and `logging_collector = off` are kept on purpose so PostgreSQL writes to container stderr, where the container runtime forwards logs to the central log store while keeping recent logs readable via `docker logs`. See `runbooks/prod-health-monitoring.md` §12 for inspection, approved per-role exclusions, PG 18 (`log_connections = 'all'`), and verification steps.
