@@ -219,89 +219,40 @@ def test_only_a_lost_connection_counts(error, lost):
     assert warehouse_db.is_connection_lost(error) is lost
 
 
-def test_get_mirror_freshness_handles_missing_view_and_reads_as_mcp_role(server, monkeypatch):
-    async def read_all(database):
-        return await database.get_mirror_freshness()
-
-    async def read_stale(database):
-        return await database.get_mirror_freshness(only_stale=True)
-
-    async def read_one(database):
-        return await database.get_mirror_freshness(schema_name="stardance")
-
-    async def read_assets(database):
-        return await database.get_mirror_freshness(schema_name="airtable_campfire", include_assets=True)
-
-    async def read_untracked_real(database):
-        return await database.get_mirror_freshness(schema_name="synced")
-
-    async def read_nonexistent(database):
-        return await database.get_mirror_freshness(schema_name="no_such_schema_xyz")
-
-    # Before the view exists, get_mirror_freshness degrades gracefully.
-    with server.admin() as conn, conn.cursor() as cur:
-        cur.execute("DROP SCHEMA IF EXISTS warehouse_metadata CASCADE")
-    rows, exists, _ = _on_database(server.mcp_url(), monkeypatch, read_all)
-    assert exists is False
-    assert rows == []
-
-    # Populate the real freshness table + views and verify hc_warehouse_mcp reads them.
+def test_freshness_is_found_and_read_through_sql_alone(server, monkeypatch):
+    """No freshness tool: list_schemas shows warehouse_metadata and query reads the views."""
     from datetime import datetime, timedelta, timezone
-    from orpheus_engine.defs.freshness.definitions import (
-        AssetFreshnessSpec,
-        write_mirror_freshness,
-    )
+
+    from orpheus_engine.defs.freshness.definitions import AssetFreshnessSpec, write_mirror_freshness
 
     now = datetime.now(timezone.utc)
     specs = [
         AssetFreshnessSpec("stardance", "stardance_warehouse_mirror", "sling", "frequent_15min_schedule", 15, 60),
         AssetFreshnessSpec("hcb", "hcb_warehouse_mirror", "sling", "materialize_all_assets", 360, 720),
-        AssetFreshnessSpec("airtable_campfire", "campfire_event_warehouse", "dlt", "frequent_15min_schedule", 15, 60),
-        AssetFreshnessSpec("airtable_campfire", "campfire_participants_warehouse", "dlt", "materialize_all_assets", 360, 720),
     ]
     with server.admin() as conn:
         write_mirror_freshness(
             conn,
             specs,
-            {
-                "stardance_warehouse_mirror": now - timedelta(minutes=5),
-                "hcb_warehouse_mirror": now - timedelta(hours=24),
-                "campfire_event_warehouse": now - timedelta(minutes=5),
-                "campfire_participants_warehouse": now - timedelta(hours=15),
-            },
+            {"stardance_warehouse_mirror": now - timedelta(minutes=5), "hcb_warehouse_mirror": now - timedelta(hours=24)},
             recorded_at=now,
         )
 
-    rows, exists, _ = _on_database(server.mcp_url(), monkeypatch, read_all)
-    assert exists is True
-    assert [r["schema_name"] for r in rows] == ["hcb", "airtable_campfire", "stardance"]
-    assert rows[0]["is_stale"] is True
-    assert rows[1]["is_stale"] is True  # worst-of rollup flags airtable_campfire stale
-    assert rows[1]["worst_asset_key"] == "campfire_participants_warehouse"
-    assert rows[2]["is_stale"] is False
+    async def use(database):
+        schemas = await database.list_schemas()
+        rows, _ = await database.execute_query(
+            "SELECT schema_name, status, is_stale FROM warehouse_metadata.mirror_freshness "
+            "WHERE schema_name IN ('stardance', 'hcb') ORDER BY schema_name"
+        )
+        doc, _ = await database.execute_query(
+            "SELECT obj_description('warehouse_metadata.mirror_freshness'::regclass, 'pg_class') AS doc"
+        )
+        return schemas, rows, doc[0]["doc"]
 
-    stale_rows, exists, _ = _on_database(server.mcp_url(), monkeypatch, read_stale)
-    assert exists is True
-    assert [r["schema_name"] for r in stale_rows] == ["hcb", "airtable_campfire"]
-
-    one_rows, exists, _ = _on_database(server.mcp_url(), monkeypatch, read_one)
-    assert exists is True
-    assert [r["schema_name"] for r in one_rows] == ["stardance"]
-
-    asset_rows, exists, _ = _on_database(server.mcp_url(), monkeypatch, read_assets)
-    assert exists is True
-    assert len(asset_rows) == 2
-
-    # Real schema missing from mirror_freshness -> schema_exists=True (untracked)
-    u_rows, exists, schema_exists = _on_database(server.mcp_url(), monkeypatch, read_untracked_real)
-    assert exists is True and u_rows == [] and schema_exists is True
-
-    # Non-existent schema -> schema_exists=False
-    n_rows, exists, schema_exists = _on_database(server.mcp_url(), monkeypatch, read_nonexistent)
-    assert exists is True and n_rows == [] and schema_exists is False
-
-    async def read_bad(database):
-        return await database.get_mirror_freshness(schema_name="stardance; DROP TABLE x")
-
-    with pytest.raises(ValueError, match="Invalid schema name"):
-        _on_database(server.mcp_url(), monkeypatch, read_bad)
+    schemas, rows, doc = _on_database(server.mcp_url(), monkeypatch, use)
+    assert "warehouse_metadata" in schemas
+    assert rows == [
+        {"schema_name": "hcb", "status": "stale", "is_stale": True},
+        {"schema_name": "stardance", "status": "fresh", "is_stale": False},
+    ]
+    assert "deleted at the source" in doc

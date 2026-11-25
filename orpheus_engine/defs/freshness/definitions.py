@@ -561,9 +561,85 @@ def discover_warehouse_extra_specs(
     return extra_specs, extra_times
 
 
-def _view_ddl_comment() -> str:
-    digest = hashlib.sha256("\n".join(FRESHNESS_VIEW_DDL_STATEMENTS).encode()).hexdigest()[:16]
-    return f"Managed by Dagster asset warehouse_mirror_freshness (ddl {digest})"
+_DELETED_ROWS_CAVEAT = (
+    "Freshness is the time of the last successful sync only. It does not show "
+    "that the data is complete: incremental mirrors may keep rows that were "
+    "deleted at the source."
+)
+
+# Agents find these through SQL alone (obj_description / col_description or
+# describe_schema), so they explain how to read the views. They are part of the
+# DDL hash, so changing them rebuilds the views.
+FRESHNESS_VIEW_DESCRIPTIONS: dict[str, str] = {
+    ASSET_FRESHNESS_VIEW: (
+        "Sync freshness, one row per Dagster asset (and one per untracked schema). "
+        "Query this before trusting recent data. " + _DELETED_ROWS_CAVEAT
+    ),
+    FRESHNESS_VIEW: (
+        "Sync freshness, one row per warehouse schema. The row shows the worst "
+        "asset in the schema (worst_asset_key): one stale asset makes the schema "
+        "stale. Query this before trusting recent data; use "
+        f"{ASSET_FRESHNESS_VIEW} for each asset. " + _DELETED_ROWS_CAVEAT
+    ),
+}
+
+_SHARED_COLUMN_DESCRIPTIONS: dict[str, str] = {
+    "schema_name": "Warehouse schema (Postgres namespace) the data lands in.",
+    "sync_type": "How the data arrives: sling, dlt, api, dbt, fivetran or untracked.",
+    "schedule_name": (
+        "Dagster schedule that runs the asset (materialize_all_assets, "
+        "frequent_15min_schedule, ...), or untracked."
+    ),
+    "last_synced_at": (
+        "Time of the last successful sync (Dagster materialization or Fivetran "
+        "sync). NULL if never synced or untracked."
+    ),
+    "age_hours": "Hours since last_synced_at, computed at query time. NULL if never synced or untracked.",
+    "expected_cadence_minutes": "How often the schedule runs, in minutes (taken from its cron).",
+    "stale_after_minutes": "Age in minutes after which the row is stale. Larger than the cadence, to allow for slow runs.",
+    "is_stale": "TRUE if older than stale_after_minutes or never synced. NULL for untracked.",
+    "status": (
+        "fresh = synced within stale_after_minutes; stale = older than that; "
+        "never_synced = tracked but no successful sync recorded; untracked = no "
+        "Dagster asset or live connector syncs it, so freshness is unknown "
+        "(see untracked_reason)."
+    ),
+    "untracked_reason": "Why the schema is untracked (for example a paused Fivetran connector). NULL if tracked.",
+    "recorded_at": "When the warehouse_mirror_freshness asset last wrote this row (it runs every 15 minutes).",
+}
+
+FRESHNESS_COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
+    ASSET_FRESHNESS_VIEW: {
+        **_SHARED_COLUMN_DESCRIPTIONS,
+        "asset_key": "Dagster asset key (path joined with /), or untracked/<schema> for an untracked schema.",
+        "tracking_status": "tracked or untracked.",
+    },
+    FRESHNESS_VIEW: {
+        **_SHARED_COLUMN_DESCRIPTIONS,
+        "worst_asset_key": "The least fresh asset in the schema; its cadence and age fill this row.",
+        "asset_count": "Number of tracked assets that write to the schema.",
+        "stale_asset_count": "Number of those assets that are stale or never synced.",
+        "last_synced_at": (
+            "Oldest last successful sync across the schema's assets. NULL if any "
+            "asset never synced, or the schema is untracked."
+        ),
+        "newest_synced_at": "Newest last successful sync across the schema's assets.",
+        "age_hours": "Hours since the worst asset's last sync, computed at query time.",
+        "is_stale": "TRUE if any tracked asset in the schema is stale or never synced. NULL for untracked.",
+    },
+}
+
+
+def _view_ddl_comment(view: str) -> str:
+    payload = "\n".join(FRESHNESS_VIEW_DDL_STATEMENTS) + "\n" + repr(
+        (sorted(FRESHNESS_VIEW_DESCRIPTIONS.items()),
+         sorted((v, sorted(c.items())) for v, c in FRESHNESS_COLUMN_DESCRIPTIONS.items()))
+    )
+    digest = hashlib.sha256(payload.encode()).hexdigest()[:16]
+    return (
+        f"{FRESHNESS_VIEW_DESCRIPTIONS[view]} "
+        f"Managed by Dagster asset warehouse_mirror_freshness (ddl {digest})."
+    )
 
 
 def _ensure_freshness_views(cur: Any) -> bool:
@@ -573,20 +649,24 @@ def _ensure_freshness_views(cur: Any) -> bool:
     recreating (rather than CREATE OR REPLACE) lets a later change remove or
     reorder columns.
     """
-    comment = _view_ddl_comment()
+    views = (ASSET_FRESHNESS_VIEW, FRESHNESS_VIEW)
     cur.execute(
         "SELECT obj_description(to_regclass(%s), 'pg_class'), "
         "obj_description(to_regclass(%s), 'pg_class')",
-        (ASSET_FRESHNESS_VIEW, FRESHNESS_VIEW),
+        views,
     )
-    if all(existing == comment for existing in cur.fetchone()):
+    existing = cur.fetchone()
+    if all(found == _view_ddl_comment(view) for found, view in zip(existing, views)):
         return False
     cur.execute(f"DROP VIEW IF EXISTS {FRESHNESS_VIEW}")
     cur.execute(f"DROP VIEW IF EXISTS {ASSET_FRESHNESS_VIEW}")
     for ddl in FRESHNESS_VIEW_DDL_STATEMENTS:
         cur.execute(ddl)
-    for view in (ASSET_FRESHNESS_VIEW, FRESHNESS_VIEW):
-        cur.execute(f"COMMENT ON VIEW {view} IS %s", (comment,))
+    for view in views:
+        for column, text in FRESHNESS_COLUMN_DESCRIPTIONS[view].items():
+            cur.execute(f"COMMENT ON COLUMN {view}.{column} IS %s", (text,))
+        # Written last: the hash comment marks a complete rebuild.
+        cur.execute(f"COMMENT ON VIEW {view} IS %s", (_view_ddl_comment(view),))
     return True
 
 

@@ -746,8 +746,17 @@ sync timestamps, derived expected cadences, a live `is_stale` flag, and explicit
 - **Coverage:** Every active Sling mirror, DLT/API mirror, `public_*` dbt mart,
   Fivetran schema (via `_fivetran_log`), and any remaining warehouse schema
   (explicitly marked `untracked` with a reason).
-- **Readable by:** `hc_warehouse_agent`, `hc_warehouse_mcp` (via
-  `pg_read_all_data`), and the `warehouse-mcp` tool `check_freshness`.
+- **Readable by:** `hc_warehouse_agent` and `hc_warehouse_mcp` (via
+  `pg_read_all_data`). There is no separate freshness tool: read the views
+  with SQL through the `warehouse-mcp` `query` tool or `bin/readonly-psql`. The
+  `warehouse-mcp` server instructions and its `query` and `list_schemas` text
+  tell agents to query `warehouse_metadata.mirror_freshness` before trusting
+  recent data.
+- **Self-describing:** each view and each column has a Postgres comment
+  (status values, cadence, `untracked`, the deleted-rows caveat). Read them
+  with `obj_description(...)` and `col_description(...)`. The comments are part
+  of the DDL hash in the view comment, so changing them rebuilds the views on
+  the next run.
 - **Staleness evaluation:** Both views compute `age_hours`, `is_stale`, and
   `status` (`fresh`, `stale`, `never_synced`, or `untracked`) against `NOW()` at
   query time, so mirrors still show as stale if Dagster stops running. Check

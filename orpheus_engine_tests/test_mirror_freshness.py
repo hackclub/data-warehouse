@@ -250,3 +250,64 @@ def test_views_are_rebuilt_only_when_their_ddl_changes(server):
             assert cur.fetchone()[0] == "fresh"
     assert "worst_asset_key" in columns
     assert "asset_key" not in columns
+
+
+def test_views_explain_themselves_to_sql_readers(server):
+    """Agents read freshness through SQL only, so the views carry their own docs."""
+    from orpheus_engine.defs.freshness import definitions as fresh
+
+    spec = AssetFreshnessSpec("stardance", "stardance_warehouse_mirror", "sling", "frequent_15min_schedule", 15, 60)
+    now = datetime.now(timezone.utc)
+    with server.admin() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP SCHEMA IF EXISTS warehouse_metadata CASCADE")
+        write_mirror_freshness(conn, [spec], {spec.asset_key: now}, recorded_at=now)
+
+    for role_url in (server.agent_url(), server.mcp_url()):
+        conn = psycopg2.connect(role_url)
+        try:
+            with conn.cursor() as cur:
+                for view in (ASSET_FRESHNESS_VIEW, FRESHNESS_VIEW):
+                    cur.execute("SELECT obj_description(to_regclass(%s), 'pg_class')", (view,))
+                    view_comment = cur.fetchone()[0]
+                    assert "before trusting recent data" in view_comment
+                    assert "deleted at the source" in view_comment
+                    assert "(ddl " in view_comment
+
+                    schema, name = view.split(".")
+                    cur.execute(
+                        "SELECT c.column_name, col_description(to_regclass(%s), c.ordinal_position) "
+                        "FROM information_schema.columns c "
+                        "WHERE c.table_schema = %s AND c.table_name = %s",
+                        (view, schema, name),
+                    )
+                    column_comments = dict(cur.fetchall())
+                    assert column_comments, view
+                    missing = [col for col, text in column_comments.items() if not text]
+                    assert missing == [], (view, missing)
+                    for value in ("fresh", "stale", "never_synced", "untracked"):
+                        assert value in column_comments["status"]
+                    assert "cron" in column_comments["expected_cadence_minutes"]
+        finally:
+            conn.close()
+
+    # Every documented column exists, so a renamed column cannot leave a stale doc.
+    with server.admin() as conn, conn.cursor() as cur:
+        for view, docs in fresh.FRESHNESS_COLUMN_DESCRIPTIONS.items():
+            schema, name = view.split(".")
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = %s",
+                (schema, name),
+            )
+            assert set(docs) == {row[0] for row in cur.fetchall()}, view
+
+
+def test_changing_a_description_changes_the_ddl_hash(monkeypatch):
+    from orpheus_engine.defs.freshness import definitions as fresh
+
+    before = fresh._view_ddl_comment(FRESHNESS_VIEW)
+    changed = {view: dict(cols) for view, cols in fresh.FRESHNESS_COLUMN_DESCRIPTIONS.items()}
+    changed[FRESHNESS_VIEW]["status"] = "reworded"
+    monkeypatch.setattr(fresh, "FRESHNESS_COLUMN_DESCRIPTIONS", changed)
+    assert fresh._view_ddl_comment(FRESHNESS_VIEW) != before

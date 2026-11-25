@@ -144,7 +144,14 @@ async def _emit_audit_log(
 
 
 # Create MCP server
-mcp = Server("warehouse-mcp")
+FRESHNESS_HINT = (
+    "Before trusting recent data, query warehouse_metadata.mirror_freshness "
+    "(one row per schema: status, last_synced_at, age_hours, is_stale) or "
+    "warehouse_metadata.asset_freshness (one row per asset). It shows sync "
+    "time only: incremental mirrors may keep rows deleted at the source."
+)
+
+mcp = Server("warehouse-mcp", instructions=FRESHNESS_HINT)
 
 # HTTP transport - messages path (root for Streamable HTTP compatibility)
 session_manager = StreamableHTTPSessionManager(app=mcp, stateless=True)
@@ -211,7 +218,8 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Execute a read-only SQL query against the data warehouse. "
                 "Returns a query_id for fetching more rows, plus a preview of results. "
-                "Use LIMIT in your SQL for large tables. Max 10,000 rows cached per query."
+                "Use LIMIT in your SQL for large tables. Max 10,000 rows cached per query.\n\n"
+                + FRESHNESS_HINT
             ),
             inputSchema={
                 "type": "object",
@@ -287,45 +295,15 @@ async def list_tools() -> list[Tool]:
             description=(
                 "List all available schemas in the data warehouse.\n\n"
                 "Key schemas:\n"
-                "- warehouse_metadata: Per-schema worst-of freshness (mirror_freshness) and per-asset detail (asset_freshness); or call check_freshness\n"
+                "- warehouse_metadata: Sync freshness (mirror_freshness per schema, asset_freshness per asset)\n"
                 "- airtable_unified_ysws_projects_db: Shipped projects and NPS on programs\n"
                 "- public_unified_analytics: User histories and events on users\n"
                 "- loops.audience: User profile fields (geocoded country, etc.)\n"
-                "- public_hackatime_analytics: Coding activity (preferred over hackatime schema)\n\n"
-                "Note: freshness reflects last sync time only; incremental Sling mirrors may retain rows deleted at the source."
+                "- public_hackatime_analytics: Coding activity (preferred over hackatime schema)"
             ),
             inputSchema={
                 "type": "object",
                 "properties": {},
-                "required": []
-            }
-        ),
-        Tool(
-            name="check_freshness",
-            description=(
-                "Check per-schema worst-of sync freshness (or per-asset detail with include_assets=true), "
-                "including last successful sync time, expected cadence, age, stale flag, and untracked reasons. "
-                "Call this before trusting recent data in a mirror. Note: freshness reflects last sync time only; "
-                "incremental Sling mirrors may retain rows deleted at the source."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "schema_name": {
-                        "type": "string",
-                        "description": "Optional warehouse schema name to filter to a single schema"
-                    },
-                    "only_stale": {
-                        "type": "boolean",
-                        "description": "If true, return only items currently flagged as stale or never synced (default: false)",
-                        "default": False
-                    },
-                    "include_assets": {
-                        "type": "boolean",
-                        "description": "If true, return per-asset rows from warehouse_metadata.asset_freshness instead of the per-schema worst-of rollup (default: false)",
-                        "default": False
-                    }
-                },
                 "required": []
             }
         ),
@@ -498,86 +476,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             for schema in schemas:
                 response += f"  - {schema}\n"
             response += (
-                "\nUse describe_schema(schema_name='...') to see tables and columns, "
-                "or check_freshness() to see per-mirror last sync times and stale flags."
+                "\nUse describe_schema(schema_name='...') to see tables and columns.\n"
+                + FRESHNESS_HINT
             )
             
             return [TextContent(type="text", text=response)]
-
-        elif name == "check_freshness":
-            schema_name = arguments.get("schema_name")
-            only_stale = bool(arguments.get("only_stale", False))
-            include_assets = bool(arguments.get("include_assets", False))
-            rows, view_exists, schema_exists = await db.get_mirror_freshness(
-                schema_name=schema_name,
-                only_stale=only_stale,
-                include_assets=include_assets,
-            )
-            row_count = len(rows)
-
-            if not view_exists:
-                return [TextContent(
-                    type="text",
-                    text=(
-                        "Freshness view warehouse_metadata.mirror_freshness has not been "
-                        "materialized yet. Run the Dagster asset warehouse_mirror_freshness."
-                    ),
-                )]
-
-            if not rows:
-                if schema_name:
-                    if schema_exists:
-                        msg = (
-                            f"Schema '{schema_name}' exists in the warehouse but is not tracked "
-                            f"in warehouse_metadata.mirror_freshness (freshness unknown)."
-                        )
-                    else:
-                        msg = f"Schema '{schema_name}' does not exist in the warehouse."
-                elif only_stale:
-                    msg = "All tracked schemas are fresh (0 stale)."
-                else:
-                    msg = "No schemas recorded in warehouse_metadata.mirror_freshness."
-                return [TextContent(type="text", text=msg)]
-
-            stale_count = sum(1 for r in rows if r.get("is_stale") is True)
-            untracked_count = sum(1 for r in rows if r.get("status") == "untracked")
-            fresh_count = len(rows) - stale_count - untracked_count
-            recorded_at = rows[0].get("recorded_at")
-            if include_assets:
-                display_cols = [
-                    "schema_name",
-                    "asset_key",
-                    "status",
-                    "last_synced_at",
-                    "age_hours",
-                    "expected_cadence_minutes",
-                    "stale_after_minutes",
-                    "is_stale",
-                    "untracked_reason",
-                ]
-                label = "Asset freshness"
-            else:
-                display_cols = [
-                    "schema_name",
-                    "status",
-                    "asset_count",
-                    "stale_asset_count",
-                    "last_synced_at",
-                    "age_hours",
-                    "expected_cadence_minutes",
-                    "stale_after_minutes",
-                    "is_stale",
-                    "worst_asset_key",
-                    "untracked_reason",
-                ]
-                label = "Schema freshness (worst-of rollup)"
-            table = format_rows_for_display(rows, display_cols)
-            header = (
-                f"{label} ({len(rows)} rows: {fresh_count} fresh, {stale_count} stale, "
-                f"{untracked_count} untracked; metadata recorded_at={recorded_at}):\n"
-                f"Note: freshness reflects last sync time only; incremental Sling mirrors may retain rows deleted at the source.\n\n{table}"
-            )
-            return [TextContent(type="text", text=header)]
         
         elif name == "describe_schema":
             schema_name = arguments["schema_name"]
