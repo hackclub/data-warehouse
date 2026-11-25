@@ -400,29 +400,31 @@ def zoom_cloud_recording_usage(
         conn.close()
 
     seen: dict[str, tuple] = {}
-    for entry in zoom.fetch_cloud_recording_usage(start=start, end=end, log=log):
-        uid = entry.get("user_id") or entry.get("email", "unknown")
-        seen[uid] = (
-            uid,
-            entry.get("user_id"),
-            entry.get("user_name"),
-            entry.get("email"),
-            entry.get("dept"),
-            entry.get("free_usage"),
-            entry.get("plan_usage"),
-            entry.get("usage"),
-            clean_json(entry),
-            run_ts,
-        )
-    rows = list(seen.values())
-
-    conn = get_db_connection()
     try:
-        upsert_rows(conn, "cloud_recording_usage", USAGE_COLUMNS, rows,
-                    "usage_id", [c for c in USAGE_COLUMNS if c != "usage_id"],
-                    "(%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)")
+        for entry in zoom.fetch_cloud_recording_usage(start=start, end=end, log=log):
+            uid = entry.get("user_id") or entry.get("email", "unknown")
+            seen[uid] = (
+                uid,
+                entry.get("user_id"),
+                entry.get("user_name"),
+                entry.get("email"),
+                entry.get("dept"),
+                entry.get("free_usage"),
+                entry.get("plan_usage"),
+                entry.get("usage"),
+                clean_json(entry),
+                run_ts,
+            )
     finally:
-        conn.close()
+        rows = list(seen.values())
+        if rows:
+            conn = get_db_connection()
+            try:
+                upsert_rows(conn, "cloud_recording_usage", USAGE_COLUMNS, rows,
+                            "usage_id", [c for c in USAGE_COLUMNS if c != "usage_id"],
+                            "(%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)")
+            finally:
+                conn.close()
 
     log.info(f"Sync complete: {len(rows)} cloud recording usage entries")
 

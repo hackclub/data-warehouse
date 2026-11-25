@@ -40,16 +40,24 @@ data lives in one of three places:
    - `airtable_mipmap`, `airtable_shredder`, `airtable_snowglobe`,
      `airtable_sleepover`, `airtable_daydream`, `airtable_daydream_ops`,
      `airtable_campfire`, `airtable_campfire_flagship`.
-3. **Shared Airtable / Review Platform** (`airtable_raw_all_bases` and/or `ari`):
-   - Lightweight or Airtable-native programs without a standalone Postgres app
-     (e.g. `8-pin-grant`, `ASIC`, `BakeBuild`, `Bashed`, `Boba Drops`, `CQ`,
-     `Crossroads`, `Dayoneof`, `Fellows`, `Fjording it`, `Folktale`, `FuseRing`,
-     `Genesis Reborn`, `Goship`, `Hackcraft Mod Edition`, `Hacklet`, `Hackrail`,
-     `Haggle`, `Harvest`, `Molten`, `Re-Dream`, `Sprig`, `Storyboard V3`,
-     `Survive`, `Swirl`, `TTY`, `Tickets`, `Toppings`, `Torque`, `Twisted`,
-     `Vibes`, `Wonders`, `flavorless`) land in `airtable_raw_all_bases` and
-     `ari` (for review workflows) plus
-     `airtable_unified_ysws_projects_db.approved_projects`.
+3. **Shared Airtable (`airtable_raw_all_bases`) and/or Review Platform (`ari`)**:
+   - Active Airtable-native programs verified in `airtable_raw_all_bases` (plus
+     `airtable_unified_ysws_projects_db.approved_projects`): `8-pin-grant`,
+     `ASIC`, `BakeBuild`, `Bashed`, `Boba Drops`, `CQ`, `Crossroads`,
+     `Dayoneof`, `Fellows`, `Fjording it`, `Folktale`, `FuseRing`,
+     `Genesis Reborn`, `Goship`, `Hackcraft Mod Edition`, `Hacklet`,
+     `Hackrail` (also in `ari`), `Molten`, `Re-Dream`, `Sprig`,
+     `Storyboard V3`, `Survive` (also in `ari`), `Swirl`, `TTY`, `Tickets`,
+     `Toppings`, `Torque`, `Twisted` (also in `ari`), `Vibes`, `Wonders`,
+     `flavorless`.
+   - Programs with dedicated Sling mirrors that also use `ari` for review
+     workflows: `3am`, `Coral`, `Embassy`, `Grandma`, `Half Life`, `Phantom`,
+     `Terra`, `thirdspace`.
+4. **Unified YSWS Registry Only (operational source not yet shared with warehouse)**:
+   - Newly launched programs currently tracked in
+     `airtable_unified_ysws_projects_db` (`ysws_programs` / `approved_projects`)
+     that do not yet have an accessible operational base in
+     `airtable_raw_all_bases` or a dedicated mirror: `Haggle`, `Harvest`.
 
 ## Warehouse MCP access and audit logs
 

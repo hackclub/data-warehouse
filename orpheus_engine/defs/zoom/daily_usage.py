@@ -52,6 +52,18 @@ def zoom_daily_usage(
     now = datetime.now(timezone.utc)
     seen: dict[str, tuple] = {}
 
+    def _flush_seen() -> list[tuple]:
+        flushed = list(seen.values())
+        if not flushed:
+            return flushed
+        conn = get_db_connection()
+        try:
+            update_cols = [c for c in COLUMNS if c != "date"]
+            upsert_rows(conn, "daily_usage", COLUMNS, flushed, "date", update_cols)
+        finally:
+            conn.close()
+        return flushed
+
     for months_ago in range(6):
         year = now.year
         month = now.month - months_ago
@@ -65,17 +77,13 @@ def zoom_daily_usage(
                 seen[row[0]] = row
             log.info(f"Fetched {len(days)} days for {year}-{month:02d}")
         except (ZoomDailyQuotaError, requests.exceptions.HTTPError):
+            saved = _flush_seen()
+            if saved:
+                log.info(f"Persisted {len(saved)} daily usage rows fetched before rate-limit abort")
             raise
         except Exception as e:
             log.warning(f"Could not fetch {year}-{month:02d}: {e}")
-    rows = list(seen.values())
-
-    conn = get_db_connection()
-    try:
-        update_cols = [c for c in COLUMNS if c != "date"]
-        upsert_rows(conn, "daily_usage", COLUMNS, rows, "date", update_cols)
-    finally:
-        conn.close()
+    rows = _flush_seen()
 
     log.info(f"Synced {len(rows)} daily usage rows")
 

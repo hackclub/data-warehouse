@@ -114,31 +114,11 @@ def zoom_meetings(
     total = 0
     latest_end: Optional[str] = None
 
-    for i, uid in enumerate(user_ids):
-        for meeting in zoom.fetch_user_meetings(user_id=uid, start=start, end=end, log=log):
-            row = _meeting_row(meeting, run_ts)
-            seen[row[0]] = row
-            me = meeting.get("end_time")
-            if me and (latest_end is None or me > latest_end):
-                latest_end = me
-
-            if len(seen) >= BATCH_SIZE:
-                batch = list(seen.values())
-                seen.clear()
-                conn = get_db_connection()
-                try:
-                    upsert_rows(conn, "meetings", MEETING_COLUMNS, batch,
-                                "uuid", [c for c in MEETING_COLUMNS if c != "uuid"],
-                                "(" + ", ".join(["%s"] * 12 + ["%s::jsonb", "%s"]) + ")")
-                finally:
-                    conn.close()
-                total += len(batch)
-
-        if (i + 1) % 20 == 0:
-            log.info(f"Processed {i + 1}/{len(user_ids)} users, {total + len(seen)} meetings so far")
-
-    if seen:
+    def _flush_meetings() -> int:
+        if not seen:
+            return 0
         batch = list(seen.values())
+        seen.clear()
         conn = get_db_connection()
         try:
             upsert_rows(conn, "meetings", MEETING_COLUMNS, batch,
@@ -146,7 +126,24 @@ def zoom_meetings(
                         "(" + ", ".join(["%s"] * 12 + ["%s::jsonb", "%s"]) + ")")
         finally:
             conn.close()
-        total += len(batch)
+        return len(batch)
+
+    try:
+        for i, uid in enumerate(user_ids):
+            for meeting in zoom.fetch_user_meetings(user_id=uid, start=start, end=end, log=log):
+                row = _meeting_row(meeting, run_ts)
+                seen[row[0]] = row
+                me = meeting.get("end_time")
+                if me and (latest_end is None or me > latest_end):
+                    latest_end = me
+
+                if len(seen) >= BATCH_SIZE:
+                    total += _flush_meetings()
+
+            if (i + 1) % 20 == 0:
+                log.info(f"Processed {i + 1}/{len(user_ids)} users, {total + len(seen)} meetings so far")
+    finally:
+        total += _flush_meetings()
 
     log.info(f"Sync complete: {total} meetings")
 
