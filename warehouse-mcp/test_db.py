@@ -402,6 +402,18 @@ def test_describe_schema_shows_the_freshness_views_and_their_comments(server, mo
         # Positional parameters have no values in this tool.
         "SELECT $1",
         "SELECT * FROM t WHERE id = $1",
+        # DO runs a procedural block whose body the guard cannot see.
+        "DO $$ BEGIN PERFORM pg_sleep(2); END $$",
+        "DO $x$ BEGIN PERFORM pg_sleep(2); END $x$",
+        "DO 'BEGIN PERFORM pg_sleep(2); END'",
+        "DO E'BEGIN PERFORM pg_sleep(2); END'",
+        "DO LANGUAGE plpgsql $$ BEGIN PERFORM pg_sleep(2); END $$",
+        "do $$ begin perform pg_sleep(2); end $$ language plpgsql",
+        "DO $$ BEGIN EXECUTE 'SEL' || 'ECT pg_sleep(2)'; END $$",
+        "DO $$ BEGIN PERFORM pg_terminate_backend(1); END $$",
+        "  /* leading comment */ -- and another\n DO $$ BEGIN NULL; END $$",
+        "(DO $$ BEGIN NULL; END $$)",
+        "DO $$ BEGIN NULL; END $$;",
     ],
 )
 def test_validate_sql_blocks_session_override_and_sleep_variants(statement):
@@ -429,6 +441,12 @@ def test_validate_sql_blocks_session_override_and_sleep_variants(statement):
         "SELECT 'pg_sleep'::regproc",
         'SELECT "my""col" FROM t',
         "SELECT x$1 FROM t",
+        # "do" as a name or inside text is not a DO block.
+        "SELECT 1 AS do",
+        'SELECT "do" FROM t',
+        'SELECT t."DO", todo, done, undo FROM t',
+        "SELECT 'DO $$ BEGIN PERFORM pg_sleep(2); END $$' AS text_only",
+        "SELECT $q$DO $$ BEGIN NULL; END $$$q$ AS text_only",
     ],
 )
 def test_validate_sql_allows_safe_comments_strings_and_quoted_identifiers(statement):
@@ -457,6 +475,33 @@ def test_postgres_calls_functions_through_quoted_and_escaped_names(server):
             assert cur.fetchone() is not None
             with pytest.raises(warehouse_db.SQLValidationError):
                 warehouse_db.validate_sql(sql)
+
+
+def test_do_blocks_are_refused_before_they_can_signal_another_backend(server, monkeypatch):
+    """Why DO is refused: with this login, a DO block can end another user's query."""
+    victims = [psycopg.connect(server.mcp_url(), autocommit=True) for _ in range(2)]
+    try:
+        refused_pid, killed_pid = (v.info.backend_pid for v in victims)
+
+        async def use(database):
+            with pytest.raises(warehouse_db.SQLValidationError, match="DO blocks"):
+                await database.execute_query(
+                    f"DO $$ BEGIN PERFORM pg_terminate_backend({refused_pid}); END $$"
+                )
+            # The same block sent without validate_sql really does end a backend.
+            await database._run(
+                f"DO $$ BEGIN PERFORM pg_terminate_backend({killed_pid}); END $$", None, 10
+            )
+
+        _on_database(server.mcp_url(), monkeypatch, use)
+        assert victims[0].execute("SELECT 1").fetchone() == (1,)
+        with pytest.raises(psycopg.OperationalError):
+            for _ in range(50):
+                victims[1].execute("SELECT 1")
+                time.sleep(0.05)
+    finally:
+        for v in victims:
+            v.close()
 
 
 def test_postgres_runs_sql_inside_ts_rewrite_text(server):

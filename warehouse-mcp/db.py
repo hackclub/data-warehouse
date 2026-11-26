@@ -72,7 +72,7 @@ DANGEROUS_PATTERNS = [
     r'\bNOTIFY\b',
     r'\bLOAD\b',
     r'\bCOPY\b',
-    r'\bDO\b\s*\$',  # PL/pgSQL blocks
+    # DO blocks are refused where a statement starts; see validate_sql.
     # Additional dangerous patterns
     r'\bEXECUTE\b',
     r'\bPREPARE\b',
@@ -395,6 +395,11 @@ TRANSACTION_CONTROL_STATEMENTS = {
     'SAVEPOINT', 'START',
 }
 
+# DO runs a procedural block. Its body is a string, which the lexer blanks, so
+# no check here can see what it calls (pg_sleep, pg_terminate_backend, EXECUTE
+# of a built-up string, ...). Refused where a statement starts.
+PROCEDURAL_BLOCK_STATEMENTS = {'DO'}
+
 # Functions no query may name, however the name is written: unquoted in any
 # case, quoted ("pg_sleep"), or schema-qualified (pg_catalog."pg_sleep").
 # Matched against each identifier as PostgreSQL resolves it, so this holds for
@@ -501,6 +506,11 @@ def validate_sql(sql: str) -> None:
         raise SQLValidationError("Only one SQL statement is allowed per query")
     for statement in statements:
         first = re.match(r'\s*\(*\s*([A-Z_]+)', statement)
+        if first and first.group(1) in PROCEDURAL_BLOCK_STATEMENTS:
+            raise SQLValidationError(
+                "DO blocks are not allowed (they run procedural code this tool cannot"
+                " check); write the query as a single SELECT"
+            )
         if first and first.group(1) in TRANSACTION_CONTROL_STATEMENTS:
             raise SQLValidationError(
                 f"SQL contains forbidden statement pattern: {first.group(1)}"
