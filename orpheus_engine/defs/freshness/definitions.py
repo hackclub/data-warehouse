@@ -46,6 +46,7 @@ _SCHEDULED_JOB_CADENCES: tuple[tuple[str, int, int], ...] = (
     ("hackatime_dau_hourly_schedule", 120, 360),
     ("project_search_2h_schedule", 120, 360),
     ("materialize_all_assets_schedule", 360, 720),
+    ("zoom_daily_schedule", 1440, 2160),
 )
 
 # Keep the freshness write from queueing agents' reads behind it, or hanging.
@@ -181,7 +182,7 @@ def resolve_asset_schedule_map(
             if key_str in schedule_map:
                 continue
             effective_stale = (
-                _DAILY_TOLERANCE_STALE_MINUTES
+                max(stale_after, _DAILY_TOLERANCE_STALE_MINUTES)
                 if key_str.startswith(_DAILY_TOLERANCE_PREFIXES)
                 else stale_after
             )

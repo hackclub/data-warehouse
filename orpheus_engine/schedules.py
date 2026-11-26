@@ -29,6 +29,7 @@ def _make_skip_if_running_schedule(
     name: str,
     job: dg.JobDefinition,
     cron_schedule: str,
+    execution_timezone: str = "America/New_York",
 ) -> dg.ScheduleDefinition:
     """
     Build a schedule that skips its tick while a previous run of the same job is
@@ -66,7 +67,7 @@ def _make_skip_if_running_schedule(
         name=name,
         job=job,
         cron_schedule=cron_schedule,
-        execution_timezone="America/New_York",  # keeps logs in local time
+        execution_timezone=execution_timezone,
         execution_fn=_evaluation_fn,
     )
 
@@ -203,6 +204,10 @@ HACKATIME_DAU_SELECTION = (
 # Project search (YSWS mention search + upstream processing deps)
 PROJECT_SEARCH_SELECTION = dg.AssetSelection.groups("unified_ysws_db_processing")
 
+# Zoom report assets run once daily right after Zoom's 00:00 UTC daily quota
+# reset so quota exhaustion cannot fail the 6-hourly materialize_all_assets_job.
+ZOOM_SELECTION = dg.AssetSelection.groups("zoom")
+
 # ---------------------------------------------------------------------------
 # Jobs
 #
@@ -230,6 +235,7 @@ materialize_all_assets_job = dg.define_asset_job(
         - FREQUENT_SELECTION
         - HACKATIME_DAU_SELECTION
         - PROJECT_SEARCH_SELECTION
+        - ZOOM_SELECTION
     ),
     tags={
         "dagster/max_runtime": "21600",  # 6 h
@@ -314,7 +320,24 @@ project_search_2h_schedule = _make_skip_if_running_schedule(
     cron_schedule="50 */2 * * *",                          # offset from hackatime :10 and all-assets :30
 )
 
-# 8. Wrap in a Definitions so Dagster can find it
+# 8. Zoom once-daily job and schedule (00:10 UTC, immediately after Zoom's 00:00 UTC quota reset)
+materialize_zoom_job = dg.define_asset_job(
+    name="materialize_zoom_job",
+    selection=ZOOM_SELECTION,
+    tags={
+        "dagster/max_runtime": "14400",  # 4 h
+        "orpheus/serial-job": "materialize_zoom_job",
+    },
+)
+
+zoom_daily_schedule = _make_skip_if_running_schedule(
+    name="zoom_daily_schedule",
+    job=materialize_zoom_job,
+    cron_schedule="10 0 * * *",
+    execution_timezone="UTC",
+)
+
+# 9. Wrap in a Definitions so Dagster can find it
 defs = dg.Definitions(
     jobs=[
         materialize_all_assets_job,
@@ -322,6 +345,7 @@ defs = dg.Definitions(
         materialize_hackatime_dau_job,
         materialize_frequent_job,
         materialize_project_search_job,
+        materialize_zoom_job,
     ],
     schedules=[
         materialize_all_assets_schedule,
@@ -329,5 +353,6 @@ defs = dg.Definitions(
         hackatime_dau_hourly_schedule,
         frequent_15min_schedule,
         project_search_2h_schedule,
+        zoom_daily_schedule,
     ],
 )

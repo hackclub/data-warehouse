@@ -219,7 +219,18 @@ class TestJobGuardrails:
             "hackatime_dau_hourly_schedule",
             "frequent_15min_schedule",
             "project_search_2h_schedule",
+            "zoom_daily_schedule",
         }
+
+    def test_zoom_daily_schedule_runs_at_0010_utc_and_skips_when_running(self):
+        from orpheus_engine.schedules import zoom_daily_schedule, materialize_zoom_job
+
+        assert zoom_daily_schedule.cron_schedule == "10 0 * * *"
+        assert zoom_daily_schedule.execution_timezone == "UTC"
+        with dg.instance_for_test() as inst:
+            assert _evaluate(zoom_daily_schedule, inst).run_requests
+            _fake_run(inst, materialize_zoom_job.name, dg.DagsterRunStatus.STARTED)
+            assert not _evaluate(zoom_daily_schedule, inst).run_requests
 
     def test_stardance_apm_telemetry_is_not_mirrored(self):
         # These tables contain tens of millions of disposable request/job
