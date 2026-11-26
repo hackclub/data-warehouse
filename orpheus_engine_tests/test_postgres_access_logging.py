@@ -114,9 +114,9 @@ def test_runbook_settings_match_logging_conf_and_document_limits():
     assert _parse_pg_conf(blocks[1]) == pg18_expected
     assert pg18_expected["log_connections"] == "all"
 
-    # Proposed exclusions must not be falsely labeled already approved.
-    assert "Approved per-role exclusions" not in body
-    assert "Proposed per-role exclusions" in body
+    # The exclusions were approved on 2026-11-25; no "pending" wording may remain.
+    assert "Approved per-role exclusions" in body
+    assert "pending approval" not in body
     assert "hc_warehouse_dagster" in body
     assert "dagster_app" in body
     assert "fivetran" in body

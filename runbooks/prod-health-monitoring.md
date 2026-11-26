@@ -690,7 +690,7 @@ Why these settings:
   `SELECT pg_reload_conf();` with **no restart** (unlike `pgaudit`, which
   requires installing an extension, setting `shared_preload_libraries`, and
   restarting every database).
-- **Proposed exception (pending approval) — omitting bind parameter values:**
+- **Approved exception (2026-11-25) — omitting bind parameter values:**
   `log_parameter_max_length = 0` and `log_parameter_max_length_on_error = 0`
   suppress `DETAIL: parameters: ...` on extended-protocol parameterized queries
   (such as `psycopg` v3 in `warehouse-mcp` and JDBC/Metabase). This keeps bind
@@ -712,7 +712,7 @@ Why these settings:
   `logging_collector` on redirects stderr into local `$PGDATA/log` files and stops
   container stderr output, which breaks shipping to the central log store.
 
-### Proposed per-role exclusions (pending approval)
+### Approved per-role exclusions
 
 Cluster-level `log_statement = 'all'` applies to every role unless an explicit
 exception is approved and documented here. Note that with PostgreSQL's defaults
@@ -722,20 +722,20 @@ constraint-violation `DETAIL:` lines (such as `Failing row contains (...)` on
 not-null/check violations or `Key (...)=(...)` on unique violations) regardless
 of `log_statement`. Setting both `log_min_error_statement = 'panic'` and
 `log_error_verbosity = 'terse'` on the excluded bulk-write roles is therefore
-proposed below so failed bulk inserts suppress both `STATEMENT:` and `DETAIL:`
+used below so failed bulk inserts suppress both `STATEMENT:` and `DETAIL:`
 payloads. Even with both settings, the `ERROR:` message line itself is still
 logged (for example `ERROR: null value in column ...` or invalid-type-input
 messages such as `invalid input syntax for type integer: "<bad value>"`). Both
 parameters have PostgreSQL context `superuser`, so non-superuser roles cannot
-change them with `SET`. The following exclusions are **proposed, pending
-approval**:
+change them with `SET`. The following exclusions were **approved on
+2026-11-25** and are the only ones:
 
-| Database | Role | Proposed Setting | Scope & Rationale |
+| Database | Role | Setting | Scope & Rationale |
 | --- | --- | --- | --- |
 | Warehouse Postgres | `hc_warehouse_dagster` | `ALTER ROLE hc_warehouse_dagster SET log_statement = 'ddl';`, `SET log_min_error_statement = 'panic';`, and `SET log_error_verbosity = 'terse';` | Applies to **all** sessions of `hc_warehouse_dagster`: scheduled syncs (Sling, dlt, dbt — both writes and reads) and human/agent `bin/warehouse-dbt --elevated` runs (§10). Prevents batched inline `INSERT` literals and constraint-violation `DETAIL` rows from shipping row-level PII to the central log store and avoids sync-window log spikes, while still logging all DDL (`CREATE`, `ALTER`, `DROP`) and `ERROR:` message lines. Note: `fivetran` is **not** excluded and remains at `log_statement = 'all'`. |
 | Dagster instance Postgres | `dagster_app` (dedicated non-superuser app role) | `ALTER ROLE dagster_app SET log_statement = 'ddl';`, `SET log_min_error_statement = 'panic';`, and `SET log_error_verbosity = 'terse';` | Dagster writes through SQLAlchemy + `psycopg2`, which interpolates values client-side into SQL literals (`log_parameter_max_length = 0` does not strip them). `event_logs` and `asset_keys.last_materialization` include multi-megabyte JSON payloads (containing emails and tokens) that exceed central log-store per-line and per-stream limits. Moving the Dagster app onto a dedicated non-superuser `dagster_app` role excluded at `'ddl'` (plus `log_min_error_statement = 'panic'` and `log_error_verbosity = 'terse'` to suppress `STATEMENT:` and `DETAIL:` row dumps on failed inserts, leaving only the `ERROR:` message line) keeps `postgres` (socket-only after cutover) and `dagster_reader` at `log_statement = 'all'`. |
 
-No role exclusion is proposed on the MCP auth DB (low query volume; all queries
+No role exclusion is set on the MCP auth DB (low query volume; all queries
 from `warehouse_mcp_auth` use extended-protocol bind parameters).
 
 ### Configuration durability, rollout, and rollback
