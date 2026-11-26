@@ -87,32 +87,8 @@ DANGEROUS_PATTERNS = [
     r'\bINTO\s+(?:TEMP|TEMPORARY\s+)?TABLE\b',
     # RAISE for DoS attacks
     r'\bRAISE\b',
-    # Additional safeguards
-    r'\bPG_SLEEP\b',  # DoS via sleep
-    r'\bPG_SLEEP_FOR\b',
-    r'\bPG_SLEEP_UNTIL\b',
-    r'\bLO_IMPORT\b',  # Large object operations
-    r'\bLO_EXPORT\b',
-    r'\bLO_FROM_BYTEA\b',
-    r'\bLO_PUT\b',
-    r'\bPG_READ_FILE\b',  # File system access
-    r'\bPG_WRITE_FILE\b',
-    r'\bPG_READ_BINARY_FILE\b',
-    r'\bPG_LS_DIR\b',
-    r'\bPG_STAT_FILE\b',
-    # Dangerous administrative functions
-    r'\bPG_TERMINATE_BACKEND\b',  # Kill other connections
-    r'\bPG_CANCEL_BACKEND\b',  # Cancel running queries
-    r'\bSET_CONFIG\b',  # Modify session settings
-    r'\bPG_ADVISORY_LOCK\b',  # Can cause deadlocks/DoS
-    r'\bPG_ADVISORY_XACT_LOCK\b',
-    r'\bPG_TRY_ADVISORY_LOCK\b',
-    r'\bPG_TRY_ADVISORY_XACT_LOCK\b',
-    # More dangerous functions
-    r'\bPG_RELOAD_CONF\b',  # Reload server config
-    r'\bPG_ROTATE_LOGFILE\b',  # Log rotation
-    r'\bDBLINK\b',  # External database connections
-    r'\bDBLINK_EXEC\b',
+    # Functions are checked by name against FORBIDDEN_FUNCTIONS in validate_sql,
+    # which also catches quoted and schema-qualified spellings.
 ]
 
 
@@ -380,11 +356,6 @@ def _lex(sql: str) -> _LexResult:
         i += 1
 
     return lex
-
-
-def _strip_sql_comments_and_literals(sql: str) -> str:
-    """SQL with comments, string literals and quoted identifiers blanked out."""
-    return ''.join(_lex(sql).code)
 
 
 # Transaction control would end the read-only, always-rolled-back transaction
