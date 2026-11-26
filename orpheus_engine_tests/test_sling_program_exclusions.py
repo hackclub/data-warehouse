@@ -8,7 +8,7 @@ PROGRAMS = [
     "coral", "grandma", "stern", "out_to_c", "scraps", "trmnt", "three_am",
     "canvas", "club_starter_grant", "dyad", "embassy", "jame_gam",
     "save_point", "scare", "fallen", "ari", "expedition", "taiyaki",
-    "player_two", "forge",
+    "player_two", "forge", "haggle",
 ]
 
 # Tables that hold login state, bearer secrets, caches or one-off backups.
@@ -119,11 +119,27 @@ UNMIRRORED_TABLES = {
         "public.oauth_codes",
     ],
     "trmnt": ["public.sign_in_codes"],
+    "haggle": [
+        "public.competitions_answerkey",
+        "public.django_migrations",
+        "public.django_session",
+        "public.django_admin_log",
+        "public.django_content_type",
+        "public.auth_user",
+        "public.auth_group",
+        "public.auth_permission",
+        "public.auth_group_permissions",
+        "public.auth_user_groups",
+        "public.auth_user_user_permissions",
+    ],
 }
 
 # Secret or contact columns that must stay excluded wherever their table is
 # mirrored, checked against each program's live schema when it was added.
 EXCLUDED_COLUMNS = {
+    "haggle": {
+        "public.competitions_ship": ["screenshot", "predictions", "log"],
+    },
     "forge": {
         "public.active_storage_blobs": ["key", "metadata"],
         "public.ahoy_visits": ["ip", "visit_token", "visitor_token", "latitude", "longitude"],

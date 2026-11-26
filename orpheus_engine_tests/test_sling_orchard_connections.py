@@ -37,7 +37,7 @@ from scripts.provision_warehouse_reader import (
         "macondo", "theseus", "haven", "haven_booking", "atlantis", "pixl",
         "cubed", "mipmap", "contd", "coral", "grandma", "stern", "out_to_c",
         "scraps", "trmnt", "three_am", "canvas", "club_starter_grant",
-        "dyad", "embassy", "jame_gam", "save_point", "scare", "ari", "expedition", "taiyaki", "player_two",
+        "dyad", "embassy", "jame_gam", "save_point", "scare", "ari", "expedition", "taiyaki", "player_two", "haggle",
     ],
 )
 @pytest.mark.parametrize("configured", [False, True])
