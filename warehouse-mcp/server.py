@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import time
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -655,12 +656,33 @@ async def lifespan(app):
 
 def create_app():
     starlette_app = Starlette(lifespan=lifespan)
+    # The proxy in front ends TLS and talks plain HTTP to uvicorn, so the
+    # request scheme is always "http" here. Send HSTS when the public origin is
+    # HTTPS instead.
+    public_https = urlsplit(os.environ.get("MCP_PUBLIC_URL", "")).scheme == "https"
+
+    async def send_with_security_headers(scope, send, message):
+        if message["type"] == "http.response.start":
+            headers = list(message.get("headers", []))
+            existing = {k.lower() for k, _ in headers}
+            if b"x-content-type-options" not in existing:
+                headers.append((b"x-content-type-options", b"nosniff"))
+            if b"x-frame-options" not in existing:
+                headers.append((b"x-frame-options", b"DENY"))
+            if public_https and b"strict-transport-security" not in existing:
+                headers.append((b"strict-transport-security", b"max-age=31536000; includeSubDomains"))
+            message = {**message, "headers": headers}
+        await send(message)
 
     async def wrapped_app(scope, receive, send):
         if scope["type"] == "lifespan":
             await starlette_app(scope, receive, send)
         else:
-            await app(scope, receive, send)
+            await app(
+                scope,
+                receive,
+                lambda message: send_with_security_headers(scope, send, message),
+            )
 
     return wrapped_app
 

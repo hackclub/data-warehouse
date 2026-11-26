@@ -21,8 +21,12 @@ async def apply_auth_migrations(conn: AsyncConnection) -> list[str]:
     async with conn.transaction():
         # Serialize both CLI runs and app startups in the same database.
         await conn.execute("SELECT pg_advisory_xact_lock(5740523001)")
+        async with conn.cursor(row_factory=tuple_row) as cursor:
+            await cursor.execute("SELECT to_regnamespace('mcp_auth') IS NOT NULL")
+            has_schema = (await cursor.fetchone())[0]
+        if not has_schema:
+            await conn.execute("CREATE SCHEMA IF NOT EXISTS mcp_auth")
         await conn.execute("""
-            CREATE SCHEMA IF NOT EXISTS mcp_auth;
             CREATE TABLE IF NOT EXISTS mcp_auth.schema_migrations (
                 version text PRIMARY KEY,
                 sha256 text NOT NULL,

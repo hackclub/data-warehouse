@@ -615,3 +615,26 @@ def test_refresh_token_rotation_binding_scope_expiry_and_reuse_detection(auth_da
         assert client.post("/token", data={
             "grant_type": "refresh_token", "refresh_token": rt4, "client_id": client_id,
         }).status_code == 400
+
+
+@pytest.mark.parametrize(
+    "public_url, sends_hsts",
+    [("https://mcp.example.test", True), ("http://localhost:3000", False)],
+)
+def test_security_headers_follow_the_public_origin(monkeypatch, public_url, sends_hsts):
+    # The proxy ends TLS and reaches the app over plain HTTP, so HSTS must
+    # follow MCP_PUBLIC_URL and not the request scheme.
+    monkeypatch.setenv("MCP_PUBLIC_URL", public_url)
+
+    async def inner(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    monkeypatch.setattr(server, "app", inner)
+    response = TestClient(server.create_app(), base_url="http://app.internal:3000").get("/health")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    if sends_hsts:
+        assert response.headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"
+    else:
+        assert "strict-transport-security" not in response.headers

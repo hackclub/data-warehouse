@@ -43,6 +43,9 @@ POOL_ACQUIRE_TIMEOUT_SECONDS = 10.0
 # AdminShutdown, CrashShutdown and CannotConnectNow. A running query dies with these
 # when its backend ends, whatever the login's limits are.
 CONNECTION_LOST_SQLSTATES = {"57P01", "57P02", "57P03"}
+# 08P01 is in class 08 but means the request was malformed, not that the
+# connection dropped.
+PROTOCOL_VIOLATION_SQLSTATE = "08P01"
 
 
 # SQL statements that are never allowed, even with read-only connection
@@ -62,8 +65,7 @@ DANGEROUS_PATTERNS = [
     r'\bCOMMENT\b',
     r'\bLOCK\b',
     r'\bUNLOCK\b',
-    r'\bSET\s+SESSION\b',
-    r'\bSET\s+LOCAL\b',
+    r'\bSET\b',
     r'\bRESET\b',
     r'\bDISCARD\b',
     r'\bLISTEN\b',
@@ -87,11 +89,17 @@ DANGEROUS_PATTERNS = [
     r'\bRAISE\b',
     # Additional safeguards
     r'\bPG_SLEEP\b',  # DoS via sleep
+    r'\bPG_SLEEP_FOR\b',
+    r'\bPG_SLEEP_UNTIL\b',
     r'\bLO_IMPORT\b',  # Large object operations
     r'\bLO_EXPORT\b',
+    r'\bLO_FROM_BYTEA\b',
+    r'\bLO_PUT\b',
     r'\bPG_READ_FILE\b',  # File system access
     r'\bPG_WRITE_FILE\b',
     r'\bPG_READ_BINARY_FILE\b',
+    r'\bPG_LS_DIR\b',
+    r'\bPG_STAT_FILE\b',
     # Dangerous administrative functions
     r'\bPG_TERMINATE_BACKEND\b',  # Kill other connections
     r'\bPG_CANCEL_BACKEND\b',  # Cancel running queries
@@ -182,98 +190,321 @@ def _normalize_unicode(text: str) -> str:
     return ''.join(safe_result)
 
 
-def _remove_string_literals_and_identifiers(sql: str) -> str:
-    """
-    Remove string literals and quoted identifiers from SQL for safe pattern matching.
+def _is_ident_start(ch: str) -> bool:
+    # PostgreSQL scan.l: ident_start [A-Za-z\200-\377_]. Any non-ASCII code
+    # point is made of bytes >= 0x80 in UTF-8, so it counts as a letter.
+    return ('A' <= ch <= 'Z') or ('a' <= ch <= 'z') or ch == '_' or ord(ch) >= 0x80
 
-    Handles:
-    - Standard strings: 'hello'
-    - Escaped quotes: 'it''s' or 'it\'s'
-    - PostgreSQL escape strings: E'hello\n'
-    - Dollar-quoted strings: $$hello$$ or $tag$hello$tag$
-    - Double-quoted identifiers: "column_name" or "DELETE" (valid column names)
+
+def _is_digit(ch: str) -> bool:
+    return '0' <= ch <= '9'
+
+
+def _is_ident_cont(ch: str) -> bool:
+    # ident_cont [A-Za-z\200-\377_0-9\$]: "$" continues an identifier.
+    return _is_ident_start(ch) or _is_digit(ch) or ch == '$'
+
+
+def _is_dolq_cont(ch: str) -> bool:
+    # dolq_cont [A-Za-z\200-\377_0-9]: no "$" inside a dollar-quote tag.
+    return _is_ident_start(ch) or _is_digit(ch)
+
+
+def _skip_quoted(sql: str, i: int, quote: str, backslash_escapes: bool) -> int:
+    """Return the index just past the quoted token that starts at sql[i] == quote."""
+    n = len(sql)
+    j = i + 1
+    while j < n:
+        c = sql[j]
+        if backslash_escapes and c == '\\':
+            j += 2
+            continue
+        if c == quote:
+            if j + 1 < n and sql[j + 1] == quote:
+                j += 2
+                continue
+            return j + 1
+        j += 1
+    return n  # unterminated: PostgreSQL rejects the whole query
+
+
+class _LexResult:
+    """What PostgreSQL's lexer would see in a query."""
+
+    def __init__(self):
+        self.code = []          # SQL with comments, strings and quoted identifiers blanked
+        self.names = []         # every identifier, resolved the way PostgreSQL resolves it
+        self.unicode_escape = False  # U&'...' or U&"..." (escapes can spell any name)
+        self.parameter = False  # $1, $2, ...
+
+
+def _downcase_identifier(word: str) -> str:
+    # PostgreSQL folds unquoted identifiers with downcase_identifier(): ASCII
+    # A-Z only in a UTF-8 database.
+    return ''.join(chr(ord(c) + 32) if 'A' <= c <= 'Z' else c for c in word)
+
+
+def _lex(sql: str) -> _LexResult:
     """
-    result = []
+    Tokenize SQL the way PostgreSQL's lexer (src/backend/parser/scan.l) does.
+
+    The checks in validate_sql must see exactly the code PostgreSQL will run,
+    so every rule below follows scan.l:
+
+    - Identifiers ({ident_start}{ident_cont}*) and numbers are consumed whole.
+      "$" continues an identifier, so in ``x$a$`` there is no dollar quote.
+    - A dollar quote ``$tag$`` starts only where a new token starts. The tag is
+      ``{dolq_start}{dolq_cont}*`` and never contains "$". ``$1`` is a parameter.
+    - ``--`` comments end at "\\n" or "\\r"; ``/* */`` comments nest.
+    - ``'...'`` uses '' only (standard_conforming_strings is on); ``E'...'``
+      also honours backslash escapes, but only when E starts a token.
+    - ``"..."`` is a quoted identifier with "" escapes. Its exact content is
+      the name (case-sensitive), so ``"pg_sleep"`` names pg_sleep.
+    - ``U&"..."`` and ``U&'...'`` can spell any name or text with escapes
+      (``\\0070``, or another escape character via UESCAPE); they are flagged.
+
+    This runs on the original text. Unicode normalization happens afterwards,
+    on the output, because normalizing first changes where PostgreSQL's tokens
+    begin and end (for example a non-ASCII letter before "$a$").
+    """
+    lex = _LexResult()
+    result = lex.code
     i = 0
     n = len(sql)
 
     while i < n:
-        # Check for dollar-quoted strings: $$...$$ or $tag$...$tag$
-        if sql[i] == '$':
-            # Find the tag (empty for $$)
-            j = i + 1
-            while j < n and (sql[j].isalnum() or sql[j] == '_'):
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < n else ''
+
+        # Line comment: -- up to the end of the line (\n or \r).
+        if ch == '-' and nxt == '-':
+            j = i + 2
+            while j < n and sql[j] not in '\n\r':
                 j += 1
+            result.append(' ')
+            i = j
+            continue
+
+        # Block comment: /* ... */, nested.
+        if ch == '/' and nxt == '*':
+            depth = 1
+            j = i + 2
+            while j < n and depth > 0:
+                if sql[j] == '/' and j + 1 < n and sql[j + 1] == '*':
+                    depth += 1
+                    j += 2
+                elif sql[j] == '*' and j + 1 < n and sql[j + 1] == '/':
+                    depth -= 1
+                    j += 2
+                else:
+                    j += 1
+            result.append(' ')
+            i = j
+            continue
+
+        # Standard string literal: '...'
+        if ch == "'":
+            i = _skip_quoted(sql, i, "'", backslash_escapes=False)
+            result.append(" '' ")
+            continue
+
+        # Quoted identifier: "..." (the name is the exact content, "" -> ")
+        if ch == '"':
+            j = _skip_quoted(sql, i, '"', backslash_escapes=False)
+            lex.names.append(sql[i + 1:j - 1].replace('""', '"'))
+            result.append(' _ident_ ')
+            i = j
+            continue
+
+        # A "$" here starts a new token: a dollar quote, a parameter, or junk.
+        if ch == '$':
+            j = i + 1
+            if j < n and _is_ident_start(sql[j]):
+                j += 1
+                while j < n and _is_dolq_cont(sql[j]):
+                    j += 1
             if j < n and sql[j] == '$':
-                tag = sql[i:j+1]  # e.g., "$$" or "$tag$"
+                tag = sql[i:j + 1]
                 end_pos = sql.find(tag, j + 1)
-                if end_pos != -1:
-                    result.append("''")  # Replace with empty string literal
-                    i = end_pos + len(tag)
-                    continue
-
-        # Check for E'...' escape strings
-        if sql[i] in ('E', 'e') and i + 1 < n and sql[i + 1] == "'":
-            i += 1  # Skip the E, process the quote below
-
-        # Check for standard string literals (single quotes)
-        if sql[i] == "'":
-            j = i + 1
-            while j < n:
-                if sql[j] == "'":
-                    # Check for escaped quote ''
-                    if j + 1 < n and sql[j + 1] == "'":
-                        j += 2  # Skip both quotes
-                        continue
-                    break
-                elif sql[j] == '\\' and j + 1 < n:
-                    j += 2  # Skip escaped character
-                    continue
-                j += 1
-            result.append("''")  # Replace entire string with empty
-            i = j + 1
+                result.append(" '' ")
+                # Unterminated: PostgreSQL rejects the whole query.
+                i = n if end_pos == -1 else end_pos + len(tag)
+                continue
+            if j == i + 1 and j < n and _is_digit(sql[j]):
+                # Positional parameter $1, $2, ...
+                while j < n and _is_digit(sql[j]):
+                    j += 1
+                lex.parameter = True
+                result.append(sql[i:j])
+                i = j
+                continue
+            result.append(ch)
+            i += 1
             continue
 
-        # Check for double-quoted identifiers (PostgreSQL identifier quoting)
-        # "DELETE" as a column name is valid and should not trigger validation
-        if sql[i] == '"':
+        if _is_ident_start(ch):
+            # Escape string E'...': a prefix only at the start of a token.
+            if ch in 'Ee' and nxt == "'":
+                i = _skip_quoted(sql, i + 1, "'", backslash_escapes=True)
+                result.append(" '' ")
+                continue
+            # Unicode escapes U&'...' / U&"...": a prefix only at token start.
+            if ch in 'Uu' and nxt == '&' and i + 2 < n and sql[i + 2] in '\'"':
+                lex.unicode_escape = True
+            # Identifier or keyword, consumed whole (B'..', X'..', N'..' and
+            # U&'..' then lex as a standard string, as in PostgreSQL).
             j = i + 1
-            while j < n:
-                if sql[j] == '"':
-                    # Check for escaped quote ""
-                    if j + 1 < n and sql[j + 1] == '"':
-                        j += 2  # Skip both quotes
-                        continue
-                    break
+            while j < n and _is_ident_cont(sql[j]):
                 j += 1
-            result.append('_ident_')  # Replace with safe placeholder
-            i = j + 1
+            word = sql[i:j]
+            lex.names.append(_downcase_identifier(word))
+            result.append(word)
+            i = j
             continue
 
-        result.append(sql[i])
+        if _is_digit(ch):
+            # Numeric literal. Valid numbers use only ASCII letters, digits,
+            # "_" and "."; anything that runs into an identifier is "trailing
+            # junk", which PostgreSQL rejects for the whole query.
+            j = i + 1
+            while j < n and (
+                _is_digit(sql[j]) or sql[j] in '_.'
+                or ('A' <= sql[j] <= 'Z') or ('a' <= sql[j] <= 'z')
+            ):
+                j += 1
+            result.append(sql[i:j])
+            i = j
+            continue
+
+        result.append(ch)
         i += 1
 
-    return ''.join(result)
+    return lex
+
+
+def _strip_sql_comments_and_literals(sql: str) -> str:
+    """SQL with comments, string literals and quoted identifiers blanked out."""
+    return ''.join(_lex(sql).code)
+
+
+# Transaction control would end the read-only, always-rolled-back transaction
+# each query runs in. These words are blocked where a statement starts ("END"
+# is fine inside CASE ... END).
+TRANSACTION_CONTROL_STATEMENTS = {
+    'ABORT', 'BEGIN', 'COMMIT', 'END', 'PREPARE', 'RELEASE', 'ROLLBACK',
+    'SAVEPOINT', 'START',
+}
+
+# Functions no query may name, however the name is written: unquoted in any
+# case, quoted ("pg_sleep"), or schema-qualified (pg_catalog."pg_sleep").
+# Matched against each identifier as PostgreSQL resolves it, so this holds for
+# calls in SELECT lists, FROM (SELECT * FROM pg_sleep(1)) and anywhere else.
+# PostgreSQL itself still enforces privileges; this list stops the calls the
+# query login is allowed to make but the tool should not.
+FORBIDDEN_FUNCTIONS = frozenset({
+    # Sleeping holds a pooled connection for up to statement_timeout.
+    'pg_sleep', 'pg_sleep_for', 'pg_sleep_until',
+    # Signalling: every MCP user shares one login, and a login may signal its
+    # own backends, so these would cancel or end other users' queries.
+    'pg_cancel_backend', 'pg_terminate_backend', 'pg_log_backend_memory_contexts',
+    # Functions that run SQL given as text, which none of these checks can see.
+    # Found by scanning PostgreSQL 18's source for every SPI query call
+    # (SPI_execute*, SPI_prepare*, SPI_cursor_open_with_args/parse_open) and
+    # confirmed by calling every pg_catalog function that takes text with a
+    # marker query: ts_rewrite(tsquery, text), ts_stat and query_to_xml* run
+    # the text; cursor_to_xml* run a named cursor's query.
+    'query_to_xml', 'query_to_xmlschema', 'query_to_xml_and_xmlschema',
+    'cursor_to_xml', 'cursor_to_xmlschema', 'ts_stat', 'ts_rewrite',
+    # These run a fixed SELECT * over whole tables, schemas or the database.
+    'table_to_xml', 'table_to_xmlschema', 'table_to_xml_and_xmlschema',
+    'schema_to_xml', 'schema_to_xmlschema', 'schema_to_xml_and_xmlschema',
+    'database_to_xml', 'database_to_xmlschema', 'database_to_xml_and_xmlschema',
+    # Session state and locks that outlive the query.
+    'set_config', 'pg_advisory_lock', 'pg_advisory_lock_shared',
+    'pg_advisory_xact_lock', 'pg_advisory_xact_lock_shared',
+    'pg_try_advisory_lock', 'pg_try_advisory_lock_shared',
+    'pg_try_advisory_xact_lock', 'pg_try_advisory_xact_lock_shared',
+    'pg_notify',
+    # Large objects and files.
+    'lo_import', 'lo_export', 'lo_from_bytea', 'lo_put', 'lo_create', 'lo_creat',
+    'lo_unlink', 'lo_truncate', 'lo_truncate64', 'lowrite', 'lo_open',
+    'pg_read_file', 'pg_read_binary_file', 'pg_write_file', 'pg_ls_dir',
+    'pg_stat_file', 'pg_ls_logdir', 'pg_ls_waldir', 'pg_ls_tmpdir',
+    'pg_ls_archive_statusdir', 'pg_ls_logicalsnapdir', 'pg_ls_logicalmapdir',
+    'pg_ls_replslotdir',
+    # Server administration.
+    'pg_reload_conf', 'pg_rotate_logfile', 'pg_switch_wal',
+    'pg_create_restore_point', 'pg_promote',
+    # Remote databases.
+    'dblink', 'dblink_exec', 'dblink_connect', 'dblink_connect_u',
+    'dblink_send_query',
+})
+
+
+_RUNS_A_STRING = (
+    " (it runs a query given as text, which this tool cannot check). For row counts"
+    " use pg_stat_user_tables.n_live_tup or pg_class.reltuples, or count(*) per table"
+)
+FORBIDDEN_FUNCTION_HINTS = {
+    name: _RUNS_A_STRING
+    for name in ('query_to_xml', 'query_to_xmlschema', 'query_to_xml_and_xmlschema',
+                 'cursor_to_xml', 'cursor_to_xmlschema', 'ts_stat', 'ts_rewrite')
+}
+FORBIDDEN_FUNCTION_HINTS.update({
+    name: " (it reads whole tables at once); query the tables directly with a LIMIT instead"
+    for name in ('table_to_xml', 'table_to_xmlschema', 'table_to_xml_and_xmlschema',
+                 'schema_to_xml', 'schema_to_xmlschema', 'schema_to_xml_and_xmlschema',
+                 'database_to_xml', 'database_to_xmlschema', 'database_to_xml_and_xmlschema')
+})
 
 
 def validate_sql(sql: str) -> None:
     """
     Validate that SQL doesn't contain dangerous statements.
     Raises SQLValidationError if forbidden patterns are found.
+
+    This is one of three layers. The others are server side and do not depend on
+    this lexer: Database._run sends each query with the extended query protocol
+    (PostgreSQL itself refuses more than one statement) inside a READ ONLY
+    transaction that is always rolled back, and the pool resets each connection
+    before reuse. Function calls are NOT stopped server side. The function list
+    here is a defence-in-depth deny list matched against every identifier,
+    quoted or not; it cannot see SQL hidden inside a string, which is why the
+    functions that execute text are on it. The real control for signalling other
+    sessions is revoking EXECUTE on those functions in the warehouse database.
     """
+    # Tokenize first, on the text PostgreSQL will see.
+    lex = _lex(sql)
+
+    if lex.unicode_escape:
+        raise SQLValidationError(
+            "Unicode escape strings and identifiers (U&'...', U&\"...\") are not allowed"
+        )
+    if lex.parameter:
+        raise SQLValidationError(
+            "Positional parameters ($1) are not supported; put the values in the query"
+        )
+    for name in lex.names:
+        if name in FORBIDDEN_FUNCTIONS:
+            raise SQLValidationError(
+                f"SQL uses a forbidden function: {name}{FORBIDDEN_FUNCTION_HINTS.get(name, '')}"
+            )
+
     # Normalize Unicode to prevent homoglyph attacks (e.g., ＤＲＯＰ -> DROP)
-    cleaned = _normalize_unicode(sql)
-
-    # Remove comments
-    cleaned = re.sub(r'--.*$', '', cleaned, flags=re.MULTILINE)  # Line comments
-    cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)  # Block comments
-
-    # Remove string literals and quoted identifiers
-    # This prevents false positives like SELECT "DELETE" FROM table (valid column name)
-    cleaned = _remove_string_literals_and_identifiers(cleaned)
+    cleaned = _normalize_unicode(''.join(lex.code))
 
     # Convert to uppercase for case-insensitive matching
     cleaned = cleaned.upper()
+
+    statements = [part for part in cleaned.split(';') if part.strip()]
+    if len(statements) > 1:
+        raise SQLValidationError("Only one SQL statement is allowed per query")
+    for statement in statements:
+        first = re.match(r'\s*\(*\s*([A-Z_]+)', statement)
+        if first and first.group(1) in TRANSACTION_CONTROL_STATEMENTS:
+            raise SQLValidationError(
+                f"SQL contains forbidden statement pattern: {first.group(1)}"
+            )
 
     for pattern in DANGEROUS_PATTERNS:
         if re.search(pattern, cleaned, re.IGNORECASE):
@@ -292,6 +523,10 @@ def is_connection_lost(error: psycopg.OperationalError) -> bool:
     """
     # A socket cut without a word from the server has no SQLSTATE.
     state = error.sqlstate
+    if state == PROTOCOL_VIOLATION_SQLSTATE:
+        # The server answered: this query broke the protocol (for example a $1
+        # with no value). The connection is fine and a retry fails the same way.
+        return False
     return state is None or state.startswith("08") or state in CONNECTION_LOST_SQLSTATES
 
 
@@ -347,6 +582,16 @@ def _format_attribution_comment(firstname: str, lastname: str) -> str:
     return f"/* warehouse-mcp {cleaned} */" if cleaned else "/* warehouse-mcp */"
 
 
+async def reset_session(conn: psycopg.AsyncConnection) -> None:
+    """Pool reset: drop session settings and session advisory locks.
+
+    RESET ALL returns every setting to its connection-start value, which keeps
+    default_transaction_read_only=on from the connection options and role.
+    """
+    await conn.execute("RESET ALL")
+    await conn.execute("SELECT pg_catalog.pg_advisory_unlock_all()")
+
+
 class Database:
     """PostgreSQL database connection pool with read-only enforcement."""
 
@@ -371,6 +616,9 @@ class Database:
             # socket that the network path may sever out from under us.
             max_idle=300.0,
             max_lifetime=1800.0,
+            # Undo any session state before the connection serves another
+            # caller, whatever the query did.
+            reset=reset_session,
             kwargs={
                 "autocommit": True,
                 "row_factory": dict_row,
@@ -469,18 +717,25 @@ class Database:
         for attempt in range(1, MAX_QUERY_ATTEMPTS + 1):
             try:
                 async with self._pool.connection(timeout=POOL_ACQUIRE_TIMEOUT_SECONDS) as conn:
-                    async with conn.cursor() as cur:
-                        if params is None:
-                            await cur.execute(sql)
-                        else:
-                            await cur.execute(sql, params)
+                    # READ ONLY, and always rolled back: anything the query
+                    # changes in the session (SET, set_config) is undone.
+                    async with conn.transaction(force_rollback=True):
+                        await conn.execute("SET TRANSACTION READ ONLY")
+                        async with conn.cursor() as cur:
+                            # Pipeline mode sends the query with the extended
+                            # protocol, where PostgreSQL itself refuses more
+                            # than one statement, so nothing can follow a
+                            # COMMIT that slips past validate_sql.
+                            async with conn.pipeline() as pipeline:
+                                await cur.execute(sql, params)
+                                await pipeline.sync()
 
-                        if cur.description is None:
-                            return [], []
+                            if cur.description is None:
+                                return [], []
 
-                        columns = [desc[0] for desc in cur.description]
-                        rows = await cur.fetchmany(max_rows)
-                        return [dict(row) for row in rows], columns
+                            columns = [desc[0] for desc in cur.description]
+                            rows = await cur.fetchmany(max_rows)
+                            return [dict(row) for row in rows], columns
             except PoolTimeout:
                 # The pool itself couldn't hand us a connection (warehouse is
                 # connection-saturated). Retrying just stacks more timeouts, so

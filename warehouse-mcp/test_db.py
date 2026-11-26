@@ -213,6 +213,7 @@ def test_terminated_query_is_silently_run_again(server, monkeypatch, caplog):
         (errors.LockNotAvailable("x"), False),
         (errors.ConfigurationLimitExceeded("x"), False),
         (errors.DiskFull("x"), False),
+        (errors.ProtocolViolation("x"), False),
     ],
 )
 def test_only_a_lost_connection_counts(error, lost):
@@ -337,3 +338,188 @@ def test_describe_schema_shows_the_freshness_views_and_their_comments(server, mo
     assert f"## {FRESHNESS_TABLE}\n" in described
     assert "deleted at the source" in described
     assert "\n- status: " in described, "column comments must sit next to their column"
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SET statement_timeout = 0; SELECT 1",
+        "SET default_transaction_read_only = off; SELECT 1",
+        "SET ROLE postgres",
+        "SELECT pg_sleep_for('1 second')",
+        "SELECT pg_sleep_until(now() + interval '1 second')",
+        "SELECT pg_ls_dir('.')",
+        "SELECT pg_stat_file('postgresql.conf')",
+        "SELECT lo_from_bytea(0, '\\x61')",
+        "SELECT 'a--b'\n; SET statement_timeout = 0; SELECT 1",
+        "-- don't skip next line\nSET statement_timeout = 0; SELECT 1",
+        "SELECT /* /* */ 1 */ ; DROP TABLE x",
+        # "$" continues an identifier, so x$a$ is not a dollar quote.
+        "SELECT 1 AS x$a$; SET statement_timeout = 0; SELECT 1 AS y$a$",
+        "SELECT 1 AS x$a$; SELECT pg_sleep(1); SELECT 1 AS y$a$",
+        "SELECT 1 AS x$a$; COMMIT; SELECT 1 AS y$a$",
+        "SELECT 1 AS \u00e9$a$; SET statement_timeout = 0; SELECT 1 AS \u00e9$a$",
+        "SELECT 1 AS x_$a$ FROM t WHERE $a$ = $a$ OR pg_sleep(1) IS NULL",
+        # A -- comment ends at a carriage return too.
+        "SELECT 1 -- note\rSET statement_timeout = 0",
+        # E only starts an escape string at the start of a token.
+        "SELECT xe'\\' AS a; SET statement_timeout = 0; SELECT '\\'",
+        "SELECT 1; SELECT 2",
+        "COMMIT",
+        "END",
+        "BEGIN",
+        "ROLLBACK",
+        "ABORT",
+        "START TRANSACTION READ WRITE",
+        "SAVEPOINT s",
+        "RELEASE SAVEPOINT s",
+        "SELECT 1; COMMIT",
+        # Quoted, qualified and escaped spellings of a forbidden function.
+        'SELECT "pg_sleep"(0.3)',
+        'SELECT pg_catalog."pg_sleep"(0.3)',
+        'SELECT "pg_catalog" . /* x */ "pg_sleep"(0.3)',
+        'SELECT U&"\\0070g_sleep"(0.3)',
+        "SELECT U&\"!0070g_sleep\" UESCAPE '!' (0.3)",
+        "SELECT u&'\\0070g_sleep'",
+        "SELECT \"pg_terminate_backend\"(pid) FROM pg_stat_activity WHERE usename = 'x'",
+        "SELECT pg_catalog.\"pg_cancel_backend\"(1)",
+        "SELECT * FROM \"pg_sleep\"(1)",
+        "SELECT * FROM pg_catalog.pg_sleep(1)",
+        "SELECT PG_SLEEP(1)",
+        "SELECT \"set_config\"('statement_timeout', '0', false)",
+        "SELECT \"lo_from_bytea\"(0, 'abc'::bytea)",
+        # Functions that run a query given as a string.
+        "SELECT query_to_xml('select pg_sleep(1)', true, false, '')",
+        "SELECT \"query_to_xml\"('select 1', true, false, '')",
+        "SELECT * FROM ts_stat('select 1')",
+        "SELECT ts_rewrite('a'::tsquery, 'SELECT ''a''::tsquery, ''b''::tsquery FROM (SELECT pg_sleep(1.5)) s')",
+        "SELECT pg_catalog.\"ts_rewrite\"('a'::tsquery, $q$SELECT 'a'::tsquery, 'b'::tsquery$q$)",
+        "SELECT TS_REWRITE('a'::tsquery, 'select 1')",
+        "SELECT table_to_xml('t'::regclass, true, false, '')",
+        "SELECT schema_to_xml('public', true, false, '')",
+        "SELECT database_to_xml(true, false, '')",
+        "SELECT \"table_to_xml_and_xmlschema\"('t'::regclass, true, false, '')",
+        # Positional parameters have no values in this tool.
+        "SELECT $1",
+        "SELECT * FROM t WHERE id = $1",
+    ],
+)
+def test_validate_sql_blocks_session_override_and_sleep_variants(statement):
+    with pytest.raises(warehouse_db.SQLValidationError):
+        warehouse_db.validate_sql(statement)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT 1 -- don't break on apostrophe in comment\n",
+        "SELECT /* outer /* inner DROP TABLE x */ comment */ 1",
+        "SELECT E'it\\'s a DROP test'",
+        "SELECT $$DROP TABLE x; SET statement_timeout=0$$",
+        "SELECT $a$DROP; SET x$a$ AS ok",
+        "SELECT $a$; SET$a$ AS v",
+        'SELECT "set" FROM t',
+        "SELECT x$a$ FROM t;",
+        "SELECT CASE WHEN true THEN 1 ELSE 0 END AS flag;\n",
+        "SELECT 1; -- trailing comment",
+        "SELECT 'a;b' AS semicolon_in_string",
+        # Names are case-sensitive when quoted: "PG_SLEEP" is not pg_sleep.
+        'SELECT "PG_SLEEP" FROM t',
+        "SELECT 'pg_sleep(1)' AS text_only",
+        "SELECT 'pg_sleep'::regproc",
+        'SELECT "my""col" FROM t',
+        "SELECT x$1 FROM t",
+    ],
+)
+def test_validate_sql_allows_safe_comments_strings_and_quoted_identifiers(statement):
+    warehouse_db.validate_sql(statement)
+
+
+def test_lexer_matches_postgres_on_dollar_quotes(server):
+    """Ask PostgreSQL how it splits the text: one string literal, or code."""
+    with server.admin() as conn, conn.cursor() as cur:
+        cur.execute("SELECT $a$; SET$a$ AS v")
+        assert cur.fetchone() == ("; SET",)
+        cur.execute("SELECT 1 AS x$a$")
+        assert [d.name for d in cur.description] == ["x$a$"]
+
+
+def test_postgres_calls_functions_through_quoted_and_escaped_names(server):
+    """Why the guard must resolve quoted and U& names: PostgreSQL runs them."""
+    with server.admin() as conn, conn.cursor() as cur:
+        for sql in (
+            'SELECT "pg_sleep"(0)',
+            'SELECT pg_catalog."pg_sleep"(0)',
+            'SELECT U&"\\0070g_sleep"(0)',
+            "SELECT U&\"!0070g_sleep\" UESCAPE '!' (0)",
+        ):
+            cur.execute(sql)
+            assert cur.fetchone() is not None
+            with pytest.raises(warehouse_db.SQLValidationError):
+                warehouse_db.validate_sql(sql)
+
+
+def test_postgres_runs_sql_inside_ts_rewrite_text(server):
+    """Why ts_rewrite is forbidden: PostgreSQL executes its text argument."""
+    with server.admin() as conn, conn.cursor() as cur:
+        cur.execute("CREATE SEQUENCE IF NOT EXISTS synced.ts_rewrite_probe")
+        cur.execute("SELECT nextval('synced.ts_rewrite_probe')")
+        before = cur.fetchone()[0]
+        cur.execute(
+            "SELECT ts_rewrite('a'::tsquery, "
+            "'SELECT ''a''::tsquery, ''b''::tsquery FROM (SELECT nextval(''synced.ts_rewrite_probe'')) s')"
+        )
+        cur.execute("SELECT last_value FROM synced.ts_rewrite_probe")
+        after = cur.fetchone()[0]
+        assert after == before + 1
+    with pytest.raises(warehouse_db.SQLValidationError):
+        warehouse_db.validate_sql("SELECT ts_rewrite('a'::tsquery, 'SELECT 1')")
+
+
+def test_a_parameter_error_is_not_retried(server, monkeypatch, caplog):
+    async def use(database):
+        await database._run("SELECT $1", None, 10)
+
+    with pytest.raises(errors.ProtocolViolation):
+        _on_database(server.mcp_url(), monkeypatch, use)
+    assert _retries(caplog) == 0
+
+
+def test_session_changes_never_reach_the_next_query(server, monkeypatch):
+    """Server side, without validate_sql: one pooled connection, two callers."""
+
+    async def use(database):
+        database._pool._max_size = 1
+        before = (await database._run("SHOW statement_timeout", None, 10))[0][0]
+        await database._run("SELECT set_config('statement_timeout', '0', false)", None, 10)
+        await database._run("SET statement_timeout = 0", None, 10)
+        with pytest.raises(psycopg.Error):
+            await database._run("SET statement_timeout = 0; SELECT 1", None, 10)
+        with pytest.raises(psycopg.Error):
+            await database._run("COMMIT; SET statement_timeout = 0; SELECT 1", None, 10)
+        await database._run("COMMIT", None, 10)
+        await database._run("SELECT pg_advisory_lock(42)", None, 10)
+        after = (await database._run("SHOW statement_timeout", None, 10))[0][0]
+        ro = (await database._run("SHOW transaction_read_only", None, 10))[0][0]
+        locks = (await database._run(
+            "SELECT count(*) AS n FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid()",
+            None, 10,
+        ))[0][0]
+        return before, after, ro, locks
+
+    before, after, ro, locks = _on_database(server.mcp_url(), monkeypatch, use)
+    assert after["statement_timeout"] == before["statement_timeout"] != "0"
+    assert ro["transaction_read_only"] == "on"
+    assert locks["n"] == 0
+
+
+def test_query_runs_in_a_read_only_transaction(server, monkeypatch):
+    async def use(database):
+        with pytest.raises(errors.ReadOnlySqlTransaction):
+            await database._run("SELECT lo_from_bytea(0, 'abc'::bytea)", None, 10)
+        rows, columns = await database._run(
+            "SELECT current_setting('transaction_read_only') AS ro WHERE %s", (True,), 10
+        )
+        return rows, columns
+
+    assert _on_database(server.mcp_url(), monkeypatch, use) == ([{"ro": "on"}], ["ro"])
