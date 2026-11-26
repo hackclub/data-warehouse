@@ -44,9 +44,9 @@ data lives in one of these places:
 1. **Dedicated Sling Postgres mirror** (`orpheus_engine/defs/sling/programs/<name>.py`, schema `<name>`):
    - Active programs with dedicated schemas: `club_shop`, `contd`, `coral`,
      `crescent`, `cubed`, `embassy`, `expedition`, `fabricate`, `fallen`,
-     `forge`, `grandma`, `half_life`, `jame_gam`, `mipmap`, `phantom`, `pixl`,
-     `scraps`, `stardance` (+ `stardance_ahoy`), `taiyaki`, `terra`,
-     `thirdspace`, `three_am` (3am), `trmnt`.
+     `forge`, `grandma`, `haggle`, `half_life`, `jame_gam`, `mipmap`,
+     `phantom`, `pixl`, `scraps`, `stardance` (+ `stardance_ahoy`), `taiyaki`,
+     `terra`, `thirdspace`, `three_am` (3am), `trmnt`.
    - Programs using `hc_warehouse_reader` are checked daily for column grant
      drift by `warehouse_reader_grant_drift_job` (see `runbooks/prod-health-monitoring.md` §9).
 2. **Dedicated Airtable DLT mirror** (schema `airtable_<name>`):
@@ -66,13 +66,11 @@ data lives in one of these places:
    - Programs with dedicated mirrors that also use `ari` for review
      workflows: `3am`, `Embassy`, `Grandma`, `Half Life`, `Phantom`,
      `Snowglobe` (`airtable_snowglobe`), `Terra`, `thirdspace`.
-4. **Active Programs Not Yet Mirrored (Unified YSWS Registry Only)**:
-   - `Haggle`: has a Hack Club Orchard Postgres database that is not yet
-     mirrored (public endpoint off); currently tracked in
-     `airtable_unified_ysws_projects_db` (`ysws_programs` / `approved_projects`).
-   - `Harvest`: an itch.io jam with no Hack Club operational database
-     (submissions live on itch.io; approved projects are tracked in
-     `airtable_unified_ysws_projects_db.approved_projects`).
+4. **External Jam / Unified YSWS Only (No Hack Club Operational DB)**:
+   - `Harvest`: hosted as a public itch.io jam (`https://itch.io/jam/harvest`)
+     with no Hack Club operational database; approved projects are tracked in
+     `airtable_unified_ysws_projects_db.approved_projects` (with the public
+     itch.io jam page as its external submission location).
 
 ## Warehouse MCP access and audit logs
 
