@@ -93,6 +93,8 @@ _EXPLICIT_ASSET_TO_SCHEMA: dict[str, tuple[str, str]] = {
 
 # Explicit reasons for warehouse schemas not managed by a scheduled Dagster sync.
 _KNOWN_UNTRACKED_REASONS: dict[str, str] = {
+    "canvas": "Ended program (2026-10-22; mirror disabled in Dagster)",
+    "fallout": "Ended program (2026-07-07; mirror disabled in Dagster)",
     "highway_github": "Manual-only one-time backfill (Highway ended Oct 2025; excluded from scheduled jobs)",
     "metabase_user_uploads": "Metabase user-uploaded tables (not synced by Dagster)",
     "moonshot": "Historical/legacy schema (not synced by Dagster)",
