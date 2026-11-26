@@ -143,8 +143,18 @@ async def _emit_audit_log(
             raise RuntimeError("Request audit is temporarily unavailable") from None
 
 
+# There is no freshness tool: agents read the freshness views with SQL. This
+# text goes in the server instructions, the query tool description and the
+# list_schemas reply, because some clients drop server instructions.
+FRESHNESS_HINT = (
+    "Before trusting recent data, query warehouse_metadata.mirror_freshness "
+    "(one row per schema: status, last_synced_at, age_hours, is_stale) or "
+    "warehouse_metadata.asset_freshness (one row per asset). It shows sync "
+    "time only: incremental mirrors may keep rows deleted at the source."
+)
+
 # Create MCP server
-mcp = Server("warehouse-mcp")
+mcp = Server("warehouse-mcp", instructions=FRESHNESS_HINT)
 
 # HTTP transport - messages path (root for Streamable HTTP compatibility)
 session_manager = StreamableHTTPSessionManager(app=mcp, stateless=True)
@@ -211,7 +221,8 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Execute a read-only SQL query against the data warehouse. "
                 "Returns a query_id for fetching more rows, plus a preview of results. "
-                "Use LIMIT in your SQL for large tables. Max 10,000 rows cached per query."
+                "Use LIMIT in your SQL for large tables. Max 10,000 rows cached per query.\n\n"
+                + FRESHNESS_HINT
             ),
             inputSchema={
                 "type": "object",
@@ -287,6 +298,7 @@ async def list_tools() -> list[Tool]:
             description=(
                 "List all available schemas in the data warehouse.\n\n"
                 "Key schemas:\n"
+                "- warehouse_metadata: Sync freshness (mirror_freshness per schema, asset_freshness per asset)\n"
                 "- airtable_unified_ysws_projects_db: Shipped projects and NPS on programs\n"
                 "- public_unified_analytics: User histories and events on users\n"
                 "- loops.audience: User profile fields (geocoded country, etc.)\n"
@@ -301,8 +313,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="describe_schema",
             description=(
-                "Get detailed documentation for a schema including tables, columns, "
-                "and sample data. Limited to 1000 columns per table. "
+                "Get detailed documentation for a schema including tables, views, "
+                "their comments, columns, and sample data. Limited to 1000 columns per table. "
                 "Use list_columns for tables with more columns."
             ),
             inputSchema={
@@ -466,7 +478,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             response = "Available schemas:\n"
             for schema in schemas:
                 response += f"  - {schema}\n"
-            response += f"\nUse describe_schema(schema_name='...') to see tables and columns."
+            response += (
+                "\nUse describe_schema(schema_name='...') to see tables and columns.\n"
+                + FRESHNESS_HINT
+            )
             
             return [TextContent(type="text", text=response)]
         

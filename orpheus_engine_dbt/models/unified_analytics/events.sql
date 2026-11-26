@@ -19,9 +19,11 @@ loops_unpivoted AS (
         CASE
             -- ISO-like datetime (accepts space or 'T', optional seconds/ms, optional Z/offset)
             WHEN e.value ~ '^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$'
+              AND substr(e.value, 1, 4) BETWEEN '1900' AND '2100'
               THEN (e.value)::timestamptz
             -- Date only -> midnight UTC
             WHEN e.value ~ '^\d{4}-\d{2}-\d{2}$'
+              AND substr(e.value, 1, 4) BETWEEN '1900' AND '2100'
               THEN ((e.value)::date)::timestamp AT TIME ZONE 'UTC'
         END AS event_date,
         -- camelCase event name

@@ -272,3 +272,68 @@ def test_execute_query_with_user_info_blocks_comment_escape_injection(server, mo
     result, check = _on_database(server.mcp_url(), monkeypatch, use)
     assert result == {"ok": 1}
     assert check == {"tbl": None}
+
+
+def test_freshness_is_found_and_read_through_sql_alone(server, monkeypatch):
+    """No freshness tool: list_schemas shows warehouse_metadata and query reads the views."""
+    from datetime import datetime, timedelta, timezone
+
+    from orpheus_engine.defs.freshness.definitions import AssetFreshnessSpec, write_mirror_freshness
+
+    now = datetime.now(timezone.utc)
+    specs = [
+        AssetFreshnessSpec("stardance", "stardance_warehouse_mirror", "sling", "frequent_15min_schedule", 15, 60),
+        AssetFreshnessSpec("hcb", "hcb_warehouse_mirror", "sling", "materialize_all_assets", 360, 720),
+    ]
+    with server.admin() as conn:
+        write_mirror_freshness(
+            conn,
+            specs,
+            {"stardance_warehouse_mirror": now - timedelta(minutes=5), "hcb_warehouse_mirror": now - timedelta(hours=24)},
+            recorded_at=now,
+        )
+
+    async def use(database):
+        schemas = await database.list_schemas()
+        rows, _ = await database.execute_query(
+            "SELECT schema_name, status, is_stale FROM warehouse_metadata.mirror_freshness "
+            "WHERE schema_name IN ('stardance', 'hcb') ORDER BY schema_name"
+        )
+        doc, _ = await database.execute_query(
+            "SELECT obj_description('warehouse_metadata.mirror_freshness'::regclass, 'pg_class') AS doc"
+        )
+        return schemas, rows, doc[0]["doc"]
+
+    schemas, rows, doc = _on_database(server.mcp_url(), monkeypatch, use)
+    assert "warehouse_metadata" in schemas
+    assert rows == [
+        {"schema_name": "hcb", "status": "stale", "is_stale": True},
+        {"schema_name": "stardance", "status": "fresh", "is_stale": False},
+    ]
+    assert "deleted at the source" in doc
+
+
+def test_describe_schema_shows_the_freshness_views_and_their_comments(server, monkeypatch):
+    """describe_schema, the step list_schemas points to, lists the views with their docs."""
+    from datetime import datetime, timezone
+
+    from orpheus_engine.defs.freshness.definitions import (
+        FRESHNESS_TABLE,
+        AssetFreshnessSpec,
+        write_mirror_freshness,
+    )
+
+    now = datetime.now(timezone.utc)
+    spec = AssetFreshnessSpec("stardance", "stardance_warehouse_mirror", "sling", "frequent_15min_schedule", 15, 60)
+    with server.admin() as conn:
+        write_mirror_freshness(conn, [spec], {"stardance_warehouse_mirror": now}, recorded_at=now)
+
+    async def use(database):
+        return await database.describe_schema("warehouse_metadata")
+
+    described = _on_database(server.mcp_url(), monkeypatch, use)
+    assert "## warehouse_metadata.mirror_freshness (view)" in described
+    assert "## warehouse_metadata.asset_freshness (view)" in described
+    assert f"## {FRESHNESS_TABLE}\n" in described
+    assert "deleted at the source" in described
+    assert "\n- status: " in described, "column comments must sit next to their column"
