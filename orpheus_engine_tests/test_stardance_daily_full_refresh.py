@@ -17,6 +17,16 @@ def test_stardance_full_refresh_config_preserves_disabled_and_select_exclusions(
     assert cfg["streams"]["public.versions"] is None
 
 
+def test_stardance_full_refresh_defaults_do_not_drop_incremental_options():
+    """F4: fail if incremental defaults ever gain source/target options that full refresh omits."""
+    inc_defaults = sd.stardance_replication_config["defaults"]
+    full_defaults = sd._stardance_full_refresh_config()["defaults"]
+    incremental_only_keys = {"mode", "primary_key", "update_key"}
+    for key, val in inc_defaults.items():
+        if key not in incremental_only_keys:
+            assert full_defaults.get(key) == val, f"full refresh dropped default option {key!r}"
+
+
 def test_should_run_daily_full_refresh_window_and_dedup():
     before_window = datetime(2026, 11, 25, 2, 45, tzinfo=timezone.utc)
     in_window = datetime(2026, 11, 25, 3, 0, tzinfo=timezone.utc)

@@ -32,7 +32,7 @@ Agents and operators can check per-schema and per-asset sync freshness without q
 
 Because `age_hours`, `is_stale`, and `status` (`fresh` | `stale` | `never_synced` | `untracked`) are computed dynamically against `NOW()` in the views, mirrors still flip to stale if Dagster stops running. Check `recorded_at` to verify that the freshness asset itself is current.
 
-> **Limitation (incremental mirrors & hard deletes):** Freshness reflects last successful sync time only. Incremental Sling mirrors (for example `auth.oauth_access_tokens` and several `flavortown.*` tables) do not propagate hard deletes from the source database, so a freshly synced incremental table can still retain rows deleted at the source. `stardance` runs incremental between daily full refreshes (`03:00 UTC`), so upstream hard deletes clear within 24 hours.
+> **Limitation (incremental mirrors & hard deletes):** Freshness reflects last successful sync time only. Incremental Sling mirrors (for example `auth.oauth_access_tokens` and several `flavortown.*` tables) do not propagate hard deletes from the source database, so a freshly synced incremental table can still retain rows deleted at the source. `stardance` runs incremental between daily full refreshes (`03:00 UTC`), so upstream hard deletes clear within 24 hours unless that day's full refresh fails (then the next day).
 
 ## Active YSWS Programs → Warehouse Location
 
@@ -44,9 +44,11 @@ data lives in one of these places:
 1. **Dedicated Sling Postgres mirror** (`orpheus_engine/defs/sling/programs/<name>.py`, schema `<name>`):
    - Active programs with dedicated schemas: `club_shop`, `contd`, `coral`,
      `crescent`, `cubed`, `embassy`, `expedition`, `fabricate`, `fallen`,
-     `forge`, `grandma`, `haggle`, `half_life`, `jame_gam`, `mipmap`,
-     `phantom`, `pixl`, `scraps`, `stardance` (+ `stardance_ahoy`), `taiyaki`,
-     `terra`, `thirdspace`, `three_am` (3am), `trmnt`.
+     `forge`, `grandma`, `half_life`, `jame_gam`, `mipmap`, `phantom`, `pixl`,
+     `scraps`, `stardance` (+ `stardance_ahoy`), `taiyaki`, `terra`,
+     `thirdspace`, `three_am` (3am), `trmnt`.
+   - `haggle`: mirror added (`orpheus_engine/defs/sling/programs/haggle.py`);
+     syncs to schema `haggle` once the reader login exists.
    - Programs using `hc_warehouse_reader` are checked daily for column grant
      drift by `warehouse_reader_grant_drift_job` (see `runbooks/prod-health-monitoring.md` §9).
 2. **Dedicated Airtable DLT mirror** (schema `airtable_<name>`):

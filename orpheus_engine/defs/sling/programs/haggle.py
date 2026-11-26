@@ -1,7 +1,6 @@
 import os
 
 import dagster as dg
-from dagster import Nothing
 from dagster_sling import SlingConnectionResource, SlingResource
 
 from .._helpers import _sling_connection_url
@@ -44,21 +43,30 @@ haggle_replication_config = {
     name="haggle_warehouse_mirror",
     group_name="sling",
     compute_kind="sling",
+    output_required=False,
 )
 def haggle_warehouse_mirror(
     context: dg.AssetExecutionContext,
     sling: SlingResource,
-) -> Nothing:
-    """Replicates the Haggle DB → warehouse in a single shot."""
+):
+    """Replicates the Haggle DB → warehouse in a single shot.
+
+    When HAGGLE_K8S_URL is unset, yields no Output (so no ASSET_MATERIALIZATION
+    is logged and warehouse_metadata.mirror_freshness continues reporting
+    never_synced) and records an AssetObservation instead of failing the job.
+    """
     if not os.getenv("HAGGLE_K8S_URL"):
         context.log.warning(
             "HAGGLE_K8S_URL is not set; skipping Haggle replication until the "
             "Orchard reader is provisioned."
         )
-        context.add_output_metadata(
-            {"replicated": False, "skipped_reason": "HAGGLE_K8S_URL_unset"}
+        context.log_event(
+            dg.AssetObservation(
+                asset_key=context.asset_key,
+                metadata={"replicated": False, "skipped_reason": "HAGGLE_K8S_URL_unset"},
+            )
         )
-        return None
+        return
 
     context.log.info("Starting Haggle → warehouse Sling replication")
 
@@ -69,5 +77,4 @@ def haggle_warehouse_mirror(
         pass
 
     context.log.info("Replication finished")
-    context.add_output_metadata({"replicated": True})
-    return None
+    yield dg.Output(None, metadata={"replicated": True})
