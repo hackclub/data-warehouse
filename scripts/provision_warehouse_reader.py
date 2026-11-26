@@ -129,6 +129,9 @@ def _render_reader_setup_sql(
 
     lines = [
         "BEGIN;",
+        "SET LOCAL log_statement = 'none';",
+        "SET LOCAL log_min_duration_statement = -1;",
+        "SET LOCAL log_min_error_statement = 'panic';",
         "DO $$",
         "DECLARE",
         "  r record;",

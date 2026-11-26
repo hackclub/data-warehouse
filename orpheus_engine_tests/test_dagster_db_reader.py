@@ -7,6 +7,7 @@ up. Two tests use a throwaway Postgres container with no network.
 
 from __future__ import annotations
 
+import argparse
 import base64
 import json
 import os
@@ -711,3 +712,22 @@ def test_real_postgres_checks_flag_a_login_that_can_write(real_postgres):
     assert checks["real_insert"] == "allowed"
     assert superuser_sql("SELECT count(*) FROM runs;").strip() == "1"
     assert reader.role_problems(checks)
+
+
+def test_apply_role_sql_uses_postgres_over_socket_even_when_app_role_is_dagster_app():
+    """After splitting the Dagster app onto dagster_app, socket admin still runs as -U postgres."""
+    recorded: list[list[str]] = []
+
+    class FakeDeps:
+        def run(self, argv, step="", input_bytes=None):
+            recorded.append(list(argv))
+            return ""
+
+    args = argparse.Namespace(ssh="ssh warehouse", db_container="db_container_1")
+    host = {"role": "dagster_app", "database": "postgres", "password": "x"}
+    reader.apply_role_sql(args, FakeDeps(), host, "SELECT 1;")
+    assert len(recorded) == 1
+    argv = recorded[0]
+    u_idx = argv.index("-U")
+    assert argv[u_idx + 1] == "postgres"
+    assert "dagster_app" not in argv

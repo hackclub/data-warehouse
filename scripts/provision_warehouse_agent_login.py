@@ -13,7 +13,8 @@ Create one, or give it a new password (running this again does that):
     bin/warehouse-admin-psql --reason "create <agent|mcp> login" -f <scratch.sql>
 
 The plaintext password goes only to --write-env-file, with mode 0600. The SQL holds
-a SCRAM verifier, so log_statement=ddl never logs the password. Delete the SQL file
+only a SCRAM verifier, and turns statement logging off for its own transaction, so the
+server log never gets the password or the verifier (see §12). Delete the SQL file
 after applying it.
 
 Check a login that is already there, using the URL in --env-file. Checking mcp checks
@@ -97,6 +98,9 @@ def render_setup_sql(login: Login, scram_verifier: str) -> str:
     role = _quote_ident(login.role)
     lines = [
         "BEGIN;",
+        "SET LOCAL log_statement = 'none';",
+        "SET LOCAL log_min_duration_statement = -1;",
+        "SET LOCAL log_min_error_statement = 'panic';",
         "DO $$ BEGIN",
         f"  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = {_quote_literal(login.role)}) THEN",
         f"    CREATE ROLE {role};",

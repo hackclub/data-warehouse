@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Keep agents on dagster_reader, a read-only login for the Dagster instance database.
 
-The superuser password belongs only in Coolify's store, the host `.env` and the app
-container. See "The agents' read-only Dagster login" in
+The Dagster app's write-capable database password belongs only in Coolify's store,
+the host `.env` and the app container. See "The agents' read-only Dagster login" in
 runbooks/prod-health-monitoring.md.
 
 Subcommands, run as `PYTHONPATH=. .venv/bin/python scripts/dagster_db_reader.py <command>`:
 
     provision   Create the login, or give it a new password, and save its URL.
-    verify      Check the login and that no agent copy holds the superuser value.
+    verify      Check the login and that no agent copy holds the app's write-capable value.
     push-gate   Before a push to main: stop if the app has variables Coolify's store lacks.
 
 Secrets travel only through stdin or in-process values, never through a command's
@@ -71,7 +71,7 @@ READ_CHECKS = {
 }
 
 # Runs on the app host, sent over stdin. Standard library only. Values stay on the host
-# except the `read_superuser` reply, which this script keeps in memory and never prints.
+# except the `read_superuser` reply (the app's write-capable credentials), which this script keeps in memory and never prints.
 HOST_PROGRAM = r"""
 import json, subprocess, sys
 from pathlib import Path
@@ -241,7 +241,8 @@ def render_role_sql(verifier: str) -> str:
         for name, value in ROLE_SETTINGS.items()
     )
     return (
-        "SET log_statement = 'none'; SET log_min_duration_statement = -1;\n"
+        "SET log_statement = 'none'; SET log_min_duration_statement = -1; "
+        "SET log_min_error_statement = 'panic';\n"
         "BEGIN;\n"
         f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{READER_ROLE}')"
         f" THEN CREATE ROLE {READER_ROLE}; END IF; END $$;\n"
@@ -372,7 +373,7 @@ def host_call(args: argparse.Namespace, deps: Any, action: str) -> dict[str, Any
 
 
 def read_superuser(args: argparse.Namespace, deps: Any) -> dict[str, Any]:
-    """The superuser's current login from the host, the only source this script trusts."""
+    """The Dagster app's current write-capable login from the host, the only source this script trusts."""
     host = host_call(args, deps, "read_superuser")
     for key in ("password", "role", "database"):
         if not host.get(key):
@@ -384,14 +385,14 @@ def read_superuser(args: argparse.Namespace, deps: Any) -> dict[str, Any]:
 
 
 def apply_role_sql(args: argparse.Namespace, deps: Any, host: dict[str, Any], sql: str) -> None:
-    """Over the database's local socket, so no password is needed and none travels."""
+    """Over the database's local socket as postgres, so no password is needed and none travels."""
     if not SAFE_NAME.match(args.db_container):
         raise StepFailure("apply_role", "unexpected container name")
     deps.run(
         shlex.split(args.ssh)
         + ["docker", "exec", "-i", "-u", "postgres", args.db_container]
         + ["psql", "-X", "-q", "-At", "-v", "ON_ERROR_STOP=1"]
-        + ["-U", host["role"], "-d", host["database"]],
+        + ["-U", "postgres", "-d", host["database"]],
         step="apply_role",
         input_bytes=sql.encode(),
     )
@@ -441,7 +442,7 @@ def checkout_env_files(parent: Path) -> list[Path]:
 
 
 def scrub_backups(parent: Path, value: str, url: str) -> list[str]:
-    """Point any backup in the checkout that holds the superuser value at the reader.
+    """Point any backup in the checkout that holds the app's write-capable value at the reader.
 
     Everything else in a backup stays, so it can still restore the other names.
     Returns the names of backups still holding the value in some other line.
