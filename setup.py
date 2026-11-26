@@ -9,7 +9,6 @@ setup(
         "dagster-postgres",
         "psycopg2-binary",
         "python-dotenv",
-        "dagster-embedded-elt",
         "polars",
         "requests",
         "dagster-dlt",
