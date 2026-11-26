@@ -219,6 +219,7 @@ ZOOM_SELECTION = dg.AssetSelection.groups("zoom")
 #   unified_ysws:  p50 ~4 min,   p90 ~6 min   -> 60 min cap
 #   hackatime_dau: p50 ~12 min,  p90 ~2.2 h   -> 4 h cap
 #   project_search: new job, no p50 data yet   -> 2 h cap
+#   zoom:          new job, no p50 data yet   -> 4 h cap (daily, after quota reset)
 #   all_assets:    takes hours                -> 6 h cap (its own cadence)
 # ---------------------------------------------------------------------------
 
