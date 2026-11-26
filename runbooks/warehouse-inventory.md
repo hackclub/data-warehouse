@@ -32,7 +32,7 @@ Agents and operators can check per-schema and per-asset sync freshness without q
 
 Because `age_hours`, `is_stale`, and `status` (`fresh` | `stale` | `never_synced` | `untracked`) are computed dynamically against `NOW()` in the views, mirrors still flip to stale if Dagster stops running. Check `recorded_at` to verify that the freshness asset itself is current.
 
-> **Limitation (incremental mirrors & hard deletes):** Freshness reflects last successful sync time only. Incremental Sling mirrors (for example `stardance.users`, `auth.oauth_access_tokens`, and several `flavortown.*` tables) do not propagate hard deletes from the source database, so a freshly synced incremental table can still retain rows deleted at the source.
+> **Limitation (incremental mirrors & hard deletes):** Freshness reflects last successful sync time only. Incremental Sling mirrors (for example `auth.oauth_access_tokens` and several `flavortown.*` tables) do not propagate hard deletes from the source database, so a freshly synced incremental table can still retain rows deleted at the source. `stardance` runs incremental between daily full refreshes (`03:00 UTC`), so upstream hard deletes clear within 24 hours.
 
 ## Active YSWS Programs → Warehouse Location
 
