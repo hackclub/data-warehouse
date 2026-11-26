@@ -32,14 +32,14 @@ Agents and operators can check per-schema and per-asset sync freshness without q
 
 Because `age_hours`, `is_stale`, and `status` (`fresh` | `stale` | `never_synced` | `untracked`) are computed dynamically against `NOW()` in the views, mirrors still flip to stale if Dagster stops running. Check `recorded_at` to verify that the freshness asset itself is current.
 
-> **Limitation (incremental mirrors & hard deletes):** Freshness reflects last successful sync time only. Incremental Sling mirrors (for example `stardance.users`, `auth.oauth_access_tokens`, and several `flavortown.*` tables) do not propagate hard deletes from the source database, so a freshly synced incremental table can still retain rows deleted at the source.
+> **Limitation (incremental mirrors & hard deletes):** Freshness reflects last successful sync time only. Incremental Sling mirrors (for example `auth.oauth_access_tokens` and several `flavortown.*` tables) do not propagate hard deletes from the source database, so a freshly synced incremental table can still retain rows deleted at the source. `stardance` runs incremental between daily full refreshes (`03:00 UTC`), so upstream hard deletes clear within 24 hours unless that day's full refresh fails (then the next day).
 
 ## Active YSWS Programs → Warehouse Location
 
 Every approved YSWS submission is also aggregated in
 `airtable_unified_ysws_projects_db.approved_projects` (keyed by program in
 `airtable_unified_ysws_projects_db.ysws_programs`). Individual program operational
-data lives in one of three places:
+data lives in one of these places:
 
 1. **Dedicated Sling Postgres mirror** (`orpheus_engine/defs/sling/programs/<name>.py`, schema `<name>`):
    - Active programs with dedicated schemas: `club_shop`, `contd`, `coral`,
@@ -47,20 +47,32 @@ data lives in one of three places:
      `forge`, `grandma`, `half_life`, `jame_gam`, `mipmap`, `phantom`, `pixl`,
      `scraps`, `stardance` (+ `stardance_ahoy`), `taiyaki`, `terra`,
      `thirdspace`, `three_am` (3am), `trmnt`.
+   - `haggle`: mirror added (`orpheus_engine/defs/sling/programs/haggle.py`);
+     syncs to schema `haggle` once the reader login exists.
    - Programs using `hc_warehouse_reader` are checked daily for column grant
      drift by `warehouse_reader_grant_drift_job` (see `runbooks/prod-health-monitoring.md` §9).
 2. **Dedicated Airtable DLT mirror** (schema `airtable_<name>`):
    - `airtable_mipmap`, `airtable_shredder`, `airtable_snowglobe`,
      `airtable_sleepover`, `airtable_daydream`, `airtable_daydream_ops`,
      `airtable_campfire`, `airtable_campfire_flagship`.
-3. **Shared Airtable / Review Platform** (`airtable_raw_all_bases` and/or `ari`):
-   - Lightweight or Airtable-native programs without a standalone Postgres app
-     (e.g. `8-pin-grant`, `ASIC`, `Bashed`, `CQ`, `Crossroads`, `Dayoneof`,
-     `Fellows`, `Fjording it`, `Folktale`, `Genesis Reborn`, `Goship`,
-     `Hackcraft Mod Edition`, `Hacklet`, `Hackrail`, `Haggle`, `Molten`,
-     `Re-Dream`, `Storyboard V3`, `Survive`, `Torque`, `Twisted`, `Wonders`,
-     `flavorless`) land in `airtable_raw_all_bases` and `ari` (for review
-     workflows) plus `airtable_unified_ysws_projects_db.approved_projects`.
+3. **Shared Airtable (`airtable_raw_all_bases`) and/or Review Platform (`ari`)**:
+   - Active Airtable-native programs verified in `airtable_raw_all_bases` (plus
+     `airtable_unified_ysws_projects_db.approved_projects`): `8-pin-grant`,
+     `ASIC`, `BakeBuild`, `Bashed`, `Boba Drops`, `CQ`, `Crossroads`,
+     `Dayoneof`, `Fellows`, `Fjording it`, `Folktale`, `FuseRing`,
+     `Genesis Reborn`, `Goship`, `Hackcraft Mod Edition`, `Hacklet`,
+     `Hackrail` (also in `ari`), `Molten`, `Re-Dream`, `Sprig`,
+     `Storyboard V3`, `Survive` (also in `ari`), `Swirl`, `TTY`, `Tickets`,
+     `Toppings`, `Torque`, `Twisted` (also in `ari`), `Vibes`, `Wonders`,
+     `flavorless`.
+   - Programs with dedicated mirrors that also use `ari` for review
+     workflows: `3am`, `Embassy`, `Grandma`, `Half Life`, `Phantom`,
+     `Snowglobe` (`airtable_snowglobe`), `Terra`, `thirdspace`.
+4. **External Jam / Unified YSWS Only (No Hack Club Operational DB)**:
+   - `Harvest`: hosted as a public itch.io jam (`https://itch.io/jam/harvest`)
+     with no Hack Club operational database; approved projects are tracked in
+     `airtable_unified_ysws_projects_db.approved_projects` (with the public
+     itch.io jam page as its external submission location).
 
 ## Warehouse MCP access and audit logs
 

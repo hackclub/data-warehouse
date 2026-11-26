@@ -1,3 +1,7 @@
+# Canvas program ended 2026-10-22 and CANVAS_K8S_URL is not configured in prod.
+# Disabled so materialize_all_assets_job does not fail on every run.
+__disabled__ = True
+
 import dagster as dg
 from dagster_sling import SlingConnectionResource, SlingResource
 from dagster import Nothing

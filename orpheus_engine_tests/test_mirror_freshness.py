@@ -90,6 +90,9 @@ def test_derived_cadence_matches_actual_dagster_job_selection():
         "materialize_all_assets": schedules.materialize_all_assets_job.selection.resolve(
             asset_graph, allow_missing=True
         ),
+        "zoom_daily_schedule": schedules.ZOOM_SELECTION.resolve(
+            asset_graph, allow_missing=True
+        ),
     }
 
     specs = build_asset_specs(defs_mod.defs)
@@ -109,6 +112,11 @@ def test_derived_cadence_matches_actual_dagster_job_selection():
     # Campfire has mixed-cadence assets: event is 15m, participants is 6h.
     assert schedule_map["campfire_event_warehouse"] == ("frequent_15min_schedule", 15, 60)
     assert schedule_map["campfire_participants_warehouse"] == ("materialize_all_assets", 360, 720)
+    # Zoom assets run on the dedicated daily 00:10 UTC schedule (24h cadence, 36h stale window).
+    assert schedule_map["zoom_meetings"] == ("zoom_daily_schedule", 1440, 2160)
+    assert schedule_map["zoom_daily_usage"] == ("zoom_daily_schedule", 1440, 2160)
+    # QuickBooks keeps its daily stale window inside the 6-hourly job.
+    assert schedule_map["quickbooks_online_sync"] == ("materialize_all_assets", 360, 1440)
 
 
 def test_freshness_asset_is_in_frequent_schedule_and_not_all_assets():

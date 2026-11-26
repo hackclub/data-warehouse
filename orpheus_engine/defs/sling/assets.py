@@ -149,6 +149,8 @@ def _isolate_missing_program_connection(conn: SlingConnectionResource) -> SlingC
     When the env var is unset, swap in a placeholder URL on an `.invalid` host
     (RFC 2606: it never resolves). Only that program's mirror asset fails, with an
     error that names the missing variable; everything else keeps syncing.
+    A module can instead skip on purpose while its reader is not provisioned
+    yet, without failing or logging a materialization (see programs/haggle.py).
     """
     env_var_name = getattr(conn.connection_string, "env_var_name", None)
     if not env_var_name or os.getenv(env_var_name):

@@ -2,9 +2,16 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import dagster as dg
+import requests
 
 from orpheus_engine.defs.shared.zoom import ZoomResource
-from orpheus_engine.defs.zoom.db import SCHEMA_NAME, ensure_table, get_db_connection, upsert_rows
+from orpheus_engine.defs.zoom.db import (
+    SCHEMA_NAME,
+    ensure_table,
+    flush_partial_on_abort,
+    get_db_connection,
+    upsert_rows,
+)
 
 
 COLUMNS = [
@@ -51,28 +58,37 @@ def zoom_daily_usage(
     now = datetime.now(timezone.utc)
     seen: dict[str, tuple] = {}
 
-    for months_ago in range(6):
-        year = now.year
-        month = now.month - months_ago
-        if month <= 0:
-            month += 12
-            year -= 1
+    def _flush_seen() -> int:
+        if not seen:
+            return 0
+        conn = get_db_connection()
         try:
-            days = zoom.fetch_daily_usage(year=year, month=month, log=log)
-            for day in days:
-                row = _row(day, run_ts)
-                seen[row[0]] = row
-            log.info(f"Fetched {len(days)} days for {year}-{month:02d}")
-        except Exception as e:
-            log.warning(f"Could not fetch {year}-{month:02d}: {e}")
-    rows = list(seen.values())
+            update_cols = [c for c in COLUMNS if c != "date"]
+            upsert_rows(conn, "daily_usage", COLUMNS, list(seen.values()), "date", update_cols)
+        finally:
+            conn.close()
+        return len(seen)
 
-    conn = get_db_connection()
-    try:
-        update_cols = [c for c in COLUMNS if c != "date"]
-        upsert_rows(conn, "daily_usage", COLUMNS, rows, "date", update_cols)
-    finally:
-        conn.close()
+    with flush_partial_on_abort(_flush_seen, log, "daily usage rows"):
+        for months_ago in range(6):
+            year = now.year
+            month = now.month - months_ago
+            if month <= 0:
+                month += 12
+                year -= 1
+            try:
+                days = zoom.fetch_daily_usage(year=year, month=month, log=log)
+                for day in days:
+                    row = _row(day, run_ts)
+                    seen[row[0]] = row
+                log.info(f"Fetched {len(days)} days for {year}-{month:02d}")
+            except requests.exceptions.HTTPError:
+                # Includes ZoomFatalError. Failing visibly beats a silent month gap.
+                raise
+            except Exception as e:
+                log.warning(f"Could not fetch {year}-{month:02d}: {e}")
+    _flush_seen()
+    rows = list(seen.values())
 
     log.info(f"Synced {len(rows)} daily usage rows")
 

@@ -16,6 +16,44 @@ import dagster as dg
 REPORT_PAGE_SIZE = 300
 METRICS_PAGE_SIZE = 300
 PAGE_DELAY = 3.5  # report endpoints are 10-20 req/min
+MAX_RETRY_AFTER_SECONDS = 300
+
+
+class ZoomFatalError(requests.exceptions.HTTPError):
+    """A Zoom error that ends the whole sync: retrying later calls in the same run cannot help.
+
+    Assets that tolerate per-user or per-meeting failures must re-raise this.
+    """
+
+
+class ZoomDailyQuotaError(ZoomFatalError):
+    """Raised when Zoom returns a 429 whose Retry-After exceeds our retry budget (daily quota)."""
+
+
+class ZoomAuthError(ZoomFatalError):
+    """Raised when Zoom returns HTTP 401 even after refreshing the OAuth token."""
+
+
+def _parse_retry_after_seconds(
+    value: Optional[str], *, now: Optional[datetime] = None
+) -> Optional[float]:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(int(raw)))
+    except ValueError:
+        pass
+    try:
+        reset_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if reset_at.tzinfo is None:
+        reset_at = reset_at.replace(tzinfo=timezone.utc)
+    ref = now if now is not None else datetime.now(timezone.utc)
+    return max(0.0, (reset_at - ref).total_seconds())
 
 
 class ZoomResource(dg.ConfigurableResource):
@@ -82,21 +120,43 @@ class ZoomResource(dg.ConfigurableResource):
 
     def _request(self, method: str, path: str, *, params=None, max_attempts: int = 15, log=None) -> dict:
         url = f"https://api.zoom.us/v2{path}"
+        retried_401 = False
+        saw_429 = False
+        last_429_resp = None
         for attempt in range(max_attempts):
             self._ensure_token()
             resp = self._get_session().request(method, url, params=params)
             if resp.status_code == 429:
-                retry_after = None
-                try:
-                    retry_after = int(resp.headers.get("Retry-After", ""))
-                except (ValueError, TypeError):
-                    pass
-                wait = (retry_after if retry_after else min(30 * (2 ** attempt), 300)) + random.uniform(0, 5)
+                saw_429 = True
+                last_429_resp = resp
+                rate_limit_type = (resp.headers.get("X-RateLimit-Type") or "").strip().lower()
+                retry_after_raw = resp.headers.get("Retry-After", "")
+                retry_after = _parse_retry_after_seconds(retry_after_raw)
+                if rate_limit_type == "daily-limit" or (
+                    retry_after is not None and retry_after > MAX_RETRY_AFTER_SECONDS
+                ):
+                    msg = (
+                        f"Zoom daily rate limit exceeded on {url} "
+                        f"(X-RateLimit-Type: {resp.headers.get('X-RateLimit-Type', '')}, "
+                        f"Retry-After: {retry_after_raw})"
+                    )
+                    if log:
+                        log.warning(msg)
+                    raise ZoomDailyQuotaError(msg, response=resp)
+                wait = (
+                    retry_after if retry_after is not None else min(30 * (2 ** attempt), 300)
+                ) + random.uniform(0, 5)
                 if log:
                     log.warning(f"Rate limited on {path}, waiting {wait:.1f}s (attempt {attempt + 1}/{max_attempts})")
                 time.sleep(wait)
                 continue
             if resp.status_code == 401:
+                if retried_401:
+                    msg = f"Zoom API authentication failed (401) on {url} after token refresh"
+                    if log:
+                        log.error(msg)
+                    raise ZoomAuthError(msg, response=resp)
+                retried_401 = True
                 self._token = None
                 continue
             if not resp.ok:
@@ -104,6 +164,12 @@ class ZoomResource(dg.ConfigurableResource):
                     log.error(f"{resp.status_code} on {path}: {resp.text[:500]}")
                 resp.raise_for_status()
             return resp.json()
+        if saw_429:
+            raise ZoomDailyQuotaError(
+                f"Exhausted {max_attempts} HTTP 429 rate-limit retries on {url} "
+                "(response headers did not identify daily quota)",
+                response=last_429_resp,
+            )
         raise requests.exceptions.HTTPError(f"Exhausted {max_attempts} retries on {url}")
 
     def _get(self, path: str, *, params=None, log=None) -> dict:

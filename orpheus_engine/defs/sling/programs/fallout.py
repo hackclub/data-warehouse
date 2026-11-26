@@ -1,3 +1,7 @@
+# Fallout program ended 2026-07-07 and its Orchard public endpoint is off.
+# Disabled so materialize_all_assets_job does not fail on every run.
+__disabled__ = True
+
 import dagster as dg
 from dagster_sling import SlingConnectionResource, SlingResource
 from dagster import EnvVar, Nothing

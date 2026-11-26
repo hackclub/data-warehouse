@@ -122,6 +122,7 @@ def _drop_invalid_indexes(
 def _ensure_target_indexes(
     context: AssetExecutionContext,
     index_specs: list[tuple[str, str, tuple[str, ...]]],
+    lock_timeout_ms: int | None = None,
 ) -> None:
     """CREATE INDEX CONCURRENTLY IF NOT EXISTS for (schema, table, columns)
     specs, skipping tables no sync has created yet."""
@@ -136,6 +137,8 @@ def _ensure_target_indexes(
     conn.autocommit = True
     try:
         with conn.cursor() as cursor:
+            if lock_timeout_ms is not None:
+                cursor.execute("SET lock_timeout = %s", (f"{int(lock_timeout_ms)}ms",))
             for schema_name in sorted({schema for schema, _, _ in index_specs}):
                 cursor.execute(
                     sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema_name))
@@ -196,8 +199,13 @@ def _ensure_target_indexes(
 def _ensure_incremental_target_indexes(
     context: AssetExecutionContext,
     replication_config: Mapping[str, Any],
+    lock_timeout_ms: int | None = None,
 ) -> None:
     """Keep Sling incremental cursor lookups and merges off full-table scans."""
-    _ensure_target_indexes(context, _replication_index_specs(replication_config))
+    _ensure_target_indexes(
+        context,
+        _replication_index_specs(replication_config),
+        lock_timeout_ms=lock_timeout_ms,
+    )
 
 

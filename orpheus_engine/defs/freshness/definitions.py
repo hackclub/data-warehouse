@@ -46,15 +46,17 @@ _SCHEDULED_JOB_CADENCES: tuple[tuple[str, int, int], ...] = (
     ("hackatime_dau_hourly_schedule", 120, 360),
     ("project_search_2h_schedule", 120, 360),
     ("materialize_all_assets_schedule", 360, 720),
+    ("zoom_daily_schedule", 1440, 2160),
 )
 
 # Keep the freshness write from queueing agents' reads behind it, or hanging.
 _WAREHOUSE_CONNECT_OPTIONS = "-c lock_timeout=10000 -c statement_timeout=120000"
 
-# Assets that hit external daily API quotas or have daily-tolerant stale windows
-# while still running inside their derived schedule.
+# Assets that hit external daily API quotas, so they get a daily stale window
+# while still running inside a faster derived schedule. (Zoom has its own daily
+# job, zoom_daily_schedule, so its cadence already covers this.)
 _DAILY_TOLERANCE_STALE_MINUTES = 1440
-_DAILY_TOLERANCE_PREFIXES: tuple[str, ...] = ("zoom_", "quickbooks_")
+_DAILY_TOLERANCE_PREFIXES: tuple[str, ...] = ("quickbooks_",)
 
 _CORE_SLING_MIRRORS: tuple[tuple[str, str], ...] = (
     ("hackatime", "hackatime_warehouse_mirror"),
@@ -93,6 +95,8 @@ _EXPLICIT_ASSET_TO_SCHEMA: dict[str, tuple[str, str]] = {
 
 # Explicit reasons for warehouse schemas not managed by a scheduled Dagster sync.
 _KNOWN_UNTRACKED_REASONS: dict[str, str] = {
+    "canvas": "Ended program (2026-10-22; mirror disabled in Dagster)",
+    "fallout": "Ended program (2026-07-07; mirror disabled in Dagster)",
     "highway_github": "Manual-only one-time backfill (Highway ended Oct 2025; excluded from scheduled jobs)",
     "metabase_user_uploads": "Metabase user-uploaded tables (not synced by Dagster)",
     "moonshot": "Historical/legacy schema (not synced by Dagster)",
@@ -179,7 +183,7 @@ def resolve_asset_schedule_map(
             if key_str in schedule_map:
                 continue
             effective_stale = (
-                _DAILY_TOLERANCE_STALE_MINUTES
+                max(stale_after, _DAILY_TOLERANCE_STALE_MINUTES)
                 if key_str.startswith(_DAILY_TOLERANCE_PREFIXES)
                 else stale_after
             )

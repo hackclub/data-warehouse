@@ -5,8 +5,15 @@ from typing import Any, Dict, List, Optional
 
 import dagster as dg
 
-from orpheus_engine.defs.shared.zoom import ZoomResource
-from orpheus_engine.defs.zoom.db import SCHEMA_NAME, clean_json, ensure_table, get_db_connection, upsert_rows
+from orpheus_engine.defs.shared.zoom import ZoomFatalError, ZoomResource
+from orpheus_engine.defs.zoom.db import (
+    SCHEMA_NAME,
+    clean_json,
+    ensure_table,
+    flush_partial_on_abort,
+    get_db_connection,
+    upsert_rows,
+)
 
 
 BATCH_SIZE = 500
@@ -114,31 +121,11 @@ def zoom_meetings(
     total = 0
     latest_end: Optional[str] = None
 
-    for i, uid in enumerate(user_ids):
-        for meeting in zoom.fetch_user_meetings(user_id=uid, start=start, end=end, log=log):
-            row = _meeting_row(meeting, run_ts)
-            seen[row[0]] = row
-            me = meeting.get("end_time")
-            if me and (latest_end is None or me > latest_end):
-                latest_end = me
-
-            if len(seen) >= BATCH_SIZE:
-                batch = list(seen.values())
-                seen.clear()
-                conn = get_db_connection()
-                try:
-                    upsert_rows(conn, "meetings", MEETING_COLUMNS, batch,
-                                "uuid", [c for c in MEETING_COLUMNS if c != "uuid"],
-                                "(" + ", ".join(["%s"] * 12 + ["%s::jsonb", "%s"]) + ")")
-                finally:
-                    conn.close()
-                total += len(batch)
-
-        if (i + 1) % 20 == 0:
-            log.info(f"Processed {i + 1}/{len(user_ids)} users, {total + len(seen)} meetings so far")
-
-    if seen:
+    def _flush_meetings() -> int:
+        if not seen:
+            return 0
         batch = list(seen.values())
+        seen.clear()
         conn = get_db_connection()
         try:
             upsert_rows(conn, "meetings", MEETING_COLUMNS, batch,
@@ -146,7 +133,23 @@ def zoom_meetings(
                         "(" + ", ".join(["%s"] * 12 + ["%s::jsonb", "%s"]) + ")")
         finally:
             conn.close()
-        total += len(batch)
+        return len(batch)
+
+    with flush_partial_on_abort(_flush_meetings, log, "meetings"):
+        for i, uid in enumerate(user_ids):
+            for meeting in zoom.fetch_user_meetings(user_id=uid, start=start, end=end, log=log):
+                row = _meeting_row(meeting, run_ts)
+                seen[row[0]] = row
+                me = meeting.get("end_time")
+                if me and (latest_end is None or me > latest_end):
+                    latest_end = me
+
+                if len(seen) >= BATCH_SIZE:
+                    total += _flush_meetings()
+
+            if (i + 1) % 20 == 0:
+                log.info(f"Processed {i + 1}/{len(user_ids)} users, {total + len(seen)} meetings so far")
+    total += _flush_meetings()
 
     log.info(f"Sync complete: {total} meetings")
 
@@ -246,6 +249,8 @@ def zoom_meeting_participants(
         try:
             for p in zoom.fetch_meeting_participants(meeting_id=uuid, log=log):
                 batch.append(_participant_row(p, uuid, run_ts))
+        except ZoomFatalError:
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:
@@ -412,6 +417,8 @@ def zoom_meeting_participant_details(
         try:
             for p in zoom.fetch_meeting_participant_details(meeting_id=uuid, log=log):
                 batch.append(_detail_row(p, uuid, run_ts))
+        except ZoomFatalError:
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:
@@ -533,6 +540,8 @@ def zoom_meeting_participant_qos(
         try:
             for p in zoom.fetch_meeting_participant_qos(meeting_id=uuid, log=log):
                 batch.append(_qos_row(p, uuid, run_ts))
+        except ZoomFatalError:
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:
@@ -633,6 +642,8 @@ def zoom_meeting_sharing(
         try:
             for p in zoom.fetch_meeting_sharing(meeting_id=uuid, log=log):
                 batch.append(_sharing_row(p, uuid, run_ts))
+        except ZoomFatalError:
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:
@@ -737,6 +748,8 @@ def zoom_meeting_polls(
                         detail.get("question"), detail.get("answer"),
                         clean_json(q), run_ts,
                     ))
+        except ZoomFatalError:
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:
@@ -865,6 +878,8 @@ def zoom_meeting_qa(
                             detail.get("answer"), None,
                             clean_json(q), run_ts,
                         ))
+        except ZoomFatalError:
+            raise
         except Exception as e:
             errors += 1
             if errors <= 5:

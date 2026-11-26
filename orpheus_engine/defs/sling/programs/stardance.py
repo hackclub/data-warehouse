@@ -1,7 +1,13 @@
+from datetime import datetime, timezone
+
 import dagster as dg
 from dagster_sling import SlingConnectionResource, SlingResource
 from dagster import EnvVar, Nothing
-from .._helpers import _ensure_incremental_target_indexes
+from .._helpers import _drop_invalid_indexes, _ensure_incremental_target_indexes
+
+STARDANCE_DAILY_FULL_REFRESH_UTC_HOUR = 3
+STARDANCE_INDEX_LOCK_TIMEOUT_MS = 30_000
+STARDANCE_OBSERVATION_SCAN_LIMIT = 25
 
 
 stardance_db_connection = SlingConnectionResource(
@@ -129,6 +135,71 @@ stardance_replication_config = {
 
 
 
+def _stardance_full_refresh_config() -> dict:
+    """Build a full-refresh copy of stardance_replication_config preserving exclusions/disabled streams."""
+    streams = {}
+    for stream_name, cfg in stardance_replication_config["streams"].items():
+        if isinstance(cfg, dict):
+            if cfg.get("disabled"):
+                streams[stream_name] = dict(cfg)
+            else:
+                cleaned = {k: v for k, v in cfg.items() if k not in ("mode", "update_key", "primary_key")}
+                streams[stream_name] = cleaned or None
+        else:
+            streams[stream_name] = cfg
+    return {
+        "source": stardance_replication_config["source"],
+        "target": stardance_replication_config["target"],
+        "defaults": {
+            "mode": "full-refresh",
+            "object": "stardance.{stream_table}",
+        },
+        "streams": streams,
+    }
+
+
+def _last_full_refresh_date(context: dg.AssetExecutionContext) -> str | None:
+    """Return the latest UTC date (YYYY-MM-DD) when a daily full refresh succeeded."""
+    last_event = context.instance.get_latest_materialization_event(context.asset_key)
+    if last_event and last_event.asset_materialization:
+        md = last_event.asset_materialization.metadata
+        if "last_full_refresh_date" in md:
+            return str(md["last_full_refresh_date"].value)
+    return None
+
+
+def _last_full_refresh_attempt_date(context: dg.AssetExecutionContext) -> str | None:
+    """Return the latest UTC date when a full-refresh attempt was started (AssetObservation)
+    or completed (AssetMaterialization). Because AssetObservation persists immediately in
+    event_logs even if the step raises or is killed by run monitoring, this acts as a
+    once-per-day circuit breaker: a failed or killed full refresh falls back to incremental
+    for the rest of the day instead of starving materialize_frequent_job.
+    """
+    dates: list[str] = []
+    done_date = _last_full_refresh_date(context)
+    if done_date:
+        dates.append(done_date)
+
+    obs_res = context.instance.fetch_observations(
+        records_filter=context.asset_key,
+        limit=STARDANCE_OBSERVATION_SCAN_LIMIT,
+    )
+    for rec in obs_res.records:
+        obs = rec.asset_observation
+        if obs and obs.metadata and "full_refresh_attempt_date" in obs.metadata:
+            dates.append(str(obs.metadata["full_refresh_attempt_date"].value))
+            break
+
+    return max(dates) if dates else None
+
+
+def _should_run_daily_full_refresh(now_utc: datetime, last_attempt_or_done_date: str | None) -> bool:
+    return (
+        now_utc.hour >= STARDANCE_DAILY_FULL_REFRESH_UTC_HOUR
+        and last_attempt_or_done_date != now_utc.date().isoformat()
+    )
+
+
 @dg.asset(
     name="stardance_warehouse_mirror",
     group_name="sling",
@@ -138,16 +209,50 @@ def stardance_warehouse_mirror(
     context: dg.AssetExecutionContext,
     sling: SlingResource,
 ) -> Nothing:
-    """Replicates the main Stardance app DB → warehouse with incremental sync."""
-    context.log.info("Starting Stardance → warehouse Sling replication")
-    _ensure_incremental_target_indexes(context, stardance_replication_config)
+    """Replicates the main Stardance app DB → warehouse (15m incremental + once-daily full-refresh)."""
+    now_utc = datetime.now(timezone.utc)
+    today_utc = now_utc.date().isoformat()
+    last_done = _last_full_refresh_date(context)
+    last_attempt = _last_full_refresh_attempt_date(context)
+    run_full_refresh = _should_run_daily_full_refresh(now_utc, last_attempt)
+
+    if run_full_refresh:
+        # Persist the attempt observation before starting Sling so a failure or
+        # 60-minute max_runtime kill trips the circuit breaker for the rest of the day.
+        context.log_event(
+            dg.AssetObservation(
+                asset_key=context.asset_key,
+                metadata={
+                    "full_refresh_attempt_date": today_utc,
+                    "sync_mode": "full-refresh",
+                },
+            )
+        )
+        context.log.info("Starting Stardance → warehouse once-daily full-refresh Sling replication")
+        config = _stardance_full_refresh_config()
+    else:
+        context.log.info("Starting Stardance → warehouse incremental Sling replication")
+        _drop_invalid_indexes(context, "stardance")
+        _ensure_incremental_target_indexes(
+            context,
+            stardance_replication_config,
+            lock_timeout_ms=STARDANCE_INDEX_LOCK_TIMEOUT_MS,
+        )
+        config = stardance_replication_config
 
     for _ in sling.replicate(
         context=context,
-        replication_config=stardance_replication_config,
+        replication_config=config,
     ):
         pass
 
     context.log.info("Replication finished")
-    context.add_output_metadata({"replicated": True})
+    metadata: dict[str, object] = {
+        "replicated": True,
+        "sync_mode": "full-refresh" if run_full_refresh else "incremental",
+    }
+    effective_done_date = today_utc if run_full_refresh else last_done
+    if effective_done_date:
+        metadata["last_full_refresh_date"] = effective_done_date
+    context.add_output_metadata(metadata)
     return None
