@@ -731,3 +731,48 @@ Postgres sees (`client=`)**, and the **client-supplied `application_name`
   and `bin/warehouse-admin-psql` connect over the Unix socket. Trace them to the
   operator's SSH session via the host-side SSH and audit logs described in the
   private ops notes.
+
+## 13. Per-mirror freshness views
+
+`warehouse_metadata.mirror_freshness` (per-schema worst-of rollup) and
+`warehouse_metadata.asset_freshness` (per-asset detail) expose last successful
+sync timestamps, derived expected cadences, a live `is_stale` flag, and explicit
+`untracked` reasons directly inside the warehouse Postgres database.
+
+- **Populated by:** Dagster asset `warehouse_mirror_freshness`
+  (`orpheus_engine/defs/freshness/definitions.py`), scheduled every 15 minutes
+  inside `materialize_frequent_job`. Expected cadences are derived from the job
+  selections in `orpheus_engine/schedules.py`.
+- **Coverage:** Every active Sling mirror, DLT/API mirror, `public_*` dbt mart,
+  Fivetran schema (via `_fivetran_log`), and any remaining warehouse schema
+  (explicitly marked `untracked` with a reason).
+- **Readable by:** `hc_warehouse_agent` and `hc_warehouse_mcp` (via
+  `pg_read_all_data`). There is no separate freshness tool: read the views
+  with SQL through the `warehouse-mcp` `query` tool or `bin/readonly-psql`. The
+  `warehouse-mcp` server instructions and its `query` and `list_schemas` text
+  tell agents to query `warehouse_metadata.mirror_freshness` before trusting
+  recent data.
+- **Self-describing:** each view and each column has a Postgres comment
+  (status values, cadence, `untracked`, the deleted-rows caveat). Read them
+  with `obj_description(...)` and `col_description(...)`, or with
+  `warehouse-mcp` `describe_schema(schema_name='warehouse_metadata')`, which
+  lists views (not only tables) with their comments. The comments are part
+  of the DDL hash in the view comment, so changing them rebuilds the views on
+  the next run.
+- **Staleness evaluation:** Both views compute `age_hours`, `is_stale`, and
+  `status` (`fresh`, `stale`, `never_synced`, or `untracked`) against `NOW()` at
+  query time, so mirrors still show as stale if Dagster stops running. Check
+  `recorded_at` to confirm the freshness asset itself is updating.
+- **Limitation (incremental mirrors & hard deletes):** Freshness reflects last
+  sync time only. Incremental Sling mirrors do not propagate hard deletes from
+  source databases, so a fresh incremental table can still retain rows deleted
+  at the source.
+
+Quick SQL check:
+
+```sql
+SELECT schema_name, status, asset_count, stale_asset_count, last_synced_at, age_hours, worst_asset_key
+FROM warehouse_metadata.mirror_freshness
+WHERE is_stale = TRUE
+ORDER BY age_hours DESC NULLS FIRST;
+```

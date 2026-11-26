@@ -12,6 +12,7 @@ EXCLUDED_FROM_MAIN_JOB: set[dg.AssetKey] = {
     # (it last ran 2026-01-29 for exactly this reason). See definitions.py.
     dg.AssetKey("warehouse_row_hashes"),
     dg.AssetKey("ducklake_sync"),
+    dg.AssetKey("warehouse_mirror_freshness"),
 }
 
 # Run statuses that count as "still in flight" for the skip-if-running schedules.
@@ -91,6 +92,16 @@ UNIFIED_YSWS_SELECTION = (
     dg.AssetSelection.assets("unified_ysws_ysws_programs_weighted_referral_count")
 )
 
+# dbt models refreshed by the frequent job. Named once here so the freshness
+# asset can resolve their cadence even where dbt assets are not loaded.
+FREQUENT_DBT_ASSETS: tuple[dg.AssetKey, ...] = (
+    dg.AssetKey(["finance_2026_analytics", "monthly_summary"]),
+    dg.AssetKey(["finance_2026_analytics", "major_gifts"]),
+    dg.AssetKey(["finance_2026_analytics", "metadata"]),
+    # Stardance analytics (per-user journey stages for Metabase)
+    dg.AssetKey(["stardance_analytics", "journey_user_stages"]),
+)
+
 # Frequent sync selection (every 15 minutes)
 # Includes: Slack NPS, Campfire, Campfire Flagship (sources + warehouse mirrors), Zenventory
 FREQUENT_SELECTION = (
@@ -132,10 +143,8 @@ FREQUENT_SELECTION = (
     dg.AssetSelection.assets("agh_fulfillment_labor_costs") |
     # Zenventory -> Airtable inventory sync
     dg.AssetSelection.assets("zenventory_inventory_airtable_sync") |
-    # Finance 2026 analytics (dbt models)
-    dg.AssetSelection.assets(dg.AssetKey(["finance_2026_analytics", "monthly_summary"])) |
-    dg.AssetSelection.assets(dg.AssetKey(["finance_2026_analytics", "major_gifts"])) |
-    dg.AssetSelection.assets(dg.AssetKey(["finance_2026_analytics", "metadata"])) |
+    # Finance 2026 and Stardance analytics (dbt models)
+    dg.AssetSelection.assets(*FREQUENT_DBT_ASSETS) |
     # Sleepover (source + warehouse mirrors)
     dg.AssetSelection.groups("airtable_sleepover") |
     dg.AssetSelection.groups("dlt_airtable_sleepover") |
@@ -147,11 +156,11 @@ FREQUENT_SELECTION = (
     # Stardance (Sling warehouse mirrors)
     dg.AssetSelection.assets("stardance_warehouse_mirror") |
     dg.AssetSelection.assets("stardance_ahoy_warehouse_mirror") |
-    # Stardance analytics (dbt model: per-user journey stages for Metabase)
-    dg.AssetSelection.assets(dg.AssetKey(["stardance_analytics", "journey_user_stages"])) |
     # Hack Club Videos DB (source + warehouse mirrors)
     dg.AssetSelection.groups("airtable_hack_club_videos_db") |
-    dg.AssetSelection.groups("dlt_airtable_hack_club_videos_db")
+    dg.AssetSelection.groups("dlt_airtable_hack_club_videos_db") |
+    # Per-mirror freshness view (warehouse_metadata.mirror_freshness)
+    dg.AssetSelection.assets("warehouse_mirror_freshness")
 )
 
 # Hackatime DAU refresh selection (hourly).
