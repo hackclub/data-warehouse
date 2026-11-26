@@ -523,3 +523,32 @@ def test_query_runs_in_a_read_only_transaction(server, monkeypatch):
         return rows, columns
 
     assert _on_database(server.mcp_url(), monkeypatch, use) == ([{"ro": "on"}], ["ro"])
+
+
+def test_temp_tables_cannot_be_written_even_with_read_only_mode_off(server, monkeypatch):
+    """Server side, without validate_sql: the temp-table disk-fill path stays shut.
+
+    The login keeps TEMP on the database (through PUBLIC), so only the READ ONLY,
+    always-rolled-back transaction stops a caller from filling disk with temp tables.
+    """
+
+    async def use(database):
+        database._pool._max_size = 1
+        # Read-only mode off inside the query's own transaction, then a temp write.
+        for sql in (
+            "SELECT 1 AS a INTO TEMP TABLE filler",
+            "CREATE TEMP TABLE filler AS SELECT g FROM generate_series(1, 10) g",
+            "SET default_transaction_read_only = off",
+        ):
+            try:
+                await database._run(sql, None, 10)
+            except psycopg.Error:
+                pass
+        with pytest.raises(errors.ReadOnlySqlTransaction):
+            await database._run("CREATE TEMP TABLE filler AS SELECT 1 AS a", None, 10)
+        rows, _ = await database._run(
+            "SELECT count(*) AS n FROM pg_class WHERE relpersistence = 't'", None, 10
+        )
+        return rows[0]["n"]
+
+    assert _on_database(server.mcp_url(), monkeypatch, use) == 0
