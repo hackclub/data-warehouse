@@ -96,7 +96,11 @@ login can read, never a value, and exits 1 if any is readable.
 2. For a live Sling mirror, exclude it in the stream's config (name the table
    explicitly; a `public.*` wildcard copies every column). For a dlt Airtable base,
    add the renamed field to `AIRTABLE_SECRET_DROP_COLUMNS`.
-3. Add the row to the table below and run the tests.
+3. Add the row to the table below and run the tests. For a program in
+   `orpheus_engine_tests/test_sling_program_exclusions.py`, also add the column to
+   its `EXCLUDED_COLUMNS` entry: that list holds every column those mirrors
+   exclude, contact data included, while this inventory holds the credentials
+   that reached the warehouse.
 4. After the deploy, the next purge run drops the copy.
 
 A reader login with column grants (`hc_warehouse_reader`, section 9 of the

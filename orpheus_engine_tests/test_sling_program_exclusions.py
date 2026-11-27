@@ -139,6 +139,7 @@ UNMIRRORED_TABLES = {
 EXCLUDED_COLUMNS = {
     "haggle": {
         "public.competitions_ship": ["screenshot", "predictions", "log"],
+        "public.rsvp_rsvp": ["hackatime_token"],
     },
     "forge": {
         "public.active_storage_blobs": ["key", "metadata"],
@@ -285,8 +286,8 @@ EXCLUDED_COLUMNS = {
         "public.orders": ["address"],
         "public.projects": ["buddy_code"],
         "public.users": [
-            "hackatime_access_token", "address", "phone_number", "slack_dm_error",
-            "last_seen_path",
+            "hackatime_access_token", "hca_access_token", "hca_refresh_token",
+            "address", "phone_number", "slack_dm_error", "last_seen_path",
         ],
         "public.visits": ["path"],
     },
