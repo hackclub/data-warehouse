@@ -516,6 +516,132 @@ hackatime_replication_config = {
 }
 
 
+# --- Hackatime missing-id reconciliation ---
+# An incremental stream copies rows whose update_key is above the warehouse's
+# max. A row committed late, or written with an old updated_at, sits below that
+# watermark forever: a Hackatime users row never reached the warehouse while
+# rows around it did. After each sync, compare ids with the source and upsert
+# the missing rows by id.
+_HACKATIME_RECONCILED_STREAMS: dict[str, str] = {
+    "users": "id",  # integer ids: one id scan on each side, a few seconds
+}
+# A larger gap means something else is wrong (a reload, a source swap); copy this
+# many per run and say so rather than build a huge IN list.
+_HACKATIME_RECONCILE_MAX_IDS = 5000
+
+
+def _missing_ids(source_ids, warehouse_ids) -> list[int]:
+    """Ids in the source that the warehouse copy lacks, ascending."""
+    return sorted(set(source_ids) - set(warehouse_ids))
+
+
+def _quote_column(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _hackatime_backfill_config(
+    table_name: str, key: str, ids: list[int], source_columns: list[str]
+) -> dict[str, Any]:
+    """A one-stream Sling config that upserts the given ids into hackatime.<table>.
+
+    Incremental with a primary key and no update key makes Sling merge every row
+    the query returns. The explicit column list leaves out the inventory's
+    credential columns, as the main stream's `-col` list does.
+    """
+    excluded = set(excluded_columns("hackatime", table_name))
+    columns = [c for c in source_columns if c not in excluded]
+    if key not in columns:
+        raise ValueError(f"hackatime.{table_name}: key {key} is not a source column")
+    id_list = ", ".join(str(int(i)) for i in ids)
+    return {
+        "source": "HACKATIME_DB",
+        "target": "WAREHOUSE_DB",
+        "streams": {
+            f"public.{table_name}": {
+                "sql": (
+                    f"select {', '.join(_quote_column(c) for c in columns)} "
+                    f"from public.{_quote_column(table_name)} "
+                    f"where {_quote_column(key)} in ({id_list})"
+                ),
+                "mode": "incremental",
+                "primary_key": [key],
+                "object": f"hackatime.{table_name}",
+            },
+        },
+    }
+
+
+def _fetch_ids(conn_url: str, schema: str, table_name: str, key: str) -> list[int]:
+    conn = psycopg2.connect(
+        conn_url,
+        application_name="hackatime-id-reconcile",
+        options="-c default_transaction_read_only=on -c statement_timeout=120000",
+    )
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("SELECT {} FROM {}.{}").format(
+                    sql.Identifier(key), sql.Identifier(schema), sql.Identifier(table_name)
+                )
+            )
+            return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _fetch_source_columns(conn_url: str, table_name: str) -> list[str]:
+    conn = psycopg2.connect(
+        conn_url,
+        application_name="hackatime-id-reconcile",
+        options="-c default_transaction_read_only=on -c statement_timeout=60000",
+    )
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = %s ORDER BY ordinal_position",
+                (table_name,),
+            )
+            return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _reconcile_hackatime_missing_ids(context: dg.AssetExecutionContext, sling: SlingResource) -> dict[str, Any]:
+    """Upsert source rows whose ids are missing from the warehouse. Returns metadata."""
+    source_url = os.getenv("HACKATIME_COOLIFY_URL")
+    warehouse_url = os.getenv("WAREHOUSE_COOLIFY_URL")
+    if not source_url or not warehouse_url:
+        context.log.warning("Hackatime id reconciliation skipped: a connection URL is not set")
+        return {"reconcile_skipped": True}
+
+    metadata: dict[str, Any] = {}
+    for table_name, key in _HACKATIME_RECONCILED_STREAMS.items():
+        missing = _missing_ids(
+            _fetch_ids(source_url, "public", table_name, key),
+            _fetch_ids(warehouse_url, "hackatime", table_name, key),
+        )
+        metadata[f"reconcile_{table_name}_missing"] = len(missing)
+        if not missing:
+            continue
+        batch = missing[:_HACKATIME_RECONCILE_MAX_IDS]
+        if len(missing) > len(batch):
+            context.log.warning(
+                f"hackatime.{table_name}: {len(missing)} ids missing; backfilling the "
+                f"first {len(batch)} this run"
+            )
+        context.log.info(f"hackatime.{table_name}: backfilling {len(batch)} missing id(s)")
+        config = _hackatime_backfill_config(
+            table_name, key, batch, _fetch_source_columns(source_url, table_name)
+        )
+        for _ in sling.replicate(context=context, replication_config=config):
+            pass
+        metadata[f"reconcile_{table_name}_backfilled"] = len(batch)
+    return metadata
+
+
 # --- Define Replication Configuration ---
 hcer_public_github_data_replication_config = {
     "source": "HCER_PUBLIC_GITHUB_DATA_DB",
@@ -705,8 +831,16 @@ def hackatime_warehouse_mirror(
         pass
 
     context.log.info("Replication finished")
-    # Optionally attach run‑level metadata
-    context.add_output_metadata({"replicated": True})
+    metadata: dict[str, Any] = {"replicated": True}
+    # A reconciliation failure must not fail the mirror: the sync above is done,
+    # and the DAU job depends on this asset. It is logged and in the metadata,
+    # and the next run tries again.
+    try:
+        metadata.update(_reconcile_hackatime_missing_ids(context, sling))
+    except Exception as error:  # noqa: BLE001
+        context.log.warning(f"Hackatime id reconciliation failed: {type(error).__name__}: {error}")
+        metadata["reconcile_error"] = type(error).__name__
+    context.add_output_metadata(metadata)
     return None
 
 

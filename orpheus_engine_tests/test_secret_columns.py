@@ -3,7 +3,8 @@
 Config tests: every EXCLUDE_AT_SOURCE column is left out by its live sync, so a
 full refresh cannot bring it back. Local Postgres tests (skipped without
 initdb/pg_ctl): the purge job drops the copies, refuses to break a view, and hides
-the QuickBooks token from the query tool's login while its owner still reads it.
+the QuickBooks token from the query tool's login while its owner still reads it;
+and the Hackatime id reconciliation finds a row stranded below the watermark.
 Everything runs on a throwaway loopback server with fake data.
 """
 
@@ -173,6 +174,38 @@ def test_stardance_daily_full_refresh_keeps_the_exclusion():
     assert full["streams"]["public.lookout_sessions"]["select"] == ["-token"]
 
 
+# --- Hackatime missing-id reconciliation: pure logic ---
+
+
+def test_missing_ids_finds_ids_below_the_warehouse_max():
+    assert sling_assets._missing_ids([1, 2, 3, 4, 5], [1, 2, 4, 5]) == [3]
+    assert sling_assets._missing_ids([1, 2], [1, 2, 3]) == []
+
+
+def test_backfill_config_upserts_by_id_without_secret_columns():
+    config = sling_assets._hackatime_backfill_config(
+        "users",
+        "id",
+        [1003, 12],
+        ["id", "username", "github_access_token", "hca_access_token", "slack_access_token", "updated_at"],
+    )
+    stream = config["streams"]["public.users"]
+    assert config["source"] == "HACKATIME_DB" and config["target"] == "WAREHOUSE_DB"
+    assert stream["mode"] == "incremental"
+    assert stream["primary_key"] == ["id"]
+    assert "update_key" not in stream  # merge every returned row, ignore the watermark
+    assert stream["object"] == "hackatime.users"
+    assert stream["sql"] == (
+        'select "id", "username", "updated_at" from public."users" where "id" in (1003, 12)'
+    )
+    assert "token" not in stream["sql"]
+
+
+def test_backfill_config_rejects_non_integer_ids():
+    with pytest.raises((TypeError, ValueError)):
+        sling_assets._hackatime_backfill_config("users", "id", ["1); drop table x; --"], ["id"])
+
+
 # --- Local Postgres ---
 
 
@@ -220,6 +253,7 @@ def server(tmp_path_factory):
         running = Server(port)
         with closing(running.connect("postgres", "postgres")) as conn, conn.cursor() as cur:
             cur.execute("CREATE DATABASE warehouse")
+            cur.execute("CREATE DATABASE hackatime_source")
         with closing(running.connect("postgres")) as conn, conn.cursor() as cur:
             cur.execute(f"CREATE ROLE {SYNC_ROLE} LOGIN NOSUPERUSER")
             cur.execute(f"GRANT CREATE ON DATABASE warehouse TO {SYNC_ROLE}")
@@ -360,6 +394,39 @@ def test_purge_reports_a_policy_on_the_hidden_table(server):
         finally:
             cur.execute("DROP POLICY leak ON quickbooks._qbo_oauth")
     assert any("quickbooks._qbo_oauth" in f and "policy" in f for f in report.failures)
+
+
+def test_reconciliation_finds_a_row_below_the_watermark(server):
+    source = f"postgresql://postgres@127.0.0.1:{server.port}/hackatime_source"
+    warehouse = f"postgresql://postgres@127.0.0.1:{server.port}/warehouse"
+    with closing(server.connect("postgres", "hackatime_source")) as conn, conn.cursor() as cur:
+        cur.execute("CREATE TABLE public.users (id int PRIMARY KEY, username text, updated_at timestamp)")
+        cur.execute(
+            "INSERT INTO public.users VALUES "
+            "(1, 'a', '2026-11-20'), (2, 'b', '2026-11-26'), (3, 'c', '2026-10-07'), (4, 'd', '2026-11-27')"
+        )
+    with closing(server.connect("postgres")) as conn, conn.cursor() as cur:
+        cur.execute("CREATE SCHEMA IF NOT EXISTS hackatime")
+        cur.execute("CREATE TABLE hackatime.users_reconcile (id int, username text, updated_at timestamp)")
+        # The warehouse copy as an updated_at cursor leaves it: id 3's updated_at is
+        # below the max the warehouse already holds, so the next incremental run
+        # (updated_at > max) never selects it.
+        cur.execute(
+            "INSERT INTO hackatime.users_reconcile VALUES "
+            "(1, 'a', '2026-11-20'), (2, 'b', '2026-11-26'), (4, 'd', '2026-11-27')"
+        )
+        cur.execute("SELECT max(updated_at) FROM hackatime.users_reconcile")
+        watermark = cur.fetchone()[0]
+    with closing(server.connect("postgres", "hackatime_source")) as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM public.users WHERE updated_at > %s", (watermark,))
+        assert cur.fetchall() == []  # what the incremental stream would copy
+
+    missing = sling_assets._missing_ids(
+        sling_assets._fetch_ids(source, "public", "users", "id"),
+        sling_assets._fetch_ids(warehouse, "hackatime", "users_reconcile", "id"),
+    )
+    assert missing == [3]
+    assert sling_assets._fetch_source_columns(source, "users") == ["id", "username", "updated_at"]
 
 
 def test_verify_script_reports_what_the_query_tool_login_can_read(server):
