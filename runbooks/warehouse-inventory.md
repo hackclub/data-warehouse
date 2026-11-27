@@ -17,7 +17,7 @@ internal hostnames/IPs, and personal data.
 | **Hackatime** | `hackatime`, `public_hackatime_analytics`, `public_summer_2026_analytics` | `hackatime_warehouse_mirror`, `materialize_hackatime_dau_job` | Every 2h (`hackatime_dau_hourly_schedule`) | Coding heartbeats and DAU analytics. |
 | **Loops** | `loops`, `public_loops_analytics` | `loops_raw_audience` → `loops_audience`, `loops_campaigns_to_warehouse`, `loops_mailing_lists_to_warehouse` | Every 6h (`materialize_all_assets_job`) | Email audience, mailing lists, and campaign metrics. |
 | **Unified YSWS Projects DB** | `airtable_unified_ysws_projects_db` | `materialize_unified_ysws_job` | Every 15m (`unified_ysws_15min_schedule`) | Canonical Airtable registry of YSWS programs and approved projects. |
-| **All Airtable Bases (raw)** | `airtable_raw_all_bases` | `airtable_raw_all_bases_sync` | Every 6h (`materialize_all_assets_job`) | Catch-all raw mirror of accessible Airtable bases. |
+| **All Airtable Bases (raw)** | `airtable_raw_all_bases` | `airtable_raw_all_bases_sync` | Every 6h (`airtable_raw_all_bases_6h_schedule`, its own `materialize_airtable_raw_all_bases_job`) | Catch-all raw mirror of accessible Airtable bases. A run takes about 4 hours, so it has its own job and no longer waits for the all-assets run. |
 | **Fillout** | `fillout` | `fillout_sync` | Every 6h (`materialize_all_assets_job`) | Form submissions across Hack Club forms. |
 | **Zenventory (AGH Fulfillment)** | `agh_fulfillment_zenventory` | `materialize_frequent_job` | Every 15m (`frequent_15min_schedule`) | Warehouse inventory, orders, shipments. |
 
@@ -44,11 +44,11 @@ data lives in one of these places:
 1. **Dedicated Sling Postgres mirror** (`orpheus_engine/defs/sling/programs/<name>.py`, schema `<name>`):
    - Active programs with dedicated schemas: `club_shop`, `contd`, `coral`,
      `crescent`, `cubed`, `embassy`, `expedition`, `fabricate`, `fallen`,
-     `forge`, `grandma`, `half_life`, `jame_gam`, `mipmap`, `phantom`, `pixl`,
-     `scraps`, `stardance` (+ `stardance_ahoy`), `taiyaki`, `terra`,
+     `forge`, `grandma`, `haggle`, `half_life`, `jame_gam`, `mipmap`, `phantom`,
+     `pixl`, `scraps`, `stardance` (+ `stardance_ahoy`), `taiyaki`, `terra`,
      `thirdspace`, `three_am` (3am), `trmnt`.
-   - `haggle`: mirror added (`orpheus_engine/defs/sling/programs/haggle.py`);
-     syncs to schema `haggle` once the reader login exists.
+   - `haggle`: `haggle_warehouse_mirror` (`orpheus_engine/defs/sling/programs/haggle.py`)
+     syncs four tables to schema `haggle` every 6h, live since 2026-11-26.
    - Programs using `hc_warehouse_reader` are checked daily for column grant
      drift by `warehouse_reader_grant_drift_job` (see `runbooks/prod-health-monitoring.md` §9).
 2. **Dedicated Airtable DLT mirror** (schema `airtable_<name>`):

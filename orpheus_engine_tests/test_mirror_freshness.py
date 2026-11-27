@@ -93,6 +93,9 @@ def test_derived_cadence_matches_actual_dagster_job_selection():
         "zoom_daily_schedule": schedules.ZOOM_SELECTION.resolve(
             asset_graph, allow_missing=True
         ),
+        "airtable_raw_all_bases_6h_schedule": schedules.AIRTABLE_RAW_ALL_BASES_SELECTION.resolve(
+            asset_graph, allow_missing=True
+        ),
     }
 
     specs = build_asset_specs(defs_mod.defs)
@@ -115,6 +118,10 @@ def test_derived_cadence_matches_actual_dagster_job_selection():
     # Zoom assets run on the dedicated daily 00:10 UTC schedule (24h cadence, 36h stale window).
     assert schedule_map["zoom_meetings"] == ("zoom_daily_schedule", 1440, 2160)
     assert schedule_map["zoom_daily_usage"] == ("zoom_daily_schedule", 1440, 2160)
+    # The raw all-bases Airtable sync has its own 6-hourly job.
+    assert schedule_map["airtable_raw_all_bases_sync"] == (
+        "airtable_raw_all_bases_6h_schedule", 360, 720
+    )
     # QuickBooks keeps its daily stale window inside the 6-hourly job.
     assert schedule_map["quickbooks_online_sync"] == ("materialize_all_assets", 360, 1440)
 

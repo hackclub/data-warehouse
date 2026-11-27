@@ -220,6 +220,7 @@ class TestJobGuardrails:
             "frequent_15min_schedule",
             "project_search_2h_schedule",
             "zoom_daily_schedule",
+            "airtable_raw_all_bases_6h_schedule",
         }
 
     def test_zoom_daily_schedule_runs_at_0010_utc_and_skips_when_running(self):
@@ -231,6 +232,34 @@ class TestJobGuardrails:
             assert _evaluate(zoom_daily_schedule, inst).run_requests
             _fake_run(inst, materialize_zoom_job.name, dg.DagsterRunStatus.STARTED)
             assert not _evaluate(zoom_daily_schedule, inst).run_requests
+
+    def test_airtable_raw_all_bases_has_its_own_6h_job(self):
+        import orpheus_engine.definitions as defs_mod
+        from orpheus_engine.schedules import (
+            airtable_raw_all_bases_6h_schedule,
+            materialize_airtable_raw_all_bases_job,
+            materialize_all_assets_job,
+        )
+
+        key = dg.AssetKey("airtable_raw_all_bases_sync")
+        graph = defs_mod.defs.resolve_asset_graph()
+        assert materialize_airtable_raw_all_bases_job.selection.resolve(graph) == {key}
+        # Out of the all-assets job, so the two never run it concurrently and it
+        # no longer waits for that multi-hour run.
+        assert key not in materialize_all_assets_job.selection.resolve(graph, allow_missing=True)
+        assert airtable_raw_all_bases_6h_schedule.cron_schedule == "15 */6 * * *"
+        assert airtable_raw_all_bases_6h_schedule.job_name == materialize_airtable_raw_all_bases_job.name
+        assert (
+            airtable_raw_all_bases_6h_schedule.default_status
+            == dg.DefaultScheduleStatus.RUNNING
+        )
+        # The cap stays under the 6 h cadence and above the slowest run seen (277 min).
+        max_runtime = int(materialize_airtable_raw_all_bases_job.tags["dagster/max_runtime"])
+        assert 277 * 60 < max_runtime < 6 * 3600
+        with dg.instance_for_test() as inst:
+            assert _evaluate(airtable_raw_all_bases_6h_schedule, inst).run_requests
+            _fake_run(inst, materialize_airtable_raw_all_bases_job.name, dg.DagsterRunStatus.STARTED)
+            assert not _evaluate(airtable_raw_all_bases_6h_schedule, inst).run_requests
 
     def test_stardance_apm_telemetry_is_not_mirrored(self):
         # These tables contain tens of millions of disposable request/job

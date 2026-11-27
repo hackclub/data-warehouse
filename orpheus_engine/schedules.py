@@ -30,6 +30,7 @@ def _make_skip_if_running_schedule(
     job: dg.JobDefinition,
     cron_schedule: str,
     execution_timezone: str = "America/New_York",
+    default_status: dg.DefaultScheduleStatus = dg.DefaultScheduleStatus.STOPPED,
 ) -> dg.ScheduleDefinition:
     """
     Build a schedule that skips its tick while a previous run of the same job is
@@ -69,6 +70,7 @@ def _make_skip_if_running_schedule(
         cron_schedule=cron_schedule,
         execution_timezone=execution_timezone,
         execution_fn=_evaluation_fn,
+        default_status=default_status,
     )
 
 
@@ -204,6 +206,12 @@ HACKATIME_DAU_SELECTION = (
 # Project search (YSWS mention search + upstream processing deps)
 PROJECT_SEARCH_SELECTION = dg.AssetSelection.groups("unified_ysws_db_processing")
 
+# The raw all-Airtable-bases sync takes ~4 h (238-277 min per run, 2026-11-13 to
+# 11-27). Inside materialize_all_assets_job it started only when that job did,
+# and the all-assets schedule skips while a run is in flight, so it ran about
+# every 15 h instead of every 6 h. Its own job keeps it on a 6 h cadence.
+AIRTABLE_RAW_ALL_BASES_SELECTION = dg.AssetSelection.assets("airtable_raw_all_bases_sync")
+
 # Zoom report assets run once daily right after Zoom's 00:00 UTC daily quota
 # reset so quota exhaustion cannot fail the 6-hourly materialize_all_assets_job.
 ZOOM_SELECTION = dg.AssetSelection.groups("zoom")
@@ -220,6 +228,7 @@ ZOOM_SELECTION = dg.AssetSelection.groups("zoom")
 #   hackatime_dau: p50 ~12 min,  p90 ~2.2 h   -> 4 h cap
 #   project_search: new job, no p50 data yet   -> 2 h cap
 #   zoom:          new job, no p50 data yet   -> 4 h cap (daily, after quota reset)
+#   airtable_raw_all_bases: p50 ~4.1 h, max ~4.6 h -> 5.5 h cap (under its 6 h cadence)
 #   all_assets:    takes hours                -> 6 h cap (its own cadence)
 # ---------------------------------------------------------------------------
 
@@ -237,6 +246,7 @@ materialize_all_assets_job = dg.define_asset_job(
         - HACKATIME_DAU_SELECTION
         - PROJECT_SEARCH_SELECTION
         - ZOOM_SELECTION
+        - AIRTABLE_RAW_ALL_BASES_SELECTION
     ),
     tags={
         "dagster/max_runtime": "21600",  # 6 h
@@ -338,7 +348,26 @@ zoom_daily_schedule = _make_skip_if_running_schedule(
     execution_timezone="UTC",
 )
 
-# 9. Wrap in a Definitions so Dagster can find it
+# 9. Raw all-Airtable-bases job and schedule (every 6 hours, its own job)
+materialize_airtable_raw_all_bases_job = dg.define_asset_job(
+    name="materialize_airtable_raw_all_bases_job",
+    selection=AIRTABLE_RAW_ALL_BASES_SELECTION,
+    tags={
+        "dagster/max_runtime": "19800",  # 5.5 h
+        "orpheus/serial-job": "materialize_airtable_raw_all_bases_job",
+    },
+)
+
+airtable_raw_all_bases_6h_schedule = _make_skip_if_running_schedule(
+    name="airtable_raw_all_bases_6h_schedule",
+    job=materialize_airtable_raw_all_bases_job,
+    cron_schedule="15 */6 * * *",                          # offset from all-assets :30
+    # New schedules deploy STOPPED unless told otherwise; this one replaces
+    # cadence the all-assets job used to give, so it starts on deploy.
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+
+# 10. Wrap in a Definitions so Dagster can find it
 defs = dg.Definitions(
     jobs=[
         materialize_all_assets_job,
@@ -347,6 +376,7 @@ defs = dg.Definitions(
         materialize_frequent_job,
         materialize_project_search_job,
         materialize_zoom_job,
+        materialize_airtable_raw_all_bases_job,
     ],
     schedules=[
         materialize_all_assets_schedule,
@@ -355,5 +385,6 @@ defs = dg.Definitions(
         frequent_15min_schedule,
         project_search_2h_schedule,
         zoom_daily_schedule,
+        airtable_raw_all_bases_6h_schedule,
     ],
 )

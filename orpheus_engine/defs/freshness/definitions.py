@@ -46,6 +46,7 @@ _SCHEDULED_JOB_CADENCES: tuple[tuple[str, int, int], ...] = (
     ("hackatime_dau_hourly_schedule", 120, 360),
     ("project_search_2h_schedule", 120, 360),
     ("materialize_all_assets_schedule", 360, 720),
+    ("airtable_raw_all_bases_6h_schedule", 360, 720),
     ("zoom_daily_schedule", 1440, 2160),
 )
 
