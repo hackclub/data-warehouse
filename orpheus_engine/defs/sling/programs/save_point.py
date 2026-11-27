@@ -66,6 +66,8 @@ save_point_replication_config = {
         "public.users": {
             "select": [
                 "-hackatime_access_token",
+                "-hca_access_token",
+                "-hca_refresh_token",
                 "-address",
                 "-phone_number",
                 "-slack_dm_error",

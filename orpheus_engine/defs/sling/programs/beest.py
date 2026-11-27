@@ -23,6 +23,7 @@ beest_replication_config = {
         "public._prisma_migrations": {"disabled": True},
         "public.sessions": {"disabled": True},
         "public.hcb_credentials": {"disabled": True},
+        "public.lookout_sessions": {"select": ["-token"]},  # Lookout session token
         "public.users": {
             "select": [
                 "id", "hca_sub", "email", "name", "nickname", "slack_id",

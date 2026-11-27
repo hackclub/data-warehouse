@@ -14,11 +14,10 @@ No network or database access; pure helpers only.
 
 import re
 
+from orpheus_engine.defs.sling._helpers import _replication_index_specs, _safe_index_name
 from orpheus_engine.defs.sling.assets import (
     _HACKATIME_APP_INDEXES,
     _hackatime_app_index_specs,
-    _replication_index_specs,
-    _safe_index_name,
     hackatime_replication_config,
 )
 

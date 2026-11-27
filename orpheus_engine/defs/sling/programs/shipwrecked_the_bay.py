@@ -22,6 +22,11 @@ shipwrecked_the_bay_replication_config = {
     "streams": {
         "public.*": None,
         "public._prisma_migrations": {"disabled": True},
+        # OAuth, session and sign-in tokens (secret_columns/inventory.py)
+        "public.Account": {"select": ["-access_token", "-id_token", "-refresh_token"]},
+        "public.Session": {"select": ["-sessionToken"]},
+        "public.User": {"select": ["-identityToken"]},
+        "public.VerificationToken": {"select": ["-token"]},
     }
 }
 

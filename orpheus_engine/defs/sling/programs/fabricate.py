@@ -55,6 +55,8 @@ fabricate_replication_config = {
         "public.users": {
             "select": [
                 "-hca_token",
+                "-session_token",
+                "-slack_user_token",
             ],
         },
         "public.versions": None,

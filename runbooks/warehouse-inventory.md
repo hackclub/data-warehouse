@@ -82,6 +82,9 @@ Hack Club Auth. The superadmin can pre-approve an email in `/admin` using
 that verified email and is then replaced by an approved account. The form
 does not send email. Pending invitations can be removed in `/admin`.
 Users can also sign in first and ask the superadmin to approve their account.
+Every approved user reads the warehouse as the query tool's login, so no
+credential may be readable there: see `runbooks/secret-columns.md` for the
+recorded inventory of secret columns and how each is kept out.
 Revoking access invalidates that account's outstanding authorization codes,
 sessions, and refresh tokens. Tool calls recheck the session before
 returning results, including when revocation occurs during a query. Previously

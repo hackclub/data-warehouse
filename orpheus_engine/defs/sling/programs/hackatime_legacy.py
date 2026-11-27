@@ -26,6 +26,10 @@ hackatime_legacy_replication_config = {
         "public.ar_internal_metadata": {"disabled": True},
         "public.pg_stat_statements": {"disabled": True},
         "public.pg_stat_statements_info": {"disabled": True},
+        # API keys, password hash and reset token (secret_columns/inventory.py)
+        "public.users": {
+            "select": ["-api_key", "-password", "-reset_token", "-wakatime_api_key"],
+        },
         # Large tables configured for incremental sync
         "public.heartbeats": {
             "mode": "incremental",

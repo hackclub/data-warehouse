@@ -33,7 +33,7 @@ haggle_replication_config = {
             ],
         },
         "public.rsvp_event": None,
-        "public.rsvp_rsvp": None,
+        "public.rsvp_rsvp": {"select": ["-hackatime_token"]},  # Hackatime API key
         "public.rsvp_visitor": None,
     },
 }

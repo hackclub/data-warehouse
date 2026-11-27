@@ -26,6 +26,7 @@ summer_of_making_2025_replication_config = {
         "public.schema_migrations": {"disabled": True},
         "public.ar_internal_metadata": {"disabled": True},
         "public.solid_cache_entries": {"disabled": True},
+        "public.magic_links": {"select": ["-token"]},  # sign-in link token
         "public.solid_queue_blocked_executions": {"disabled": True},
         "public.solid_queue_claimed_executions": {"disabled": True},
         "public.solid_queue_failed_executions": {"disabled": True},
@@ -84,6 +85,7 @@ summer_of_making_2025_replication_config = {
             "mode": "incremental",
             "primary_key": ["id"],
             "update_key": "updated_at",  # 39K rows
+            "select": ["-identity_vault_access_token", "-wrapped_share_token"],
         },
         "public.activities": {
             "mode": "incremental",

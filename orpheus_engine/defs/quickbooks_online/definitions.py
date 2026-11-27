@@ -12,7 +12,9 @@ ROTATES refresh tokens (roughly daily; old values eventually die), so the
 current token is persisted in quickbooks._qbo_oauth and QBO_REFRESH_TOKEN is
 only the seed for first boot / re-authorization. The token table is excluded
 from the DuckLake mirror (see ducklake EXCLUDED_TABLES) -- it must never leave
-the warehouse. Access tokens last ~1h; a 401 mid-run triggers one re-refresh.
+the warehouse -- and has row-level security with no policy, so only its owner
+(this sync's login) sees the row; pg_read_all_data logins such as the agents'
+and warehouse-mcp's see none (runbooks/secret-columns.md). Access tokens last ~1h; a 401 mid-run triggers one re-refresh.
 If every candidate token is rejected, re-authorize with scripts/qbo_auth.py.
 
 API: GET /v3/company/{realm}/query with entity SQL, 1000 rows/page.
@@ -28,6 +30,7 @@ so deletions in QuickBooks propagate without a partial run nuking data.
 """
 
 import json
+import logging
 import os
 import random
 import threading
@@ -42,6 +45,8 @@ from psycopg2 import sql
 from psycopg2.extras import execute_values
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+from orpheus_engine.defs.secret_columns.purge import ensure_row_security
 from dagster import (
     AssetExecutionContext,
     Definitions,
@@ -147,6 +152,13 @@ def ensure_schema_and_tables(conn):
             sql.Identifier(SCHEMA_NAME)
         ))
         cur.execute(TOKEN_DDL)
+        # Hide the refresh token from every login but this table's owner. Only
+        # runs ALTER when it is off; a FORCE or a policy is left for
+        # warehouse_secret_column_purge_job to report, not to fail the sync.
+        try:
+            ensure_row_security(cur, SCHEMA_NAME, TOKEN_TABLE)
+        except RuntimeError as error:
+            logging.getLogger(__name__).warning("QuickBooks token table: %s", error)
         for table in ENTITIES.values():
             cur.execute(entity_ddl(table))
     conn.commit()

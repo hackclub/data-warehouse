@@ -79,6 +79,9 @@ stasis_replication_config = {
             "mode": "incremental",
             "primary_key": ["id"],
             "update_key": "updatedAt",
+            "select": [
+                "-value",
+            ],  # Excludes the verification code
         },
 
         # --- Incremental: id + createdAt (append-only) ---

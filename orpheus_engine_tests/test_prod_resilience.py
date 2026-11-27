@@ -261,6 +261,18 @@ class TestJobGuardrails:
             _fake_run(inst, materialize_airtable_raw_all_bases_job.name, dg.DagsterRunStatus.STARTED)
             assert not _evaluate(airtable_raw_all_bases_6h_schedule, inst).run_requests
 
+    def test_secret_column_purge_job_is_scheduled_hourly_and_on(self):
+        import orpheus_engine.definitions as defs_mod
+        from orpheus_engine.defs.secret_columns.definitions import (
+            warehouse_secret_column_purge_schedule,
+        )
+
+        assert warehouse_secret_column_purge_schedule.cron_schedule == "40 * * * *"
+        assert warehouse_secret_column_purge_schedule.default_status == dg.DefaultScheduleStatus.RUNNING
+        repo = defs_mod.defs.get_repository_def()
+        assert repo.has_schedule_def("warehouse_secret_column_purge_schedule")
+        assert repo.has_job("warehouse_secret_column_purge_job")
+
     def test_stardance_apm_telemetry_is_not_mirrored(self):
         # These tables contain tens of millions of disposable request/job
         # traces. A requests COPY wedged warehouse readers for hours on

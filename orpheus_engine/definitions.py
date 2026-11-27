@@ -22,6 +22,7 @@ import orpheus_engine.defs.fillout.definitions as fillout_defs
 import orpheus_engine.defs.freshness.definitions as freshness_defs
 import orpheus_engine.defs.quickbooks_online.definitions as quickbooks_defs
 import orpheus_engine.defs.janitor.definitions as janitor_defs
+import orpheus_engine.defs.secret_columns.definitions as secret_columns_defs
 import orpheus_engine.defs.ysws_true_spend_site.definitions as ysws_true_spend_site_defs
 import orpheus_engine.schedules as schedules
 
@@ -63,6 +64,7 @@ def _build_definitions() -> dg.Definitions:
         freshness_defs.defs,
         quickbooks_defs.defs,
         janitor_defs.defs,
+        secret_columns_defs.defs,
         ysws_true_spend_site_defs.defs,
         schedules.defs,
         dg.Definitions(resources={

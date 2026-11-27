@@ -26,6 +26,8 @@ flavortown_replication_config = {
         # Rails internal tables - disable
         "public.schema_migrations": {"disabled": True},
         "public.ar_internal_metadata": {"disabled": True},
+        # Review link bearer token (secret_columns/inventory.py)
+        "public.report_review_tokens": {"select": ["-token"]},
 
         # Tables with id + updated_at - use incremental sync
         "public.action_mailbox_inbound_emails": {
@@ -145,6 +147,8 @@ flavortown_replication_config = {
             "mode": "incremental",
             "primary_key": ["id"],
             "update_key": "updated_at",
+            # API key, sign-in link and session tokens (secret_columns/inventory.py)
+            "select": ["-api_key", "-magic_link_token", "-session_token"],
         },
         "public.votes": {
             "mode": "incremental",

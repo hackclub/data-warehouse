@@ -605,9 +605,20 @@ def create_airtable_sync_assets(
     
     return assets_list
 
+# Airtable fields that hold credentials, dropped before the load so the warehouse
+# never gets them (orpheus_engine/defs/secret_columns/inventory.py). Keyed by base,
+# then table, with the renamed (snake_case) field names.
+AIRTABLE_SECRET_DROP_COLUMNS: dict[str, dict[str, list[str]]] = {
+    "neighborhood": {"neighbors": ["token"]},
+    "campfire": {"participants": ["checkin_token"]},
+    "milkyway": {"users": ["otp"]},  # a list field; dlt loads it as users__otp
+    "snowglobe": {"users": ["hackatime_access_token"]},
+}
+
 neighborhood_assets = create_airtable_sync_assets(
     base_name="neighborhood",
     tables=["neighbors", "hackatime_projects"],
+    drop_columns=AIRTABLE_SECRET_DROP_COLUMNS["neighborhood"],
     description="Loads neighborhood.neighbors and neighborhood.hackatime_projects data into the warehouse.neighborhood schema."
 )
 
@@ -647,7 +658,8 @@ campfire_assets = create_airtable_sync_assets(
         "theme", "campfire_workshops", "campfire_busan", "cf_busan_scan_in", "nps",
         "t_shirt_shipping", "t_shirts_delayed_packages", "blr_submissions", "blr_voting"
     ],
-    description="Loads campfire data into the warehouse.airtable_campfire schema."
+    description="Loads campfire data into the warehouse.airtable_campfire schema.",
+    drop_columns=AIRTABLE_SECRET_DROP_COLUMNS["campfire"],
 )
 
 campfire_flagship_assets = create_airtable_sync_assets(
@@ -665,7 +677,8 @@ flavortown_assets = create_airtable_sync_assets(
 milkyway_assets = create_airtable_sync_assets(
     base_name="milkyway",
     tables=["users", "projects", "devlogs", "artlog"],
-    description="Loads Milkyway data into the warehouse.airtable_milkyway schema."
+    description="Loads Milkyway data into the warehouse.airtable_milkyway schema.",
+    drop_columns=AIRTABLE_SECRET_DROP_COLUMNS["milkyway"],
 )
 
 sleepover_assets = create_airtable_sync_assets(
@@ -709,7 +722,7 @@ snowglobe_assets = create_airtable_sync_assets(
     base_name="snowglobe",
     tables=["projects", "activity", "orders", "posts", "users"],
     description="Loads snowglobe data into the warehouse.airtable_snowglobe schema.",
-    drop_columns={"users": ["hackatime_access_token"]},
+    drop_columns=AIRTABLE_SECRET_DROP_COLUMNS["snowglobe"],
 )
 
 wrangler_assets = create_airtable_sync_assets(

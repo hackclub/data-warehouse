@@ -23,6 +23,7 @@ journey_replication_config = {
         "public.*": None,
         "public.schema_migrations": {"disabled": True},
         "public.ar_internal_metadata": {"disabled": True},
+        "public.users": {"select": ["-identity_vault_access_token"]},
         "public.solid_queue_blocked_executions": {"disabled": True},
         "public.solid_queue_claimed_executions": {"disabled": True},
         "public.solid_queue_failed_executions": {"disabled": True},

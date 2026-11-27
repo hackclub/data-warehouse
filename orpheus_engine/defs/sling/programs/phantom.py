@@ -24,7 +24,7 @@ phantom_replication_config = {
         "public.job_runs": None,
         "public.ledger_accounts": None,
         "public.ledger_entries": None,
-        "public.oauth_states": None,
+        "public.oauth_states": {"select": ["-state", "-code_verifier"]},  # OAuth PKCE secrets
         "public.order_transitions": None,
         "public.orders": {
             "select": [

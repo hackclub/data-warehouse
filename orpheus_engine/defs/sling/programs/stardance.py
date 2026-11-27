@@ -77,6 +77,9 @@ stardance_replication_config = {
         # defaults fail on it. Nothing in this repo reads it.
         "public.privacy_token_uses": {"disabled": True},
 
+        # --- Sensitive: Lookout session bearer token (secret_columns/inventory.py) ---
+        "public.lookout_sessions": {"select": ["-token"]},
+
         # --- Sensitive: explicit column allow-list (excludes ciphertext/bidx/token) ---
         "public.users": {
             "select": [

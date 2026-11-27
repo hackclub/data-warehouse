@@ -499,8 +499,12 @@ before starting another run.
 
 ### What the agents' and query tool's logins can still do
 
-- **Read everything,** including tokens in mirrored tables and other sessions'
-  query text. Treat the URL as sensitive.
+- **Read everything,** including other sessions' query text. Treat the URL as
+  sensitive. Credentials are kept out of what it reads, not by its grants:
+  the syncs leave every column in `runbooks/secret-columns.md` out of the copy,
+  `warehouse_secret_column_purge_job` drops any copy left in the warehouse, and
+  the QuickBooks token table has row-level security, which `pg_read_all_data`
+  does not bypass.
 - **Read `pg_authid`,** so it can see every login's SCRAM verifier, including the
   superuser's. `pg_read_all_data` covers system catalogs, and Postgres cannot deny this
   to one login. A verifier cannot log in, but it allows offline password guessing, so

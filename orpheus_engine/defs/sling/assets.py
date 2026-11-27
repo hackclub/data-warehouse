@@ -9,6 +9,7 @@ import os
 import base64
 import psycopg2
 from psycopg2 import sql
+from ..secret_columns.inventory import excluded_columns
 from ._helpers import (
     _drop_invalid_indexes,
     _ensure_target_indexes,
@@ -282,14 +283,14 @@ _HACKATIME_APP_INDEXES: dict[str, list[tuple[str, ...]]] = {
     "active_storage_blobs": [
         ("key",),
     ],
+    # Token columns are not mirrored (secret_columns/inventory.py), so prod's
+    # token lookup indexes on admin_api_keys, api_keys, oauth_access_grants,
+    # oauth_access_tokens and sign_in_tokens have no warehouse counterpart.
     "admin_api_keys": [
-        ("token",),
         ("user_id", "name"),
     ],
     "api_keys": [
-        ("token",),
         ("user_id", "name"),
-        ("user_id", "token"),
     ],
     "commits": [
         ("repository_id",),
@@ -390,13 +391,10 @@ _HACKATIME_APP_INDEXES: dict[str, list[tuple[str, ...]]] = {
     "oauth_access_grants": [
         ("application_id",),
         ("resource_owner_id",),
-        ("token",),
     ],
     "oauth_access_tokens": [
         ("application_id",),
-        ("refresh_token",),
         ("resource_owner_id",),
-        ("token",),
     ],
     "oauth_applications": [
         ("owner_type", "owner_id"),
@@ -425,7 +423,6 @@ _HACKATIME_APP_INDEXES: dict[str, list[tuple[str, ...]]] = {
         ("slack_uid",),
     ],
     "sign_in_tokens": [
-        ("token",),
         ("user_id",),
     ],
     "trust_level_audit_logs": [
@@ -469,6 +466,16 @@ def _incremental_stream(primary_key: list[str], update_key: str) -> dict[str, An
     }
 
 
+def _hackatime_stream(table_name: str, stream: dict[str, Any]) -> dict[str, Any]:
+    """Leave the inventory's credential columns (API keys, OAuth and sign-in
+    tokens, GitHub/Slack/Auth tokens on users) out of the copy. See
+    orpheus_engine/defs/secret_columns/inventory.py."""
+    excluded = excluded_columns("hackatime", table_name)
+    if excluded:
+        stream = {**stream, "select": [f"-{column}" for column in excluded]}
+    return stream
+
+
 def _hackatime_streams() -> dict[str, Any]:
     streams: dict[str, Any] = {
         "public.pg_stat_statements": {"disabled": True},
@@ -479,13 +486,17 @@ def _hackatime_streams() -> dict[str, Any]:
     }
 
     for table_name, primary_key in _HACKATIME_UPDATED_AT_STREAMS.items():
-        streams[f"public.{table_name}"] = _incremental_stream(primary_key, "updated_at")
+        streams[f"public.{table_name}"] = _hackatime_stream(
+            table_name, _incremental_stream(primary_key, "updated_at")
+        )
 
     for table_name, primary_key in _HACKATIME_CREATED_AT_STREAMS.items():
-        streams[f"public.{table_name}"] = _incremental_stream(primary_key, "created_at")
+        streams[f"public.{table_name}"] = _hackatime_stream(
+            table_name, _incremental_stream(primary_key, "created_at")
+        )
 
     for table_name in _HACKATIME_FULL_REFRESH_STREAMS:
-        streams[f"public.{table_name}"] = {"mode": "full-refresh"}
+        streams[f"public.{table_name}"] = _hackatime_stream(table_name, {"mode": "full-refresh"})
 
     # Dropped upstream: raw_heartbeat_uploads, ahoy_events, ahoy_visits.
     # Listing missing streams causes Sling to fail.
@@ -519,6 +530,8 @@ hcer_public_github_data_replication_config = {
         "public.*": None,
         "public.schema_migrations": {"disabled": True},
         "public.ar_internal_metadata": {"disabled": True},
+        # GitHub OAuth tokens (secret_columns/inventory.py); keep the rest
+        "public.access_tokens": {"select": ["-access_token"]},
     }
 }
 
@@ -555,7 +568,7 @@ hcb_replication_config = {
         # --- Payment/Vendor Tables ---
         "public.disbursements": None,
         "public.ach_transfers": None,
-        "public.donations": None,
+        "public.donations": {"select": ["-stripe_client_secret"]},  # payment client secret
         "public.wires": None,
         "public.checks": None,
         "public.increase_checks": None,
