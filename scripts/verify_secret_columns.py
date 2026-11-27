@@ -21,6 +21,7 @@ See runbooks/secret-columns.md.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -29,8 +30,6 @@ import psycopg2
 from psycopg2 import sql
 
 from orpheus_engine.defs.secret_columns.inventory import SECRET_COLUMNS
-import os
-
 from orpheus_engine.defs.secret_columns.purge import (
     drop_candidates,
     not_owned_columns,
@@ -97,6 +96,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             with conn.cursor() as cur:
                 remainder = not_owned_columns(cur, args.sync_role)
             fd = os.open(args.render_admin_sql, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.fchmod(fd, 0o600)  # O_CREAT's mode does not apply to an existing file
             with os.fdopen(fd, "w") as handle:
                 handle.write(render_admin_drop_sql(remainder))
             for column in remainder:

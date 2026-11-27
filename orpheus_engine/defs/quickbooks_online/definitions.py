@@ -14,7 +14,8 @@ only the seed for first boot / re-authorization. The token table is excluded
 from the DuckLake mirror (see ducklake EXCLUDED_TABLES) -- it must never leave
 the warehouse -- and has row-level security with no policy, so only its owner
 (this sync's login) sees the row; pg_read_all_data logins such as the agents'
-and warehouse-mcp's see none (runbooks/secret-columns.md). Access tokens last ~1h; a 401 mid-run triggers one re-refresh.
+and warehouse-mcp's see none (runbooks/secret-columns.md). Access tokens last
+~1h; a 401 mid-run triggers one re-refresh.
 If every candidate token is rejected, re-authorize with scripts/qbo_auth.py.
 
 API: GET /v3/company/{realm}/query with entity SQL, 1000 rows/page.
@@ -45,8 +46,6 @@ from psycopg2 import sql
 from psycopg2.extras import execute_values
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
-from orpheus_engine.defs.secret_columns.purge import ensure_row_security
 from dagster import (
     AssetExecutionContext,
     Definitions,
@@ -54,6 +53,10 @@ from dagster import (
     Output,
     asset,
 )
+
+from orpheus_engine.defs.secret_columns.purge import ensure_row_security
+
+logger = logging.getLogger(__name__)
 
 
 SCHEMA_NAME = "quickbooks"
@@ -158,7 +161,7 @@ def ensure_schema_and_tables(conn):
         try:
             ensure_row_security(cur, SCHEMA_NAME, TOKEN_TABLE)
         except RuntimeError as error:
-            logging.getLogger(__name__).warning("QuickBooks token table: %s", error)
+            logger.warning("QuickBooks token table: %s", error)
         for table in ENTITIES.values():
             cur.execute(entity_ddl(table))
     conn.commit()

@@ -117,7 +117,11 @@ def render_admin_drop_sql(columns: Iterable[NotOwned]) -> str:
 
     No CASCADE: a dependent view stops the whole transaction, and nothing changes.
     """
-    lines = ["BEGIN;", "SET LOCAL lock_timeout = '10s';", "SET LOCAL statement_timeout = '120s';"]
+    lines = [
+        "BEGIN;",
+        f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}';",
+        f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT}';",
+    ]
     for c in columns:
         lines.append(
             sql_text_alter_drop(c.schema, c.table, c.column) + f"  -- owner {c.owner}"
