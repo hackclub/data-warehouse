@@ -17,14 +17,16 @@ copy an inventory column, and if this list and the code differ.
 | Treatment | When | How |
 | --- | --- | --- |
 | Excluded at source, copy dropped | A live sync copies the table | The sync's config leaves the column out: a Sling `-col` or a positive `select` list without it, or the dlt `AIRTABLE_SECRET_DROP_COLUMNS` list for Airtable bases. The purge job drops the copy already in the warehouse. A full refresh cannot bring it back, because the sync no longer reads it. |
-| Frozen copy dropped | Nothing syncs the table any more: an ended program's disabled mirror, or a paused connector's snapshot | The purge job drops the column. |
+| Frozen copy dropped | Nothing syncs the table any more: an ended program's disabled mirror, or a paused connector's snapshot | The purge job drops the column if the sync login owns the table. The paused Fivetran snapshots belong to the `fivetran` login, so their columns need the one-time admin step below. |
 | Hidden by row security | The sync itself needs the value | Row-level security with no policy. The table's owner, the sync login, still reads and writes it. `pg_read_all_data` does not bypass row-level security, so every other login sees no rows. Only `quickbooks._qbo_oauth` (the QuickBooks refresh token) is treated this way. The QuickBooks sync turns it on when it creates the table. |
 
 ## The purge job
 
 `warehouse_secret_column_purge_job` (schedule `warehouse_secret_column_purge_schedule`,
-hourly at :40 New York time, on by default) runs as the sync login, which owns the
-synced tables:
+hourly at :40 New York time, on by default) runs as the sync login. That login owns
+the tables Sling and dlt create, but not every table in the warehouse: the paused
+Fivetran snapshots belong to the `fivetran` login. Only a table's owner can drop its
+columns. The job:
 
 - For each dropped inventory column that is still in the warehouse, it runs
   `ALTER TABLE ... DROP COLUMN`, with a 10 s lock timeout. Indexes on the column
@@ -35,12 +37,46 @@ synced tables:
   such a table has `FORCE ROW LEVEL SECURITY` (that would lock out its own sync)
   or any policy (a policy can show the rows to another login).
 - A lock timeout fails the run. The next run tries again.
+- It skips an inventory column on a table it cannot alter (another login owns it)
+  and reports it, without failing: a warning in the run log and the run's
+  `not_owned` / `not_owned_count` metadata, every run, until the admin step below
+  removes it. That is known, documented state, so it does not turn the hourly job
+  red. `scripts/verify_secret_columns.py` still counts those columns as readable.
 
 After the first clean run, each run is a few catalog reads.
 
 Dropping a column changes every row's `_row_hash`, so the next DuckLake sync
 rewrites those tables once. DuckLake drops the column on its own, but its older
 snapshots keep the old values until they expire.
+
+## Columns the sync login does not own (admin step)
+
+This step uses `bin/warehouse-admin-psql`, as `runbooks/prod-health-monitoring.md`
+section 10 allows for a runbook step that names it. Run it once after the purge job
+has run, and again whenever the job's run log lists `not_owned` columns: for
+example, after a paused Fivetran connector is resumed and loads its credential
+fields again.
+
+1. Render the SQL from the live catalog, read-only, as the agents' login (parent
+   `.env`). It lists only inventory columns that are present on tables the sync
+   login cannot alter:
+
+   ```sh
+   PYTHONPATH=. .venv/bin/python scripts/verify_secret_columns.py --env-file <agent env file> \
+       --render-admin-sql <scratch.sql> --sync-role hc_warehouse_dagster
+   ```
+
+   The file is one transaction of `ALTER TABLE ... DROP COLUMN` statements, without
+   `CASCADE`. Read it: each line names the table's owner.
+2. Apply it:
+
+   ```sh
+   bin/warehouse-admin-psql --reason "drop credential columns the sync login does not own" -f <scratch.sql>
+   ```
+
+   A dependent view or a lock timeout stops the whole transaction, and nothing
+   changes. Fix the cause and run it again. Delete the file afterwards.
+3. Run `scripts/verify_secret_columns.py` as the query tool's login (below).
 
 ## Check it
 
@@ -143,6 +179,7 @@ Columns still under review are tracked in the private ops notes.
 | `airtable_campfire.participants.checkin_token` | event check-in token | excluded at source, copy dropped (dlt) |
 | `airtable_milkyway.users__otp.value` | one-time password | excluded at source, copy dropped (dlt) |
 | `airtable_neighborhood.neighbors.token` | login token | excluded at source, copy dropped (dlt) |
+| `airtable_snowglobe.users.hackatime_access_token` | Hackatime API key | excluded at source, copy dropped (dlt) |
 | `fallout.collapse_timelapses.session_token` | timelapse session token | frozen copy dropped |
 | `fallout.hcb_connections.access_token` | HCB OAuth token | frozen copy dropped |
 | `fallout.hcb_connections.refresh_token` | HCB OAuth token | frozen copy dropped |

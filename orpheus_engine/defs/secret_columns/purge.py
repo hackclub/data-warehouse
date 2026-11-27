@@ -3,7 +3,14 @@
 Idempotent: it reads the catalog first and changes only what is still there, so
 after the first clean run it is a few catalog reads. It never uses CASCADE: a
 column that a view depends on is reported, not dropped, so no view vanishes
-without someone deciding. See runbooks/secret-columns.md.
+without someone deciding.
+
+Only a table's owner (or a member of the owning role) can drop its columns. The
+job runs as the sync login, which owns what the syncs create, but not, for
+example, the paused Fivetran snapshots, which the `fivetran` login owns. Those
+columns are reported as `not_owned`, not attempted, and do not fail the run:
+they are a known state with a one-time admin step (render_admin_drop_sql,
+`bin/warehouse-admin-psql`). See runbooks/secret-columns.md.
 """
 
 from __future__ import annotations
@@ -54,11 +61,80 @@ WHERE n.nspname = %s AND c.relname = %s AND c.relkind IN ('r', 'p')
 """
 
 
+_OWNERS_SQL = """
+SELECT n.nspname, c.relname, pg_get_userbyid(c.relowner),
+       pg_has_role(%s, c.relowner, 'USAGE')
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p')
+  AND (n.nspname, c.relname) IN (SELECT * FROM unnest(%s::text[], %s::text[]))
+"""
+
+
+@dataclass(frozen=True)
+class NotOwned:
+    schema: str
+    table: str
+    column: str
+    owner: str
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.schema}.{self.table}.{self.column}"
+
+
 @dataclass
 class PurgeReport:
     dropped: list[str] = field(default_factory=list)
     row_security_enabled: list[str] = field(default_factory=list)
+    # Present inventory columns on tables this login cannot alter: left for the
+    # one-time admin step, reported but not a failure.
+    not_owned: list[NotOwned] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
+
+
+def table_owners(cur, role: str, tables: Iterable[tuple[str, str]]) -> dict[tuple[str, str], tuple[str, bool]]:
+    """{(schema, table): (owner, role can alter it)}. pg_has_role USAGE is true for the
+    owner itself, a member that inherits the owner's privileges, and a superuser."""
+    tables = sorted(set(tables))
+    cur.execute(_OWNERS_SQL, (role, [s for s, _ in tables], [t for _, t in tables]))
+    return {(s, t): (owner, bool(can)) for s, t, owner, can in cur.fetchall()}
+
+
+def not_owned_columns(cur, role: str, columns: Iterable[SecretColumn] = DROPPED_COLUMNS) -> list[NotOwned]:
+    """Present inventory columns whose table `role` cannot alter."""
+    present = drop_candidates(cur, columns)
+    owners = table_owners(cur, role, [(s, t) for s, t, _, _ in present])
+    return [
+        NotOwned(s, t, col, owners[(s, t)][0])
+        for s, t, col, _ in present
+        if not owners[(s, t)][1]
+    ]
+
+
+def render_admin_drop_sql(columns: Iterable[NotOwned]) -> str:
+    """One transaction that drops the given columns, for bin/warehouse-admin-psql -f.
+
+    No CASCADE: a dependent view stops the whole transaction, and nothing changes.
+    """
+    lines = ["BEGIN;", "SET LOCAL lock_timeout = '10s';", "SET LOCAL statement_timeout = '120s';"]
+    for c in columns:
+        lines.append(
+            sql_text_alter_drop(c.schema, c.table, c.column) + f"  -- owner {c.owner}"
+        )
+    lines.append("COMMIT;")
+    return "\n".join(lines) + "\n"
+
+
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def sql_text_alter_drop(schema: str, table: str, column: str) -> str:
+    return (
+        f"ALTER TABLE {_quote_ident(schema)}.{_quote_ident(table)} "
+        f"DROP COLUMN {_quote_ident(column)};"
+    )
 
 
 def drop_candidates(cur, columns: Iterable[SecretColumn] = DROPPED_COLUMNS):
@@ -123,8 +199,16 @@ def purge(conn, log: Callable[[str], None] = print) -> PurgeReport:
     with conn.cursor() as cur:
         cur.execute("SELECT set_config('lock_timeout', %s, false)", (LOCK_TIMEOUT,))
         cur.execute("SELECT set_config('statement_timeout', %s, false)", (STATEMENT_TIMEOUT,))
-        for schema, table, column, dependents in drop_candidates(cur):
+        cur.execute("SELECT current_user")
+        login = cur.fetchone()[0]
+        candidates = drop_candidates(cur)
+        owners = table_owners(cur, login, [(s, t) for s, t, _, _ in candidates])
+        for schema, table, column, dependents in candidates:
             name = f"{schema}.{table}.{column}"
+            owner, can_alter = owners[(schema, table)]
+            if not can_alter:
+                report.not_owned.append(NotOwned(schema, table, column, owner))
+                continue
             if dependents:
                 report.failures.append(
                     f"{name}: not dropped, used by {', '.join(sorted(dependents))}; "

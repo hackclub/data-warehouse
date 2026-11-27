@@ -456,6 +456,7 @@ access, or the query tool would lose its limits.
 | End or cancel any superuser session: `pg_dump`, a sync | `bin/warehouse-admin-psql` |
 | Any triage during "too many clients" | `bin/warehouse-admin-psql`, because reserved slots are for superusers |
 | Hand fixes: `metrics_last_fetched_at`, `ALTER COLUMN` for a type overflow, a backfill `UPDATE` | `bin/warehouse-admin-psql` |
+| Drop credential columns on tables the sync login does not own (`runbooks/secret-columns.md`, "Columns the sync login does not own") | `bin/warehouse-admin-psql -f`, with SQL rendered by `scripts/verify_secret_columns.py --render-admin-sql` |
 | Sling test into a scratch schema | Prefer a `target: LOCAL` dry run. Otherwise run Sling in the app container and drop the schema with `bin/warehouse-admin-psql` |
 | `dbt compile`, `parse`, `ls` | `bin/warehouse-dbt <command> ...` |
 | `dbt run`, `dbt test`, spend preview `--dbt` | `bin/warehouse-dbt --elevated --reason "<why>" ...` |
@@ -502,7 +503,8 @@ before starting another run.
 - **Read everything,** including other sessions' query text. Treat the URL as
   sensitive. Credentials are kept out of what it reads, not by its grants:
   the syncs leave every column in `runbooks/secret-columns.md` out of the copy,
-  `warehouse_secret_column_purge_job` drops any copy left in the warehouse, and
+  `warehouse_secret_column_purge_job` drops any copy left in the warehouse (an
+  admin step drops the ones on tables the sync login does not own), and
   the QuickBooks token table has row-level security, which `pg_read_all_data`
   does not bypass.
 - **Read `pg_authid`,** so it can see every login's SCRAM verifier, including the

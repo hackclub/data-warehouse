@@ -11,7 +11,10 @@ all of them. Each column below gets one treatment:
   warehouse. A full refresh cannot bring it back, because the sync no longer reads
   it. orpheus_engine_tests/test_secret_columns.py checks every config.
 - DROP_FROZEN_COPY: nothing syncs the table any more (an ended program's mirror,
-  a paused connector's snapshot). The purge job drops the column.
+  a paused connector's snapshot). The purge job drops the column when the sync
+  login owns the table. The paused Fivetran snapshots are owned by `fivetran`, so
+  their columns need the one-time admin step in runbooks/secret-columns.md; the
+  purge reports them as `not_owned` until then.
 - HIDE_ROWS: the sync itself needs the value (the QuickBooks refresh token). The
   table gets row-level security with no policy. Its owner, the sync login,
   still reads and writes it. pg_read_all_data does not bypass row-level security,
@@ -125,6 +128,7 @@ SECRET_COLUMNS: tuple[SecretColumn, ...] = (
     _dlt("airtable_campfire", "participants", "checkin_token", "event check-in token"),
     _dlt("airtable_milkyway", "users__otp", "value", "one-time password"),
     _dlt("airtable_neighborhood", "neighbors", "token", "login token"),
+    _dlt("airtable_snowglobe", "users", "hackatime_access_token", "Hackatime API key"),
     # --- Ended program, mirror disabled ---
     _frozen("fallout", "collapse_timelapses", "session_token", "timelapse session token"),
     _frozen("fallout", "hcb_connections", "access_token", "HCB OAuth token"),

@@ -267,9 +267,13 @@ def server(tmp_path_factory):
 
 
 def _columns(cur, schema, table):
+    # pg_attribute, not information_schema: the latter hides columns the session
+    # has no privilege on (another owner's table).
     cur.execute(
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position",
+        "SELECT a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = %s AND c.relname = %s AND a.attnum > 0 AND NOT a.attisdropped "
+        "ORDER BY a.attnum",
         (schema, table),
     )
     return [r[0] for r in cur.fetchall()]
@@ -455,3 +459,63 @@ def test_runbook_lists_exactly_the_inventory():
 
     listed = re.findall(r"^\| `([^`]+)` \|", inventory_section, re.MULTILINE)
     assert sorted(listed) == sorted(c.qualified for c in SECRET_COLUMNS)
+
+
+def test_purge_skips_and_reports_tables_another_login_owns(server):
+    """A paused-connector snapshot owned by another login: not a failure, but listed,
+    and the rendered admin SQL drops it when run as an owner (here the superuser)."""
+    from orpheus_engine.defs.secret_columns.purge import not_owned_columns, render_admin_drop_sql
+
+    schema = "airtable_arcade__summer_24__app4kcwulfb02bv8q"
+    with closing(server.connect("postgres")) as conn, conn.cursor() as cur:
+        cur.execute("CREATE ROLE fake_fivetran NOLOGIN")
+        cur.execute(f"CREATE SCHEMA {schema} AUTHORIZATION fake_fivetran")
+        cur.execute(f"CREATE TABLE {schema}.users (id text, auth_token text, login_token text, email text)")
+        cur.execute(f"ALTER TABLE {schema}.users OWNER TO fake_fivetran")
+        cur.execute(f"INSERT INTO {schema}.users VALUES ('rec1', 'fake-auth', 'fake-login', 'x')")
+    with closing(server.connect(SYNC_ROLE)) as conn:
+        report = purge(conn, log=lambda _: None)
+        with conn.cursor() as cur:
+            assert _columns(cur, schema, "users") == ["id", "auth_token", "login_token", "email"]
+            remainder = not_owned_columns(cur, SYNC_ROLE)
+    assert sorted(c.qualified for c in report.not_owned) == [
+        f"{schema}.users.auth_token", f"{schema}.users.login_token",
+    ]
+    assert {c.owner for c in report.not_owned} == {"fake_fivetran"}
+    # Known, documented state: not a failure (only the fabricate view problem remains).
+    assert not any(schema in f for f in report.failures)
+    assert remainder == report.not_owned
+
+    admin_sql = render_admin_drop_sql(remainder)
+    assert "CASCADE" not in admin_sql and admin_sql.startswith("BEGIN;")
+    assert "fake-" not in admin_sql
+    with closing(server.connect("postgres")) as conn, conn.cursor() as cur:
+        cur.execute(admin_sql)
+        assert _columns(cur, schema, "users") == ["id", "email"]
+    with closing(server.connect(SYNC_ROLE)) as conn:
+        again = purge(conn, log=lambda _: None)
+    assert again.not_owned == []
+
+
+def test_purge_job_does_not_fail_on_not_owned_but_fails_on_a_problem(monkeypatch):
+    import dagster as dg
+
+    from orpheus_engine.defs.secret_columns import definitions as job_defs
+    from orpheus_engine.defs.secret_columns.purge import NotOwned, PurgeReport
+
+    class _Conn:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(job_defs, "connect_warehouse", lambda: _Conn())
+    known = PurgeReport(not_owned=[NotOwned("s", "t", "c", "fivetran")])
+    monkeypatch.setattr(job_defs, "purge", lambda conn, log: known)
+    result = job_defs.warehouse_secret_column_purge_job.execute_in_process()
+    assert result.success
+    output = result.output_for_node("purge_warehouse_secret_columns")
+    assert output["not_owned"] == ["s.t.c"]
+
+    broken = PurgeReport(failures=["s.t.c: not dropped, used by s.v"])
+    monkeypatch.setattr(job_defs, "purge", lambda conn, log: broken)
+    result = job_defs.warehouse_secret_column_purge_job.execute_in_process(raise_on_error=False)
+    assert not result.success

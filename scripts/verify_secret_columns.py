@@ -8,6 +8,13 @@ hc_warehouse_mcp, for the contract check). For each column in
 orpheus_engine/defs/secret_columns/inventory.py it reports `absent` (dropped), or the
 number of non-null values that login can read. Output is names and counts only,
 never values. Exit 0 when every column is absent or reads 0 non-null values.
+
+Render the one-time admin SQL for columns the sync login cannot drop (tables
+another login owns), read-only, to a 0600 file for bin/warehouse-admin-psql -f:
+
+    PYTHONPATH=. .venv/bin/python scripts/verify_secret_columns.py --env-file <file> \\
+        --render-admin-sql <scratch.sql> --sync-role hc_warehouse_dagster
+
 See runbooks/secret-columns.md.
 """
 
@@ -22,7 +29,13 @@ import psycopg2
 from psycopg2 import sql
 
 from orpheus_engine.defs.secret_columns.inventory import SECRET_COLUMNS
-from orpheus_engine.defs.secret_columns.purge import drop_candidates
+import os
+
+from orpheus_engine.defs.secret_columns.purge import (
+    drop_candidates,
+    not_owned_columns,
+    render_admin_drop_sql,
+)
 from scripts.provision_warehouse_reader import _parse_env_text
 
 URL_ENV_VAR = "WAREHOUSE_COOLIFY_URL"
@@ -63,7 +76,11 @@ def check(conn) -> tuple[str, list[tuple[str, str]], list[str]]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--env-file", type=Path, required=True)
+    parser.add_argument("--render-admin-sql", type=Path, help="write the admin DROP SQL here")
+    parser.add_argument("--sync-role", help="the login the purge job runs as")
     args = parser.parse_args(argv)
+    if bool(args.render_admin_sql) != bool(args.sync_role):
+        parser.error("--render-admin-sql and --sync-role go together")
     url = _parse_env_text(args.env_file.read_text()).get(URL_ENV_VAR)
     if not url:
         print(f"{URL_ENV_VAR} is not in {args.env_file}", file=sys.stderr)
@@ -76,6 +93,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     conn.autocommit = True
     try:
         login, results, failures = check(conn)
+        if args.render_admin_sql:
+            with conn.cursor() as cur:
+                remainder = not_owned_columns(cur, args.sync_role)
+            fd = os.open(args.render_admin_sql, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as handle:
+                handle.write(render_admin_drop_sql(remainder))
+            for column in remainder:
+                print(f"admin step: {column.qualified} (owner {column.owner})")
+            print(f"Wrote {len(remainder)} DROP COLUMN statement(s) to {args.render_admin_sql}")
     finally:
         conn.close()
     for name, result in results:
